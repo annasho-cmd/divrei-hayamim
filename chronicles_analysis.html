@@ -678,16 +678,19 @@ function App(){
   const [newParams,setNewParams]=useState(Array(10).fill(""));
 
   function flash(m){setMsg(m);setTimeout(()=>setMsg(""),2000);}
-  function cloudSave(){fbSave(raw);flash("☁️ נשמר לענן");}
+  function cloudSave(){const d=window.__rawData||raw;fbSave(d);flash("☁️ נשמר לענן");}
 
   function setData(fn){
     setRaw(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
       LS.save(next);
       if(gFH)fsWrite(next).catch(()=>{});
+      window.__rawData = next;
       return next;
     });
   }
+
+  useEffect(()=>{ window.__rawData = raw; },[raw]);
 
   useEffect(()=>{
     let base={units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[]};
