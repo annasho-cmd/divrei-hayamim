@@ -618,8 +618,9 @@ ${paramsList}
 }
 
 // ── Header ────────────────────────────────────────────────────────────
-function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImportConcepts,analysisMode,setAnalysisMode}){
+function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImportConcepts,onExportAll,onImportAll,analysisMode,setAnalysisMode}){
   const fileRef=React.useRef();
+  const fullImportRef=React.useRef();
   const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
   const modeLabel=analysisMode==="chronicles"?"📘 ניתוח דה\"י":"📙 ניתוח מקבילות";
   return(
@@ -634,6 +635,10 @@ function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImport
         <button onClick={onExportConcepts} title="ייצוא קריטריונים לקובץ" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #4338ca",cursor:"pointer",fontSize:"12px",background:"#1e1b4b",color:"#a5b4fc"}}>🔒 גיבוי קריטריונים</button>
         <input ref={fileRef} type="file" accept=".json" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>{try{onImportConcepts(JSON.parse(ev.target.result));}catch{alert("קובץ לא תקין");}};r.readAsText(f);}e.target.value="";}}/>
         <button onClick={()=>fileRef.current.click()} title="שחזור קריטריונים מקובץ" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #4338ca",cursor:"pointer",fontSize:"12px",background:"#1e1b4b",color:"#a5b4fc"}}>📥 שחזר קריטריונים</button>
+        <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
+        <button onClick={onExportAll} title="ייצוא מלא של כל הנתונים" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #0f766e",cursor:"pointer",fontSize:"12px",background:"#042f2e",color:"#5eead4"}}>⬆ ייצוא מלא</button>
+        <input ref={fullImportRef} type="file" accept=".json" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>{try{onImportAll(JSON.parse(ev.target.result));}catch{alert("קובץ לא תקין");}};r.readAsText(f);}e.target.value="";}}/>
+        <button onClick={()=>fullImportRef.current.click()} title="ייבוא מלא — שחזור כל הנתונים" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #0f766e",cursor:"pointer",fontSize:"12px",background:"#042f2e",color:"#5eead4"}}>⬇ ייבוא מלא</button>
         <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
         {/* Mode selector */}
         <div style={{display:"flex",gap:"3px",background:"#0f172a",borderRadius:"16px",padding:"2px",border:`1px solid ${modeColor}44`}}>
@@ -830,6 +835,20 @@ function App(){
     const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="chronicles_concepts_backup.json";a.click();
     flash("✓ קריטריונים יוצאו");
   }
+  function exportAll(){
+    const all={};
+    for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);all[k]=localStorage.getItem(k);}
+    const blob=new Blob([JSON.stringify(all,null,2)],{type:"application/json"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="chronicles_full_backup.json";a.click();
+    flash("✓ גיבוי מלא יוצא");
+  }
+  function importAll(data){
+    try{
+      Object.entries(data).forEach(([k,v])=>localStorage.setItem(k,v));
+      flash("✓ נתונים שוחזרו — טוען מחדש...");
+      setTimeout(()=>window.location.reload(),800);
+    }catch(e){alert("שגיאה בייבוא: "+e.message);}
+  }
   function importConcepts(data){
     setData(prev=>{
       const importedConcepts=data.concepts||data;
@@ -843,7 +862,7 @@ function App(){
 
   return(
     <div dir="rtl" style={{minHeight:"100vh",background:"#0f172a"}}>
-      <Header msg={msg} tab={tab} setTab={setTab} onLoad={loadFile} onSave={saveFile} onSaveAs={saveAs} onExportConcepts={exportConcepts} onImportConcepts={importConcepts} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
+      <Header msg={msg} tab={tab} setTab={setTab} onLoad={loadFile} onSave={saveFile} onSaveAs={saveAs} onExportConcepts={exportConcepts} onImportConcepts={importConcepts} onExportAll={exportAll} onImportAll={importAll} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
 
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>}
       {tab==="byunit"&&<ByUnitTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} onUnitSelect={setActiveUnit} analysisMode={analysisMode}/>}
