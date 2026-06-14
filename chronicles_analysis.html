@@ -6,6 +6,21 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js" onerror="document.getElementById('root').innerHTML='<div style=padding:40px;color:red;font-size:16px>שגיאה: לא ניתן לטעון React. נדרש חיבור אינטרנט בפתיחה הראשונה.</div>'"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBGFYQ5KQciHGqlsSqFW8F1-CLI6O-C9ys",
+      authDomain: "divrei-hayamim.firebaseapp.com",
+      databaseURL: "https://divrei-hayamim-default-rtdb.firebaseio.com",
+      projectId: "divrei-hayamim",
+      storageBucket: "divrei-hayamim.firebasestorage.app",
+      messagingSenderId: "102317276528",
+      appId: "1:102317276528:web:4b121eec9e51f5a0c263b5"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+  </script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:"Segoe UI",Arial,sans-serif;background:#0f172a;color:#e2e8f0;}
@@ -343,32 +358,24 @@ const DEFAULT_CONCEPTS = {
 const SEMANTIC = {"בינה": {"pos": "בינה, תבונה, נבון, להבין, חכמה, דעת, ידע, שכל, ערמה, עצה, תורה, משפט, ראה, שמע, להתבונן, ירה, למד, גלה, הודיע", "neg": "בער, כסיל, פתי, חסר-לב, עולה, שמן, כישלון, רשע"}, "גבורה": {"pos": "עז, חיל, תקופה, אמץ, עוצמה, עצה", "neg": "חולשה, רפיות, אמך, מורד-לב, שבר, כישלון, רשע"}, "דעת": {"pos": "ידע, הבין, חכם, בינה, הכיר, זכר, ראה, למד, דרש, חסד, אמת, צדקה, משפט, יראה, לב", "neg": "שכח, לא ידע, בינה, בער, כסיל, בד, מעל"}, "חכמה": {"pos": "יעץ, חכם, תבונה, תכון, שכל, מוסר, תוכחה, אמר-ה', נשיה, מחשבות, סוד, גבורה, תת, לשמוע, להחליץ, להביר, להשלים, לבצע", "neg": "איוולת, כסילות, רשע, עולה"}, "עצה": {"pos": "בינה, דעת, תבונה, עצה", "neg": "השפלה, כאב"}, "ענווה": {"pos": "צדק, הגינות, דרך, הצלחה, תקינות, סדר, צדקה, משפט, טוב, מוסר, חסיד, חליגה", "neg": "עקוב, גלוז, רשע"}, "יושר": {"pos": "משפט, חסד, אמת, רחמים, שלום, זיכוי, ישועה, גאולה, צדק, אמונה, חמלה, רחום, חנון, חסד, ישע, זרע, גבורה, ברכה, ישר, תמים, טוב, טהור, זכה, חכמה, כבוד, הפארת, ענה", "neg": "רשע, רשעה"}, "צדקה": {"pos": "תורה, חסד, חלק, צדק, אורח, לעשות משפט, חוקה, ריב, דרך, נתיב, ציווה, נתן, דיבר, שם, ספר, לימד, תורה, הודיע", "neg": "עושק, קיפוח, להסות, לעוות, לגמול, לרוצץ, לדכא, למאמס, לסור, לא-שמר"}, "מוסר": {"pos": "הוכיח, הדרכה, תיקון, ענוש, משפט, תוכחה, חכמה, בינה, צדק, דעת, תורה, לקח, שמע, הצלחה", "neg": "איוולת, כסילות, רשע, חסא, דחיה, סירוב, מרד, כישלון, קלון, איבוד, הרס, מוות"}, "ביטחון": {"pos": "שאנות, מנוחה, תקווה, שכב, רבץ, לחסות, לקוות, ברון, אשרי", "neg": "השיעות, כסילות, אכזבה, מרמה, שוט-ונוחות, בוטח-בליבו, כישלון, בושה"}, "שלום": {"pos": "שלמונים, שלם, שלמים, טוב, צדקה, ברית, בטח, שלווה, ישועה, שמחה, חסד, אמת, נח, ברכה", "neg": "מלחמה, רע, חמס"}, "ברית": {"pos": "לאכול, שמיעה, קשר, לקבע, לגאול, חוק, מצווה, עדות, משפט, אמונה, חסד, שמר, לזכור, צדק, לכרות, חוקים", "neg": "מעל, בגד, חנף, שכחה, עוון, עברה"}, "עולם": {"pos": "נצח, תמיד, דור", "neg": "רגע, חלף, הפסק, קץ, הבל, עת, קצרה"}, "נצח": {"pos": "נצח, תמיד, תקיף, רם", "neg": "בגידה, מעל, עוון, חסר, אכזר, רשע, זרות, גדות-לב"}, "חסד": {"pos": "אמת, רחמים, אהבה, ברית, טוב, חן", "neg": "התנשאות, יוהרה, חוסר-ציות"}, "יראה": {"pos": "פחד, דעת, בינה, צדקה, אהבה, למד, חתת, רעד, כבד, נשא, עדר, בטח, דבק, שמע, עבד, חכמה, מוסר, אמונה, לב", "neg": "התנשאות, יוהרה, חוסר-ציות"}, "צניעות": {"pos": "ענווה, יראה, צדק, טוב, שלום, צדקה", "neg": "גאון, עושק, חמס, יהירות, אלימות, מרי, עצמאי"}, "רועה": {"pos": "טיפול, האכלה, דאגה, הגנה, נוהג, דרך, נשא, שמר, נצר, פקד, מלך, נגיד, שר, השגיח, משפט, מרעה, מרעית, עדר, צדק, עם, קהל, ישראל, מרווה, חכמה, חסד, ביטחון", "neg": "זנח, השחית, עזב, רע, כסיל, שודד, פיזור, נדח, גלות"}, "תורה": {"pos": "להורות, לכוון, להנחות, מוסר, חוק, משפט, ישר, צדק, ברית, חכמה, דרך, תמים, שלום, סדר", "neg": "עוון, רשע, מרי, שכחה, טעות, סרות"}};
 
 // ── Commentators ─────────────────────────────────────────────────────
+// ── Firebase Storage ──────────────────────────────────────────────────
+const FB_PATH = "research";
+const fbSave = (data) => {
+  try { db.ref(FB_PATH).set(JSON.parse(JSON.stringify(data))); } catch(e) { console.error("FB save error",e); }
+};
+const fbLoad = (cb) => {
+  db.ref(FB_PATH).once("value").then(snap => cb(snap.val()));
+};
+// Keep localStorage as fallback
 const STORAGE_KEY="chronicles_v7";
-const CONCEPTS_KEY="chronicles_concepts_backup";
-const ANALYSIS_KEY="chronicles_analysis_backup";
-const ANALYSIS_CHR_KEY="chronicles_analysis_chr_backup";
-const ANALYSIS_SRC_KEY="chronicles_analysis_src_backup";
 const LS={
   load(){ try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;} },
   save(d){ try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{} }
 };
-const CLS={
-  load(){ try{const r=localStorage.getItem(CONCEPTS_KEY);return r?JSON.parse(r):null;}catch{return null;} },
-  save(concepts){ try{localStorage.setItem(CONCEPTS_KEY,JSON.stringify(concepts));}catch{} }
-};
-const ALS={
-  load(){ try{const r=localStorage.getItem(ANALYSIS_KEY);return r?JSON.parse(r):null;}catch{return null;} },
-  save(analysis){ try{localStorage.setItem(ANALYSIS_KEY,JSON.stringify(analysis));}catch{} }
-};
-// Separate backups for chronicles and source analysis
-const ACLS={
-  load(){ try{const r=localStorage.getItem(ANALYSIS_CHR_KEY);return r?JSON.parse(r):null;}catch{return null;} },
-  save(d){ try{localStorage.setItem(ANALYSIS_CHR_KEY,JSON.stringify(d));}catch{} }
-};
-const ASLS={
-  load(){ try{const r=localStorage.getItem(ANALYSIS_SRC_KEY);return r?JSON.parse(r):null;}catch{return null;} },
-  save(d){ try{localStorage.setItem(ANALYSIS_SRC_KEY,JSON.stringify(d));}catch{} }
-};
+const CLS={ load(){ return null; }, save(d){} };
+const ALS={ load(){ return null; }, save(d){} };
+const ACLS={ load(){ return null; }, save(d){} };
+const ASLS={ load(){ return null; }, save(d){} };
 
 // ── Shared styles ─────────────────────────────────────────────────────
 const S={
@@ -671,47 +678,35 @@ function App(){
     setRaw(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
       LS.save(next);
-      if(next.analysis&&Object.keys(next.analysis).length>0) ALS.save(next.analysis);
-      if(next.analysis_chronicles&&Object.keys(next.analysis_chronicles).length>0) ACLS.save(next.analysis_chronicles);
-      if(next.analysis_source&&Object.keys(next.analysis_source).length>0) ASLS.save(next.analysis_source);
+      fbSave(next);
       if(gFH)fsWrite(next).catch(()=>{});
       return next;
     });
   }
 
   useEffect(()=>{
-    const d=LS.load();
-    const conceptsBackup=CLS.load();
-    const analysisBackup=ALS.load();
-    const analysisChrBackup=ACLS.load();
-    const analysisSrcBackup=ASLS.load();
     let base={units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[]};
     Object.keys(DEFAULT_CONCEPTS).forEach(name=>{
       base.concepts[name]={params: DEFAULT_CONCEPTS[name].params};
     });
-    if(d){
-      if(conceptsBackup) Object.keys(conceptsBackup).forEach(k=>{ base.concepts[k]=conceptsBackup[k]; });
-      const merged={...base,...d,concepts:{...base.concepts,...(d.concepts||{})}};
-      if(analysisBackup&&Object.keys(analysisBackup).length>0) merged.analysis={...analysisBackup,...(merged.analysis||{})};
-      if(analysisChrBackup&&Object.keys(analysisChrBackup).length>0) merged.analysis_chronicles={...analysisChrBackup,...(merged.analysis_chronicles||{})};
-      if(analysisSrcBackup&&Object.keys(analysisSrcBackup).length>0) merged.analysis_source={...analysisSrcBackup,...(merged.analysis_source||{})};
-      // Migrate old analysis to analysis_chronicles if analysis_chronicles is empty
-      if(merged.analysis&&Object.keys(merged.analysis).length>0&&(!merged.analysis_chronicles||Object.keys(merged.analysis_chronicles).length===0)){
-        merged.analysis_chronicles=merged.analysis;
+    fbLoad(fbData=>{
+      if(fbData&&fbData.units&&fbData.units.length>0){
+        const merged={...base,...fbData,concepts:{...base.concepts,...(fbData.concepts||{})}};
+        if(fbData.analysis&&Object.keys(fbData.analysis).length>0&&(!fbData.analysis_chronicles||Object.keys(fbData.analysis_chronicles).length===0)){
+          merged.analysis_chronicles=fbData.analysis;
+        }
+        setRaw(merged);
+        flash("✓ נטען מהענן");
+      } else {
+        // Firebase empty — try localStorage fallback
+        const d=LS.load();
+        if(d&&d.units&&d.units.length>0){
+          setRaw({...base,...d,concepts:{...base.concepts,...(d.concepts||{})}});
+        } else {
+          setRaw(base);
+        }
       }
-      setRaw(merged);
-    } else if(conceptsBackup){
-      const base2={...base,concepts:{...base.concepts,...conceptsBackup}};
-      if(analysisBackup) base2.analysis=analysisBackup;
-      if(analysisChrBackup) base2.analysis_chronicles=analysisChrBackup;
-      if(analysisSrcBackup) base2.analysis_source=analysisSrcBackup;
-      setRaw(base2);
-    } else {
-      if(analysisBackup) base.analysis=analysisBackup;
-      if(analysisChrBackup) base.analysis_chronicles=analysisChrBackup;
-      if(analysisSrcBackup) base.analysis_source=analysisSrcBackup;
-      setRaw(base);
-    }
+    });
   },[]);
 
   async function loadFile(){
@@ -740,7 +735,8 @@ function App(){
     console.log("setRaw called with:", merged);
     setRaw(merged);
     LS.save(merged);
-    flash("✓ נטען — הניתוח הקיים נשמר");
+    fbSave(merged);
+    flash("✓ נטען ונשמר בענן");
   }
   async function saveFile(){
     if(!gFH){const ok=await fsSave("chronicles_data.json");if(!ok)return;}
@@ -805,7 +801,7 @@ function App(){
       if(gFH)fsWrite(updated).catch(()=>{});
       return updated;
     });
-    setEditConcept(null); flash("✓ נשמר — אל תשכחי 💾 שמור");
+    setEditConcept(null); flash("✓ נשמר בענן");
   }
   function addConcept(){
     if(!newName.trim())return;
