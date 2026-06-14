@@ -682,8 +682,8 @@ function App(){
     setRaw(prev=>{
       const next=typeof fn==="function"?fn(prev):fn;
       LS.save(next);
-      fbSave(next);
       if(gFH)fsWrite(next).catch(()=>{});
+      setTimeout(()=>fbSave(next),0);
       return next;
     });
   }
