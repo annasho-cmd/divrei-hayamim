@@ -414,7 +414,7 @@ function EntryEditor({unitId,conceptName,conceptParams,entry,onChange,unitText,s
   const params=conceptParams||[];
   const modeLabel=analysisMode==="source"?'📙 מקבילה':'📘 דה"י';
   // חיפוש שדה סמנטי — קודם ב-SEMANTIC הקבוע, אחר כך ב-customSemantic
-  const sem=SEMANTIC[conceptName]||(customSemantic||{})[conceptName]||null;
+  const sem=(customSemantic||{})[conceptName]||SEMANTIC[conceptName]||null;
 
   // ── Explicit AI — שומר אוטומטית ────────────────────────────────────
   const [explAiLoad,setExplAiLoad]=useState(false);
