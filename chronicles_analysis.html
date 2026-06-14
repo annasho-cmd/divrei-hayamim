@@ -683,10 +683,15 @@ function App(){
       const next=typeof fn==="function"?fn(prev):fn;
       LS.save(next);
       if(gFH)fsWrite(next).catch(()=>{});
-      setTimeout(()=>fbSave(next),0);
       return next;
     });
   }
+
+  const isFirstLoad = React.useRef(true);
+  useEffect(()=>{
+    if(isFirstLoad.current){isFirstLoad.current=false;return;}
+    if(raw.units&&raw.units.length>0) fbSave(raw);
+  },[raw]);
 
   useEffect(()=>{
     let base={units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[]};
