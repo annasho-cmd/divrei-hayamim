@@ -695,7 +695,7 @@ function App(){
     });
     fbLoad(fbData=>{
       if(fbData&&fbData.units&&fbData.units.length>0){
-        const merged={...base,...fbData,concepts:{...base.concepts,...(fbData.concepts||{})}};
+        const merged={...base,...fbData,concepts:{...(fbData.concepts||{})}};
         if(fbData.analysis&&Object.keys(fbData.analysis).length>0&&(!fbData.analysis_chronicles||Object.keys(fbData.analysis_chronicles).length===0)){
           merged.analysis_chronicles=fbData.analysis;
         }
