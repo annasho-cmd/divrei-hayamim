@@ -630,15 +630,6 @@ function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImport
         {msg&&<span style={{color:"#34d399",fontSize:"12px",fontWeight:"600"}}>{msg}</span>}
         <button onClick={onLoad} style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #475569",cursor:"pointer",fontSize:"12px",background:"#334155",color:"#94a3b8"}}>📂 פתח</button>
         <button onClick={onSave} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",background:"#16a34a",color:"white"}}>💾 שמור</button>
-        <button onClick={onSaveAs} style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #475569",cursor:"pointer",fontSize:"12px",background:"#334155",color:"#94a3b8"}}>שמור בשם</button>
-        <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
-        <button onClick={onExportConcepts} title="ייצוא קריטריונים לקובץ" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #4338ca",cursor:"pointer",fontSize:"12px",background:"#1e1b4b",color:"#a5b4fc"}}>🔒 גיבוי קריטריונים</button>
-        <input ref={fileRef} type="file" accept=".json" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>{try{onImportConcepts(JSON.parse(ev.target.result));}catch{alert("קובץ לא תקין");}};r.readAsText(f);}e.target.value="";}}/>
-        <button onClick={()=>fileRef.current.click()} title="שחזור קריטריונים מקובץ" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #4338ca",cursor:"pointer",fontSize:"12px",background:"#1e1b4b",color:"#a5b4fc"}}>📥 שחזר קריטריונים</button>
-        <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
-        <button onClick={onExportAll} title="ייצוא מלא של כל הנתונים" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #0f766e",cursor:"pointer",fontSize:"12px",background:"#042f2e",color:"#5eead4"}}>⬆ ייצוא מלא</button>
-        <input ref={fullImportRef} type="file" accept=".json" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>{try{onImportAll(JSON.parse(ev.target.result));}catch{alert("קובץ לא תקין");}};r.readAsText(f);}e.target.value="";}}/>
-        <button onClick={()=>fullImportRef.current.click()} title="ייבוא מלא — שחזור כל הנתונים" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #0f766e",cursor:"pointer",fontSize:"12px",background:"#042f2e",color:"#5eead4"}}>⬇ ייבוא מלא</button>
         <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
         {/* Mode selector */}
         <div style={{display:"flex",gap:"3px",background:"#0f172a",borderRadius:"16px",padding:"2px",border:`1px solid ${modeColor}44`}}>
@@ -733,9 +724,10 @@ function App(){
     const existingAnalysis=ALS.load()||raw.analysis||{};
     const existingChr=ACLS.load()||raw.analysis_chronicles||{};
     const existingSrc=ASLS.load()||raw.analysis_source||{};
+    const existingConcepts=CLS.load()||raw.concepts||{};
     const merged={
       ...d,
-      concepts:{...defaultConcepts,...(d.concepts||{})},
+      concepts:{...defaultConcepts,...(d.concepts||{}),...existingConcepts},
       analysis:{...existingAnalysis,...(d.analysis||{})},
       analysis_chronicles:{...existingChr,...(d.analysis_chronicles||{})},
       analysis_source:{...existingSrc,...(d.analysis_source||{})}
