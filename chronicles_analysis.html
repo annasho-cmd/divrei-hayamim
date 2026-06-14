@@ -779,9 +779,16 @@ function App(){
     const store=mode==="source"?"analysis_source":"analysis_chronicles";
     return raw[store]?.[uid]?.[cname]||null;
   }
+  const fbSaveTimer = React.useRef(null);
   function setE(uid,cname,entry,mode){
     const store=mode==="source"?"analysis_source":"analysis_chronicles";
-    setData(prev=>({...prev,[store]:{...prev[store],[uid]:{...(prev[store]?.[uid]||{}),[cname]:entry}}}));
+    setRaw(prev=>{
+      const updated={...prev,[store]:{...prev[store],[uid]:{...(prev[store]?.[uid]||{}),[cname]:entry}}};
+      window.__rawData = updated;
+      if(fbSaveTimer.current) clearTimeout(fbSaveTimer.current);
+      fbSaveTimer.current = setTimeout(()=>fbSave(updated), 2000);
+      return updated;
+    });
   }
   function getParams(cname){const fromRaw=(raw.concepts?.[cname]?.params)||[];return fromRaw.length>0?fromRaw:(DEFAULT_CONCEPTS[cname]?.params)||[];}
 
@@ -799,14 +806,13 @@ function App(){
   },[raw.analysis_chronicles,raw.analysis_source,allUnits,allConcepts]);
 
   function saveConcept(name,params,sem){
-    setData(prev=>{
+    setRaw(prev=>{
       const updated={...prev,
         concepts:{...prev.concepts,[name]:{...(prev.concepts?.[name]||{}),params,sem}},
-        customSemantic:{...(prev.customSemantic||{})}
+        customSemantic:{...(prev.customSemantic||{}),...(sem?{[name]:sem}:{})}
       };
-      if(sem)updated.customSemantic[name]=sem;
-      CLS.save(updated.concepts);
-      if(gFH)fsWrite(updated).catch(()=>{});
+      window.__rawData = updated;
+      fbSave(updated);
       return updated;
     });
     setEditConcept(null); flash("✓ נשמר בענן");
@@ -895,7 +901,7 @@ function App(){
 }
 
 function ConceptParamsEditor({name,params,semData,onSave,onClose}){
-  const existing=SEMANTIC[name]||semData||{pos:"",neg:""};
+  const existing=semData||SEMANTIC[name]||{pos:"",neg:""};
   const [semPos,setSemPos]=useState(existing.pos||"");
   const [semNeg,setSemNeg]=useState(existing.neg||"");
   const [ps,setPs]=useState(()=>{
