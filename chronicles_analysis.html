@@ -802,9 +802,10 @@ function App(){
       };
       if(sem)updated.customSemantic[name]=sem;
       CLS.save(updated.concepts);
+      if(gFH)fsWrite(updated).catch(()=>{});
       return updated;
     });
-    setEditConcept(null); flash("✓ נשמר");
+    setEditConcept(null); flash("✓ נשמר — אל תשכחי 💾 שמור");
   }
   function addConcept(){
     if(!newName.trim())return;
