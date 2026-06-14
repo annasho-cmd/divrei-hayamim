@@ -1034,6 +1034,7 @@ function HomeTab({allUnits,allConcepts,prog,raw,setTab,setEditConcept,setShowAdd
 // ── By Unit Tab ───────────────────────────────────────────────────────
 function ByUnitTab({allUnits,allConcepts,raw,getE,setE,getParams,dim4concept,onUnitSelect,analysisMode}){
   const [uid,setUid]=useState(null);
+  const [activeConcept,setActiveConcept]=useState(null);
   const unit=allUnits.find(u=>u.id===uid);
   const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
   const modeLabel=analysisMode==="chronicles"?'📘 ניתוח דה"י':'📙 ניתוח מקבילות';
@@ -1041,11 +1042,13 @@ function ByUnitTab({allUnits,allConcepts,raw,getE,setE,getParams,dim4concept,onU
   const sourceText=analysisMode==="chronicles"?unit?.sourceText:unit?.chroniclesText;
   const done=unit?allConcepts.filter(c=>{const e=getE(unit.id,c.name,analysisMode);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found!==null));}).length:0;
 
+  function handleUnitSelect(u){setUid(u.id);setActiveConcept(null);onUnitSelect&&onUnitSelect(u);}
+
   return(
-    <div style={{display:"grid",gridTemplateColumns:"220px 1fr",height:"calc(100vh - 46px)"}}>
-      {/* Sidebar */}
+    <div style={{display:"grid",gridTemplateColumns:"180px 1fr 260px",height:"calc(100vh - 46px)"}}>
+      {/* Sidebar — יחידות */}
       <div style={{background:"#1e293b",borderLeft:"1px solid #334155",overflowY:"auto",padding:"10px"}}>
-        <div style={{fontSize:"11px",fontWeight:"700",color:modeColor,marginBottom:"8px",textTransform:"uppercase"}}>{modeLabel}</div>
+        <div style={{fontSize:"11px",fontWeight:"700",color:modeColor,marginBottom:"8px"}}>{modeLabel}</div>
         {["david","solomon"].map(ch=>{
           const us=allUnits.filter(u=>u.character===ch||(ch==="david"&&!u.character));
           if(!us.length)return null;
@@ -1055,7 +1058,7 @@ function ByUnitTab({allUnits,allConcepts,raw,getE,setE,getParams,dim4concept,onU
               {us.map(u=>{
                 const d=allConcepts.filter(c=>{const e=getE(u.id,c.name,analysisMode);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found!==null));}).length;
                 return(
-                  <button key={u.id} onClick={()=>{setUid(u.id);onUnitSelect&&onUnitSelect(u);}}
+                  <button key={u.id} onClick={()=>handleUnitSelect(u)}
                     style={{display:"block",width:"100%",textAlign:"right",padding:"6px 8px",borderRadius:"6px",border:"none",cursor:"pointer",marginBottom:"2px",fontSize:"11px",
                       background:uid===u.id?"#334155":"transparent",color:uid===u.id?"#f1f5f9":"#64748b",
                       borderRight:uid===u.id?`3px solid ${modeColor}`:"3px solid transparent"}}>
@@ -1068,35 +1071,76 @@ function ByUnitTab({allUnits,allConcepts,raw,getE,setE,getParams,dim4concept,onU
           );
         })}
       </div>
-      {/* Main */}
-      <div style={{overflowY:"auto",padding:"16px"}}>
+
+      {/* מרכז — טקסט קבוע + עורך מושג */}
+      <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 46px)",overflow:"hidden"}}>
         {!unit?(
           <div style={{padding:"60px",textAlign:"center",color:"#334155"}}>בחרי יחידה מהרשימה</div>
         ):(
           <>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"12px"}}>
-              <div>
-                <div style={{fontSize:"16px",fontWeight:"bold",color:"#f1f5f9"}}>{unit.label}</div>
-                <div style={{fontSize:"12px",color:modeColor,fontWeight:"700"}}>{modeLabel}</div>
-                <div style={{fontSize:"11px",color:"#64748b"}}>{unit.character==="david"?"👑 דוד":unit.character==="solomon"?"👑 שלמה":""}{unit.sourceRef&&` | מקביל: ${unit.sourceRef}`}</div>
+            {/* טקסט קבוע */}
+            <div style={{flexShrink:0,padding:"12px 16px",borderBottom:"1px solid #334155"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+                <div>
+                  <div style={{fontSize:"15px",fontWeight:"bold",color:"#f1f5f9"}}>{unit.label}</div>
+                  <div style={{fontSize:"11px",color:"#64748b"}}>{unit.sourceRef&&`מקביל: ${unit.sourceRef}`}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:"18px",fontWeight:"bold",color:modeColor}}>{done}/{allConcepts.length}</div>
+                  <div style={{fontSize:"10px",color:"#64748b"}}>נבדקו</div>
+                </div>
               </div>
-              <div style={{textAlign:"center"}}>
-                <div style={{fontSize:"20px",fontWeight:"bold",color:modeColor}}>{done}/{allConcepts.length}</div>
-                <div style={{fontSize:"10px",color:"#64748b"}}>נבדקו</div>
+              <div style={{background:"#1e293b",border:`1px solid ${modeColor}44`,borderRadius:"8px",padding:"10px 14px",fontSize:"13px",lineHeight:"2",color:"#e2e8f0",direction:"rtl",maxHeight:"200px",overflowY:"auto"}}>
+                <div style={{fontSize:"10px",fontWeight:"700",color:modeColor,marginBottom:"4px"}}>{analysisMode==="chronicles"?'📘 דברי הימים':'📙 מקבילה'}</div>
+                {unitText||<span style={{color:"#475569"}}>אין טקסט</span>}
               </div>
             </div>
-            {/* Show relevant text only - no diff panel */}
-            <div style={{background:"#1e293b",border:`1px solid ${modeColor}44`,borderRadius:"8px",padding:"10px 14px",marginBottom:"12px",fontSize:"14px",lineHeight:"2",color:"#e2e8f0",direction:"rtl"}}>
-              <div style={{fontSize:"11px",fontWeight:"700",color:modeColor,marginBottom:"6px"}}>{analysisMode==="chronicles"?'📘 טקסט דברי הימים':'📙 טקסט המקבילה'}</div>
-              {unitText||<span style={{color:"#475569"}}>אין טקסט</span>}
+            {/* עורך מושג פתוח */}
+            <div style={{flex:1,overflowY:"auto",padding:"12px 16px"}}>
+              {!activeConcept?(
+                <div style={{padding:"40px",textAlign:"center",color:"#334155",fontSize:"13px"}}>בחרי מושג מהרשימה לעריכה</div>
+              ):(()=>{
+                const c=allConcepts.find(a=>a.name===activeConcept);
+                const dim=c?dim4concept(c.name):null;
+                return(
+                  <div>
+                    <div style={{fontSize:"13px",fontWeight:"700",color:dim?.color||"#818cf8",marginBottom:"10px"}}>✎ {activeConcept}</div>
+                    <ConceptRow key={activeConcept+uid} conceptName={activeConcept} dimColor={dim?.color||"#818cf8"} params={getParams(activeConcept)} entry={getE(unit.id,activeConcept,analysisMode)} onChange={e=>{setE(unit.id,activeConcept,e,analysisMode);}} unitText={unitText} sourceText={sourceText} sourceRef={unit.sourceRef} scholarship={unit.scholarship} analysisMode={analysisMode} customSemantic={raw.customSemantic||{}} character={unit.character||"david"} defaultOpen={true}/>
+                  </div>
+                );
+              })()}
             </div>
+          </>
+        )}
+      </div>
+
+      {/* ימין — רשימת מושגים */}
+      <div style={{background:"#1e293b",borderRight:"1px solid #334155",overflowY:"auto",padding:"10px"}}>
+        {!unit?(null):(
+          <>
+            <div style={{fontSize:"11px",fontWeight:"700",color:"#64748b",marginBottom:"8px"}}>מושגים</div>
             {DIMS.map(dim=>{
               const cs=allConcepts.filter(c=>c.dimId===dim.id);
               if(!cs.length)return null;
               return(
                 <div key={dim.id} style={{marginBottom:"10px"}}>
-                  <div style={{fontSize:"11px",color:dim.color,fontWeight:"700",marginBottom:"6px"}}>{dim.label}</div>
-                  {cs.map(c=><ConceptRow key={c.name} conceptName={c.name} dimColor={dim.color} params={getParams(c.name)} entry={getE(unit.id,c.name,analysisMode)} onChange={e=>setE(unit.id,c.name,e,analysisMode)} unitText={unitText} sourceText={sourceText} sourceRef={unit.sourceRef} scholarship={unit.scholarship} analysisMode={analysisMode} customSemantic={raw.customSemantic||{}} character={unit.character||"david"}/>)}
+                  <div style={{fontSize:"10px",color:dim.color,fontWeight:"700",marginBottom:"4px"}}>{dim.label.split(":")[1]?.trim()||dim.label}</div>
+                  {cs.map(c=>{
+                    const e=getE(unit.id,c.name,analysisMode);
+                    const done=e&&(e.explicit_note||(e.params||[]).some(p=>p.found!==null));
+                    const isActive=activeConcept===c.name;
+                    return(
+                      <button key={c.name} onClick={()=>setActiveConcept(isActive?null:c.name)}
+                        style={{display:"block",width:"100%",textAlign:"right",padding:"5px 8px",borderRadius:"5px",border:"none",cursor:"pointer",marginBottom:"2px",fontSize:"11px",
+                          background:isActive?dim.color+"33":"transparent",
+                          color:isActive?dim.color:done?"#34d399":"#64748b",
+                          borderRight:isActive?`3px solid ${dim.color}`:"3px solid transparent",
+                          fontWeight:isActive?"700":"400"}}>
+                        {done&&!isActive&&<span style={{color:"#34d399",marginLeft:"4px"}}>✓</span>}
+                        {c.name}
+                      </button>
+                    );
+                  })}
                 </div>
               );
             })}
@@ -1107,8 +1151,8 @@ function ByUnitTab({allUnits,allConcepts,raw,getE,setE,getParams,dim4concept,onU
   );
 }
 
-function ConceptRow({conceptName,dimColor,params,entry,onChange,unitText,sourceText,sourceRef,scholarship,analysisMode,customSemantic,character}){
-  const [open,setOpen]=useState(false);
+function ConceptRow({conceptName,dimColor,params,entry,onChange,unitText,sourceText,sourceRef,scholarship,analysisMode,customSemantic,character,defaultOpen}){
+  const [open,setOpen]=useState(defaultOpen||false);
   const e=entry;
   const hasE=!!(e?.explicit_note?.trim());
   const implN=(e?.params||[]).filter(p=>p.found===true).length;
