@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8" />
+  <title>📜 כלי השוואה טקסטואלי — דברי הימים</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Segoe UI',Arial,sans-serif;background:#f8fafc;}
+    select,input,textarea,button{font-family:inherit;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo,useCallback} = React;
+
+// ── File System API ──────────────────────────────────────────────────
+let gFileHandle = null;
+let gCommentaryDir = null;
+
+async function fsPickSave() {
+  try {
+    gFileHandle = await window.showSaveFilePicker({
+      suggestedName: 'chronicles_data.json',
+      types:[{description:'JSON',accept:{'application/json':['.json']}}]
+    });
+    return true;
+  } catch { return false; }
+}
+
+async function fsPickOpen() {
+  try {
+    const [h] = await window.showOpenFilePicker({
+      types:[{description:'JSON',accept:{'application/json':['.json']}}]
+    });
+    gFileHandle = h;
+    const file = await h.getFile();
+    return JSON.parse(await file.text());
+  } catch { return null; }
+}
+
+async function fsWrite(data) {
+  if (!gFileHandle) return false;
+  try {
+    const w = await gFileHandle.createWritable();
+    await w.write(JSON.stringify(data, null, 2));
+    await w.close();
+    return true;
+  } catch { return false; }
+}
+
+function downloadJson(data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'chronicles_data.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Hebrew helpers ───────────────────────────────────────────────────
+function stripNiqqud(s){ return s.replace(/[\u0591-\u05C7]/g,''); }
+const NORM_MAP = {'דויד':'דוד','ירושלים':'ירושלם'};
+function norm(w){
+  const str = typeof w==='object'?w.word:w;
+  const s = stripNiqqud(str).replace(/[׃׀:.,;()\[\]״׳"'!?]+/g,'').trim();
+  return NORM_MAP[s]||s;
+}
+// tokenize returns [{raw, clean, isVerse}]
+// raw  = original token (e.g. "(א)")
+// clean = stripped of punctuation (e.g. "א" or "ישראל")
+// isVerse = true only for tokens like (א) (יב) — paren-wrapped 1-4 Hebrew letters
+function tokenize(t){
+  if(!t) return [];
+  return t.trim().split(/[\s\n\r]+/).map(raw=>{
+    const isVerse = /^\([\u05D0-\u05EA]{1,4}\)$/.test(raw.trim());
+    const clean   = raw.replace(/^[׃:,.;()\[\]״׳"'!?]+|[׃:,.;()\[\]״׳"'!?]+$/g,'');
+    return {raw, clean, isVerse};
+  }).filter(t=>t.raw.length>0);
+}
+
+// ── LCS diff ─────────────────────────────────────────────────────────
+// Deterministic ID based on position — so IDs survive re-renders
+function mkId(i){ return 'chunk_'+i; }
+
+function lcs(a,b){
+  // a,b are arrays of non-verse token objects
+  const m=a.length,n=b.length;
+  const dp=[];
+  for(let i=0;i<=m;i++){dp[i]=new Array(n+1).fill(0);}
+  for(let i=1;i<=m;i++)
+    for(let j=1;j<=n;j++)
+      dp[i][j]=norm(a[i-1].clean)===norm(b[j-1].clean)
+        ?dp[i-1][j-1]+1
+        :Math.max(dp[i-1][j],dp[i][j-1]);
+  const r=[];let i=m,j=n;
+  while(i>0||j>0){
+    if(i>0&&j>0&&norm(a[i-1].clean)===norm(b[j-1].clean)){r.unshift({t:'eq',a:a[i-1].raw,b:b[j-1].raw});i--;j--;}
+    else if(j>0&&(i===0||dp[i][j-1]>=dp[i-1][j])){r.unshift({t:'om',b:b[j-1].raw});j--;}
+    else{r.unshift({t:'ad',a:a[i-1].raw});i--;}
+  }
+  return r;
+}
+
+function buildChunks(raw){
+  const res=[];let i=0,pos=0;
+  while(i<raw.length){
+    const c=raw[i];
+    if(c.t==='ad'&&raw[i+1]&&raw[i+1].t==='om'){
+      res.push({id:mkId(pos++),type:'changed',aW:[c.a],bW:[raw[i+1].b]});i+=2;
+    } else if(c.t==='om'&&raw[i+1]&&raw[i+1].t==='ad'){
+      res.push({id:mkId(pos++),type:'changed',aW:[raw[i+1].a],bW:[c.b]});i+=2;
+    } else if(c.t==='ad'){
+      res.push({id:mkId(pos++),type:'added',aW:[c.a],bW:[]});i++;
+    } else if(c.t==='om'){
+      res.push({id:mkId(pos++),type:'omitted',aW:[],bW:[c.b]});i++;
+    } else {
+      res.push({id:mkId(pos++),type:'equal',aW:[c.a],bW:[c.b]});i++;
+    }
+  }
+  return res;
+}
+
+// Split text into verse segments: [{verseLabel, tokens}]
+function splitToVerses(allTokens){
+  const segs=[];
+  let cur={label:'',tokens:[]};
+  allTokens.forEach(t=>{
+    if(t.isVerse){
+      if(cur.tokens.length||cur.label) segs.push(cur);
+      cur={label:t.raw,tokens:[]};
+    } else {
+      cur.tokens.push(t);
+    }
+  });
+  if(cur.tokens.length||cur.label) segs.push(cur);
+  return segs;
+}
+
+function computeDiff(tA,tB){
+  try{
+    const allA=tokenize(tA), allB=tokenize(tB);
+    if(!allA.length&&!allB.length) return [];
+
+    // Run LCS on full text (excluding verse markers)
+    const wa=allA.filter(t=>!t.isVerse).slice(0,600);
+    const wb=allB.filter(t=>!t.isVerse).slice(0,600);
+    const allChunks=buildChunks(lcs(wa,wb));
+
+    // Now weave verse markers back into the result stream.
+    // We walk through allA and allB in order, inserting verse markers
+    // at the correct position based on where we are in each sequence.
+    const result=[];
+    let pos=0;
+    let ai=0, bi=0; // indices into wa, wb (word-only arrays)
+
+    // Build index: for each position in allA/allB, is it a verse marker?
+    // and what is the word index at that position?
+    function buildVerseInserts(allTokens){
+      // returns list of {wordIndexBefore, label} — verse marker appears before word at wordIndexBefore
+      const inserts=[];
+      let wordIdx=0;
+      allTokens.forEach(t=>{
+        if(t.isVerse){ inserts.push({at:wordIdx, label:t.raw}); }
+        else { wordIdx++; }
+      });
+      return inserts;
+    }
+    const versesA=buildVerseInserts(allA);
+    const versesB=buildVerseInserts(allB);
+    let viA=0, viB=0;
+
+    allChunks.forEach(ch=>{
+      ch.id='c'+(pos++);
+      // Before this chunk, insert any pending verse markers
+      // For side A: insert if versesA[viA].at <= ai
+      // For side B: insert if versesB[viB].at <= bi
+      while(viA<versesA.length && versesA[viA].at<=ai){
+        // Find matching B verse at same logical position
+        const bLabel = (viB<versesB.length && versesB[viB].at<=bi) ? versesB[viB].label : '';
+        if(bLabel) viB++;
+        result.push({id:'v_a'+(viA), type:'verse', aW:[versesA[viA].label], bW:bLabel?[bLabel]:[]});
+        viA++;
+      }
+      // If B has verse markers not yet shown (B advanced ahead of A)
+      while(viB<versesB.length && versesB[viB].at<=bi){
+        result.push({id:'v_b'+(viB), type:'verse', aW:[], bW:[versesB[viB].label]});
+        viB++;
+      }
+      result.push(ch);
+      if(ch.type==='added')        ai++;
+      else if(ch.type==='omitted') bi++;
+      else                         { ai++; bi++; }
+    });
+    // Flush remaining verse markers
+    while(viA<versesA.length){
+      const bLabel = (viB<versesB.length) ? versesB[viB].label : '';
+      if(bLabel) viB++;
+      result.push({id:'v_a'+(viA), type:'verse', aW:[versesA[viA].label], bW:bLabel?[bLabel]:[]});
+      viA++;
+    }
+    while(viB<versesB.length){
+      result.push({id:'v_b'+(viB), type:'verse', aW:[], bW:[versesB[viB].label]});
+      viB++;
+    }
+    return result;
+  }catch(e){console.error('diff error',e);return[];}
+}
+
+// ── Styles ───────────────────────────────────────────────────────────
+const TM={
+  equal:     {bg:'transparent',  border:'none',                 tc:'#1e293b'},
+  added:     {bg:'#dcfce7',      border:'1px solid #86efac',   tc:'#166534', label:'תוספת בדה"י'},
+  omitted:   {bg:'#fee2e2',      border:'1px solid #fca5a5',   tc:'#991b1b', label:'השמטה מהמקור'},
+  changed:   {bg:'#fef9c3',      border:'1px solid #fde047',   tc:'#854d0e', label:'שינוי'},
+  hidden:    {bg:'#f1f5f9',      border:'1px dashed #cbd5e1',  tc:'#94a3b8', label:'מוסתר'},
+  unmatched: {bg:'transparent',  border:'none',                 tc:'#94a3b8', label:'ללא התאמה'},
+};
+// relocated = boolean overlay: ov.relocated_a / ov.relocated_b
+
+// ── Chapters ─────────────────────────────────────────────────────────
+const CH_A=[
+  {l:'דה"א י"א, א–ג',v:'11_1_3'},{l:'דה"א י"א, ד–ט',v:'11_4_9'},
+  {l:'דה"א י"א, י–יב',v:'11_10_12'},{l:'דה"א י"א, יג–יד',v:'11_13_14'},
+  {l:'דה"א י"א, טו–כד',v:'11_15_24'},{l:'דה"א י"א, כה–מז',v:'11_25_47'},
+  {l:'דה"א י"ב, א–לח',v:'12_1_38'},{l:'דה"א י"ב, לט–מא',v:'12_39_41'},
+  {l:'דה"א י"ג, א–ה',v:'13_1_5'},{l:'דה"א י"ג, ז–יד',v:'13_7_14'},
+  {l:'דה"א י"ד, א–ב',v:'14_1_2'},{l:'דה"א י"ד, ג–ז',v:'14_3_7'},
+  {l:'דה"א י"ד, ח–יז',v:'14_8_17'},{l:'דה"א ט"ו, א–כה',v:'15_1_25'},
+  {l:'דה"א ט"ו, כו–כט',v:'15_26_29'},{l:'דה"א ט"ז, א–ד',v:'16_1_4'},
+  {l:'דה"א ט"ז, ד–לז',v:'16_4_37'},{l:'דה"א ט"ז, לח–מג',v:'16_38_43'},
+  {l:'דה"א י"ז, א–ח',v:'17_1_8'},{l:'דה"א י"ז, ט–יד',v:'17_9_14'},
+  {l:'דה"א י"ז, טו–כ',v:'17_15_20'},{l:'דה"א י"ז, כא–כז',v:'17_21_27'},
+  {l:'דה"א י"ח, א–יא',v:'18_1_11'},{l:'דה"א י"ח, יב–יז',v:'18_12_17'},
+  {l:'דה"א י"ט, א–ז',v:'19_1_7'},{l:'דה"א י"ט, ח–טו',v:'19_8_15'},
+  {l:'דה"א י"ט, טז–יט',v:'19_16_19'},{l:'דה"א כ, א–ג',v:'20_1_3'},
+  {l:'דה"א כ, ד–ח',v:'20_4_8'},{l:'דה"א כ"א',v:'21_all'},
+  {l:'דה"א כ"ב, א–ד',v:'22_1_4'},{l:'דה"א כ"ב, ה–יג',v:'22_5_13'},
+  {l:'דה"א כ"ב, יד–יט',v:'22_14_19'},{l:'דה"א כ"ג, א–כד',v:'23_1_24'},
+  {l:'דה"א כ"ג, כה–לב',v:'23_25_32'},{l:'דה"א כ"ד, א–לא',v:'24_1_31'},
+  {l:'דה"א כ"ה, א–לא',v:'25_1_31'},{l:'דה"א כ"ו, א–לב',v:'26_1_32'},
+  {l:'דה"א כ"ז, א–לד',v:'27_1_34'},{l:'דה"א כ"ח, א–י',v:'28_1_10'},
+  {l:'דה"א כ"ח, יא–כא',v:'28_11_21'},{l:'דה"א כ"ט, א–טו',v:'29_1_15'},
+  {l:'דה"א כ"ט, טז–כה',v:'29_16_25'},{l:'דה"א כ"ט, כו–ל',v:'29_26_30'},
+];
+const CH_B=[
+  {l:'דה"ב א, א–ו',v:'b1_1_6'},{l:'דה"ב א, ז–יג',v:'b1_7_13'},
+  {l:'דה"ב א, יד–יח',v:'b1_14_18'},{l:'דה"ב ב, א–ט',v:'b2_1_9'},
+  {l:'דה"ב ב, י–טו',v:'b2_10_15'},{l:'דה"ב ב, טז–יז',v:'b2_16_17'},
+  {l:'דה"ב ג, א–ד',v:'b3_1_4'},{l:'דה"ב ג, ה–ט',v:'b3_5_9'},
+  {l:'דה"ב ג, י–יז',v:'b3_10_17'},{l:'דה"ב ד, א–ה',v:'b4_1_5'},
+  {l:'דה"ב ד, ו–י',v:'b4_6_10'},{l:'דה"ב ד, יא–יז',v:'b4_11_17'},
+  {l:'דה"ב ד, יח–כב',v:'b4_18_22'},{l:'דה"ב ה, א–ו',v:'b5_1_6'},
+  {l:'דה"ב ה, ז–י',v:'b5_7_10'},{l:'דה"ב ה, יא–יד',v:'b5_11_14'},
+  {l:'דה"ב ו, א–יג',v:'b6_1_13'},{l:'דה"ב ו, יד–כא',v:'b6_14_21'},
+  {l:'דה"ב ו, כב–כו',v:'b6_22_26'},{l:'דה"ב ו, כז–לא',v:'b6_27_31'},
+  {l:'דה"ב ו, לב–לה',v:'b6_32_35'},{l:'דה"ב ו, לו–לט',v:'b6_36_39'},
+  {l:'דה"ב ו, מ–מב',v:'b6_40_42'},{l:'דה"ב ז, א–ז',v:'b7_1_7'},
+  {l:'דה"ב ז, ח–י',v:'b7_8_10'},{l:'דה"ב ז, יא–טז',v:'b7_11_16'},
+  {l:'דה"ב ז, יז–כב',v:'b7_17_22'},{l:'דה"ב ח, א–ט',v:'b8_1_9'},
+  {l:'דה"ב ח, י–יא',v:'b8_10_11'},{l:'דה"ב ח, יב–טז',v:'b8_12_16'},
+  {l:'דה"ב ח, יז–יח',v:'b8_17_18'},{l:'דה"ב ט, א–ט',v:'b9_1_9'},
+  {l:'דה"ב ט, י–יב',v:'b9_10_12'},{l:'דה"ב ט, יג–כא',v:'b9_13_21'},
+  {l:'דה"ב ט, כב–כח',v:'b9_22_28'},{l:'דה"ב ט, כט–ל',v:'b9_29_30'},
+];
+const ALL_CH = [...CH_A,...CH_B];
+
+const STORAGE_KEY='chronicles_v7';
+const COMMENTATORS_A=['Dirksen','Braun','Myers','Knoppers','Andersen','יפת'];
+const COMMENTATORS_B=['Myers','Andersen','יפת'];
+function getCommentators(unit){ return unit?.character==='solomon'?COMMENTATORS_B:COMMENTATORS_A; }
+
+// ── Prophetic Dimensions (hardcoded) ─────────────────────────────────
+const PROPHETIC_DIMS=`ארבעת הממדים הנבואיים של המלך האידיאלי:
+• ממד 1 — רוחני-תיאולוגי: רוח/ריח, חכמה, בינה, עצה, גבורה, דעת, יראה, צניעות, ענווה
+• ממד 2 — חברתי-משפטי: משפט, צדקה, מוסר, יושר, חסד
+• ממד 3 — מדיני-לאומי: שלום, ביטחון, רועה
+• ממד 4 — הברית והנצחיות: ברית, נצח, עולם`;
+
+// ── Research Assistant ────────────────────────────────────────────────
+function ResearchAssistant({unit,allUnits,overrides,onNoteChange}){
+  const [question,setQuestion]=useState('');
+  const [aiResult,setAiResult]=useState('');
+  const [aiLoading,setAiLoading]=useState(false);
+
+  function buildDiffSummary(u){
+    try{
+      const diff=computeDiff(u.chroniclesText||'',u.sourceText||'');
+      const uov=overrides[u.id]||{};
+      const added=[],omitted=[],changed=[],relocated=[];
+      diff.forEach(ch=>{
+        if(ch.type==='verse')return;
+        const ov=uov[ch.id]||{};
+        const ta=ov['manualType_a']!==undefined?(ov['manualType_a']!==null?ov['manualType_a']:ch.type):
+                 ov.manualType!=null?ov.manualType:ch.type;
+        const tb=ov['manualType_b']!==undefined?(ov['manualType_b']!==null?ov['manualType_b']:ch.type):
+                 ov.manualType!=null?ov.manualType:ch.type;
+        if(ta==='added'&&ch.aW?.length)added.push(ch.aW.join(' '));
+        if(tb==='omitted'&&ch.bW?.length)omitted.push(ch.bW.join(' '));
+        if(ta==='changed'||tb==='changed'){
+          const w=(ch.aW||[]).join(' ')||'—';
+          changed.push(w);
+        }
+        if(ov.relocated_a||ov.relocated_b){
+          const w=(ch.aW||ch.bW||[]).join(' ');
+          if(w)relocated.push(w);
+        }
+      });
+      const parts=[];
+      if(added.length)parts.push(`תוספות (${added.length}): ${added.join(', ')}`);
+      if(omitted.length)parts.push(`השמטות (${omitted.length}): ${omitted.join(', ')}`);
+      if(changed.length)parts.push(`שינויים (${changed.length}): ${changed.join(', ')}`);
+      if(relocated.length)parts.push(`שינויי מיקום (${relocated.length}): ${relocated.join(', ')}`);
+      return parts.length?parts.join(' | '):'אין הבדלים מסומנים';
+    }catch{return'—';}
+  }
+
+  async function runAI(){
+    if(!question.trim())return;
+    setAiLoading(true);setAiResult('');
+    try{
+      // Build context — only current unit full text, other units as summaries
+      const currentUnitContext=`
+יחידה נוכחית: ${unit.name||''} | דמות: ${unit.character==='david'?'דוד':unit.character==='solomon'?'שלמה':'—'} | מקביל: ${unit.sourceRef||'—'}
+טקסט דה"י: ${unit.chroniclesText||'—'}
+טקסט מקביל: ${unit.sourceText||'—'}
+ממצאי השוואה: ${buildDiffSummary(unit)}
+הערות: ${unit.scholarship||'—'}`;
+
+      const otherUnitsContext=allUnits.filter(u=>u.id!==unit.id).map((u,i)=>`
+יחידה ${i+1}: ${u.name||'(ללא שם)'} | ${u.character==='david'?'דוד':u.character==='solomon'?'שלמה':'—'} | ${u.sourceRef||'—'}
+ממצאי השוואה: ${buildDiffSummary(u)}
+הערות: ${u.scholarship||'—'}`).join('\n');
+
+      const prompt=`אתה עוזר מחקר לתזה בתנ"ך העוסקת בתיאור דוד ושלמה בדברי הימים לאור החזון הנבואי של המלך האידיאלי.
+
+${PROPHETIC_DIMS}
+
+===
+היחידה הנוכחית (מידע מלא):
+${currentUnitContext}
+
+===
+שאר היחידות בפרויקט (${allUnits.length-1} יחידות — סיכומים בלבד):
+${otherUnitsContext}
+===
+
+שאלה: ${question}
+
+ענה בעברית בתמציתיות אקדמית. אם השאלה נוגעת לדפוסים חוצי-יחידות — ציין שם יחידה רלוונטית. אם דורש ניסוח אקדמי — ספקי ניסוח מוכן.`;
+
+      const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,
+          messages:[{role:'user',content:prompt}]})
+      });
+      const data=await res.json();
+      setAiResult(data.content?.map(b=>b.text||'').join('')||'שגיאה בתגובה');
+    }catch(e){setAiResult('שגיאת חיבור: '+e.message);}
+    setAiLoading(false);
+  }
+
+  const inp={width:'100%',border:'1px solid #e2e8f0',borderRadius:'7px',padding:'8px 10px',
+    fontSize:'14px',outline:'none',boxSizing:'border-box',fontFamily:'inherit'};
+
+  return(
+    <div style={{background:'white',borderRadius:'10px',border:'1px solid #e2e8f0',padding:'16px 20px',marginBottom:'14px'}}>
+      {/* Notes */}
+      <div style={{marginBottom:'14px'}}>
+        <label style={{display:'block',fontSize:'13px',fontWeight:'700',color:'#1e293b',marginBottom:'6px'}}>✏️ הערות שלי</label>
+        <textarea value={unit.scholarship||''} onChange={e=>onNoteChange(e.target.value)} rows={4}
+          placeholder='הערות אישיות, דיוקים, תובנות, קישורים לממד נבואי...'
+          style={{...inp,resize:'vertical',lineHeight:'1.7'}}/>
+      </div>
+
+      {/* AI */}
+      <div style={{borderTop:'1px solid #f1f5f9',paddingTop:'14px'}}>
+        <div style={{fontSize:'13px',fontWeight:'700',color:'#6366f1',marginBottom:'4px'}}>🤖 עוזר מחקר</div>
+        <div style={{fontSize:'11px',color:'#94a3b8',marginBottom:'8px'}}>רואה את כל {allUnits.length} היחידות + ארבעת הממדים הנבואיים</div>
+        <div style={{display:'flex',gap:'8px'}}>
+          <input value={question} onChange={e=>setQuestion(e.target.value)}
+            onKeyDown={e=>e.key==='Enter'&&runAI()}
+            placeholder='לדוגמה: לאיזה ממד שייכת התוספת "כדבר יהוה"? | באילו יחידות נוספות מופיע דפוס זה?'
+            style={{...inp,flex:1}}/>
+          <button onClick={runAI} disabled={aiLoading}
+            style={{padding:'8px 16px',borderRadius:'7px',border:'none',cursor:aiLoading?'wait':'pointer',
+              background:aiLoading?'#e2e8f0':'#6366f1',color:aiLoading?'#94a3b8':'white',
+              fontWeight:'700',fontSize:'13px',whiteSpace:'nowrap'}}>
+            {aiLoading?'⏳ חושב...':'שאל'}
+          </button>
+        </div>
+        {aiResult&&(
+          <div style={{marginTop:'10px',background:'#f8faff',borderRadius:'7px',padding:'12px 14px',
+            fontSize:'13px',lineHeight:'1.8',color:'#1e293b',border:'1px solid #e0e7ff',whiteSpace:'pre-wrap'}}>
+            {aiResult}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────
+function App(){
+  const [units,    setUnitsRaw]  = useState([]);
+  const [overrides,setOvRaw]     = useState({});
+  const [activeId, setActiveId]  = useState(null);
+  const [screen,   setScreen]    = useState('home');
+  const [quickPop, setQuickPop]  = useState(null);
+  const [msg,      setMsg]       = useState('');
+  const [saveErr,  setSaveErr]   = useState('');
+  const [extraData,setExtraData] = useState({});
+  const [commentary,setCommentaryRaw] = useState({});
+  const [comUnitId,setComUnitId]      = useState(null);
+  const [comOpenName,setComOpenName]  = useState(null);
+  const [comSummary,setComSummary]    = useState(null);
+  const [comLoading,setComLoading]    = useState(false);
+      const subs=[];
+  // ── helpers that also cache to localStorage ──
+  function setUnits(u){ setUnitsRaw(u); try{localStorage.setItem(STORAGE_KEY,JSON.stringify({...extraData,units:u,overrides,commentary}));}catch{} }
+  function setOv(ovOrFn){
+    setOvRaw(prev=>{
+      const ov=typeof ovOrFn==='function'?ovOrFn(prev):ovOrFn;
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify({...extraData,units,overrides:ov,commentary}));}catch{}
+      return ov;
+    });
+  }
+  function setCommentary(unitId,name,text){
+    setCommentaryRaw(prev=>{
+      const next={...prev,[unitId]:{...(prev[unitId]||{}),[name]:text}};
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify({...extraData,units,overrides,commentary:next}));}catch{}
+      return next;
+    });
+  }
+
+  function flash(m){ setMsg(m); setTimeout(()=>setMsg(''),2000); }
+
+  // ── load from localStorage on start ──
+  useEffect(()=>{
+    try{
+      const r=localStorage.getItem(STORAGE_KEY);
+      if(r){const d=JSON.parse(r);setUnitsRaw(d.units||[]);setOvRaw(d.overrides||{});setCommentaryRaw(d.commentary||{});const {units:_u,overrides:_o,commentary:_c,...rest}=d;setExtraData(rest);}
+    }catch{}
+  },[]);
+
+  // ── file ops ──
+  async function saveToFile(){
+    downloadJson({...extraData,units,overrides,commentary});
+    flash('✓ הקובץ הורד — שמרי אותו ב-F:\\chronicles\\chronicles_data.json');
+  }
+  async function saveAs(){
+    downloadJson({...extraData,units,overrides,commentary});
+    flash('✓ הקובץ הורד');
+  }
+  async function loadFromFile(){
+    const data=await fsPickOpen();
+    if(!data){alert('לא ניתן לקרוא את הקובץ');return;}
+    setUnitsRaw(data.units||[]);
+    setOvRaw(data.overrides||{});
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(data));}catch{}
+    flash('✓ נטען בהצלחה');
+  }
+
+  // ── unit ops ──
+  const active  = units.find(u=>u.id===activeId);
+  const unitOv  = (activeId&&overrides[activeId])||{};
+
+  function addUnit(){
+    const u={id:Date.now(),name:'',chapter:'',character:'',chroniclesText:'',sourceText:'',scholarship:''};
+    const newUnits=[...units,u];
+    setUnitsRaw(newUnits);
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({units:newUnits,overrides}));}catch{}
+    setActiveId(u.id);
+    setScreen('edit');
+    setSaveErr('');
+  }
+  function delUnit(id){
+    if(!confirm('למחוק יחידה זו?'))return;
+    setUnits(units.filter(u=>u.id!==id));
+    if(activeId===id){setActiveId(null);setScreen('list');}
+  }
+  function updField(field,val){
+    const next=units.map(u=>u.id===activeId?{...u,[field]:val}:u);
+    setUnits(next);
+    if(field==='chroniclesText'||field==='sourceText'){
+      const nov={...overrides}; delete nov[activeId]; setOv(nov);
+    }
+  }
+  function saveUnit(){
+    if(!active)return;
+    if(!active.name.trim()){setSaveErr('יש להזין כותרת ליחידה');return;}
+    if(!active.chapter){setSaveErr('יש לבחור יחידה ספרותית');return;}
+    setSaveErr('');
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({units,overrides}));}catch{}
+    flash('✓ נשמר');
+  }
+
+  // ── quick popup ──
+  function openQuick(e,chunk,side){
+    e.stopPropagation();
+    const r=e.currentTarget.getBoundingClientRect();
+    setQuickPop({chunk,activeId,side,x:r.left,y:r.bottom+6});
+  }
+  function setQuickType(type,side){
+    if(!quickPop)return;
+    const ch=quickPop.chunk;
+    const aid=quickPop.activeId;
+    if(type==='relocated'){
+      // Toggle relocated overlay — does not change main type
+      setOv(ov=>{
+        const prevUnit=ov[aid]||{};
+        const prevChunk=prevUnit[ch.id]||{};
+        const key='relocated_'+(side||'a');
+        const updated={...prevChunk,[key]:prevChunk[key]?null:true};
+        return {...ov,[aid]:{...prevUnit,[ch.id]:updated}};
+      });
+    } else {
+      const origType=ch.type;
+      const manual=type===origType?null:type;
+      setOv(ov=>{
+        const prevUnit=ov[aid]||{};
+        const prevChunk=prevUnit[ch.id]||{};
+        let updated;
+        if(side){
+          updated={...prevChunk,['manualType_'+side]:manual,note:prevChunk.note||''};
+        } else {
+          updated={...prevChunk,manualType:manual,note:prevChunk.note||''};
+        }
+        return {...ov,[aid]:{...prevUnit,[ch.id]:updated}};
+      });
+    }
+    setQuickPop(null);
+  }
+
+  // Mark all unmatched words in a verse as a given type
+  function markVerse(verseChunkId,type,side){
+    const verseIdx=rawDiff.findIndex(ch=>ch.id===verseChunkId);
+    if(verseIdx===-1)return;
+    const toMark=[];
+    for(let i=verseIdx+1;i<rawDiff.length;i++){
+      if(rawDiff[i].type==='verse')break;
+      if(rawDiff[i].type==='unmatched')toMark.push(rawDiff[i].id);
+    }
+    if(!toMark.length)return;
+    setOv(ov=>{
+      const prevUnit=ov[activeId]||{};
+      const updated={...prevUnit};
+      toMark.forEach(id=>{
+        updated[id]={...(prevUnit[id]||{}),['manualType_'+side]:type};
+      });
+      return {...ov,[activeId]:updated};
+    });
+    setQuickPop(null);
+  }
+  function effType(ch,side){ 
+    const ov=unitOv[ch.id];
+    if(!ov) return ch.type;
+    // Side-specific override — only applies to this side
+    if(side && ov['manualType_'+side]!==undefined){
+      return ov['manualType_'+side]!==null ? ov['manualType_'+side] : ch.type;
+    }
+    // Shared override (legacy / no-side calls)
+    if(!side && ov.manualType!=null) return ov.manualType;
+    return ch.type;
+  }
+
+  // ── diff ──
+  // rawDiff depends ONLY on text — IDs stay stable when overrides change
+  const rawDiff = useMemo(()=>{
+    if(!active)return[];
+    try{ return computeDiff(active.chroniclesText||'',active.sourceText||''); }
+    catch{return[];}
+  },[active&&active.chroniclesText,active&&active.sourceText]);
+
+  // Apply overrides separately — no recompute of diff
+  const diff = useMemo(()=>{
+    return rawDiff.map(ch=>{
+      const ov=unitOv[ch.id];
+      return ov?{...ch,...ov}:ch;
+    });
+  },[rawDiff,unitOv]);
+
+  // ── stats ──
+  function statsFor(uid){
+    const u=units.find(x=>x.id===uid);
+    if(!u||(!u.chroniclesText&&!u.sourceText))return{added:0,omitted:0,changed:0,relocated:0,addedA:0,omittedA:0,changedA:0,addedB:0,omittedB:0,changedB:0};
+    try{
+      const rd=computeDiff(u.chroniclesText||'',u.sourceText||'');
+      const uov=overrides[uid]||{};
+      const sA={added:0,omitted:0,changed:0};
+      const sB={added:0,omitted:0,changed:0};
+      let relocated=0;
+      rd.forEach(ch=>{
+        if(ch.type==='verse')return;
+        const ov=uov[ch.id]||{};
+        const ta = ov['manualType_a']!==undefined ? (ov['manualType_a']!==null?ov['manualType_a']:ch.type) :
+                   ov.manualType!=null ? ov.manualType : ch.type;
+        const tb = ov['manualType_b']!==undefined ? (ov['manualType_b']!==null?ov['manualType_b']:ch.type) :
+                   ov.manualType!=null ? ov.manualType : ch.type;
+        if(ta==='hidden' && tb==='hidden') return;
+        if(ta==='added' || ta==='changed') sA[ta]++;
+        if(tb==='omitted' || tb==='changed') sB[tb]++;
+        if(ov.relocated_a||ov.relocated_b) relocated++;
+      });
+      const combined={added:0,omitted:0,changed:0};
+      rd.forEach(ch=>{
+        if(ch.type==='verse')return;
+        const ov=uov[ch.id]||{};
+        const ta = ov['manualType_a']!==undefined ? (ov['manualType_a']!==null?ov['manualType_a']:ch.type) :
+                   ov.manualType!=null ? ov.manualType : ch.type;
+        const tb = ov['manualType_b']!==undefined ? (ov['manualType_b']!==null?ov['manualType_b']:ch.type) :
+                   ov.manualType!=null ? ov.manualType : ch.type;
+        const tEff = ta!==tb ? (ta!=='equal'?ta:tb) : ta;
+        if(tEff!=='hidden' && tEff!=='unmatched' && combined[tEff]!==undefined) combined[tEff]++;
+      });
+      return{...combined,relocated,addedA:sA.added,omittedA:sA.omitted,changedA:sA.changed,
+             addedB:sB.added,omittedB:sB.omitted,changedB:sB.changed};
+    }catch{return{added:0,omitted:0,changed:0,relocated:0,addedA:0,omittedA:0,changedA:0,addedB:0,omittedB:0,changedB:0};}
+  }
+
+  // ── render side ──
+  function renderSide(side,chunks){
+    return chunks.map(chunk=>{
+      const et=effType(chunk,side);
+      if(et==='verse'){
+        const ws=side==='a'?chunk.aW:chunk.bW;
+        const lbl=ws.join(' ');
+        // Clickable verse label — allows marking whole verse
+        return(
+          <span key={chunk.id}>
+            <span onClick={e=>{e.stopPropagation();const r=e.currentTarget.getBoundingClientRect();setQuickPop({chunk,activeId,side,x:r.left,y:r.bottom+6,isVerse:true});}}
+              style={{color:'#94a3b8',fontSize:'13px',cursor:'pointer'}}
+              title='לחצי לסימון הפסוק כולו'>
+              {lbl}
+            </span>{' '}
+          </span>
+        );
+      }
+      // Skip hidden
+      if(et==='hidden') return <span key={chunk.id}></span>;
+      // Unmatched — gray, clickable
+      if(et==='unmatched'){
+        const ws=side==='a'?chunk.aW:chunk.bW;
+        if(!ws||!ws.length) return <span key={chunk.id}> </span>;
+        const isRelocated=!!(unitOv[chunk.id]?.['relocated_'+side]);
+        return(
+          <span key={chunk.id}>
+            <span onClick={e=>openQuick(e,chunk,side)} title='לחצי לסיווג ידני'
+              style={{background:'transparent',border:'none',borderRadius:'4px',padding:'1px 2px',
+                cursor:'pointer',color:'#94a3b8',fontWeight:'400',
+                textDecoration:isRelocated?'underline double':'none',
+                textDecorationColor:isRelocated?'#1d4ed8':'inherit'}}
+              onMouseEnter={e=>{e.currentTarget.style.background='#f1f5f9';}}
+              onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>
+              {ws.join(' ')}
+            </span>{' '}
+          </span>
+        );
+      }
+      // Regular chunk
+      let words=[], styleType=et;
+      if(et==='equal'){
+        words=side==='a'?chunk.aW:chunk.bW;
+      } else if(side==='a'){
+        if(et==='omitted') return <span key={chunk.id}> </span>;
+        if(!chunk.aW.length) return <span key={chunk.id}> </span>;
+        words=chunk.aW; styleType=et==='changed'?'changed':'added';
+      } else {
+        if(et==='added') return <span key={chunk.id}> </span>;
+        if(!chunk.bW.length) return <span key={chunk.id}> </span>;
+        words=chunk.bW; styleType=et==='changed'?'changed':'omitted';
+      }
+      const meta=TM[styleType]||TM.equal;
+      const isManual=unitOv[chunk.id]?.manualType!=null||unitOv[chunk.id]?.['manualType_'+side]!=null;
+      const isRelocated=!!(unitOv[chunk.id]?.['relocated_'+side]);
+      const hasNote=!!unitOv[chunk.id]?.note;
+      const isEqual=styleType==='equal';
+      return(
+        <span key={chunk.id}>
+          <span onClick={e=>openQuick(e,chunk,side)}
+            title={isEqual?'לחצי לסיווג ידני':'לחצי לתיקון'}
+            style={{
+              background:isEqual?'transparent':meta.bg,
+              border:isEqual?'none':meta.border,
+              borderRadius:'4px',
+              padding:isEqual?'1px 2px':'2px 6px',
+              cursor:'pointer',
+              color:isEqual?'#1e293b':meta.tc,
+              fontWeight:isEqual?'400':'600',
+              outline:isManual?'2px dashed #6366f1':'none',
+              outlineOffset:'1px',
+              textDecoration:isRelocated?'underline double':'none',
+              textDecorationColor:isRelocated?'#1d4ed8':'inherit',
+              textDecorationThickness:isRelocated?'2px':'auto',
+            }}
+            onMouseEnter={e=>{ if(isEqual) e.currentTarget.style.background='#f1f5f9'; }}
+            onMouseLeave={e=>{ if(isEqual) e.currentTarget.style.background='transparent'; }}>
+            {words.join(' ')}{hasNote&&<sup style={{fontSize:'9px',color:'#6366f1',marginRight:'2px'}}>✎</sup>}
+          </span>{' '}
+        </span>
+      );
+    });
+  }
+
+  // ══ RENDER ══════════════════════════════════════════════════════════
+  return(
+    <div dir='rtl' style={{fontFamily:"'Segoe UI',Arial,sans-serif",minHeight:'100vh',background:'#f8fafc'}}
+      onClick={()=>setQuickPop(null)}>
+
+      {/* Header */}
+      <div style={{background:'linear-gradient(135deg,#1e3a5f,#2d5a9e)',color:'white',padding:'12px 20px',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'8px'}}>
+        <div>
+          <div style={{fontSize:'18px',fontWeight:'bold'}}>📜 כלי השוואה טקסטואלי</div>
+          <div style={{fontSize:'12px',color:'#93c5fd'}}>דברי הימים מול שמואל / מלכים</div>
+        </div>
+        <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
+          {msg&&<span style={{color:'#86efac',fontSize:'13px',fontWeight:'600'}}>{msg}</span>}
+          <button onClick={loadFromFile} style={{padding:'6px 14px',borderRadius:'20px',border:'1px solid rgba(255,255,255,0.4)',cursor:'pointer',fontSize:'13px',fontWeight:'600',background:'rgba(255,255,255,0.15)',color:'white'}}>📂 טען קובץ</button>
+          <button onClick={saveToFile}   style={{padding:'6px 14px',borderRadius:'20px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'600',background:'#16a34a',color:'white'}}>⬇️ הורד JSON</button>
+          <span style={{width:'1px',background:'rgba(255,255,255,0.3)',height:'22px',display:'inline-block'}}></span>
+          {['list','summary'].map(s=>(
+            <button key={s} onClick={()=>setScreen(s)}
+              style={{padding:'6px 14px',borderRadius:'20px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'600',
+                background:screen===s?'white':'rgba(255,255,255,0.15)',color:screen===s?'#1e3a5f':'white'}}>
+              {s==='list'?'יחידות':'סיכום'}
+            </button>
+          ))}
+          <button onClick={()=>setScreen('commentary')}
+            style={{padding:'6px 14px',borderRadius:'20px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'600',
+              background:(screen==='commentary'||screen==='commentary-edit')?'white':'rgba(255,255,255,0.15)',
+              color:(screen==='commentary'||screen==='commentary-edit')?'#4c1d95':'white'}}>
+            📚 פרשנות
+          </button>
+          <button onClick={()=>setScreen('home')}
+            style={{padding:'6px 14px',borderRadius:'20px',border:'1px solid rgba(255,255,255,0.4)',cursor:'pointer',fontSize:'13px',fontWeight:'600',
+              background:screen==='home'?'white':'rgba(255,255,255,0.15)',color:screen==='home'?'#1e3a5f':'white'}}>
+            🏠
+          </button>
+        </div>
+      </div>
+
+      {/* ── LIST ── */}
+      {screen==='list'&&(
+        <div style={{maxWidth:'860px',margin:'0 auto',padding:'28px 16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px'}}>
+            <h2 style={{margin:0,fontSize:'17px',fontWeight:'bold',color:'#1e293b'}}>יחידות ספרותיות ({units.length})</h2>
+            <button onClick={addUnit} style={{background:'#1e3a5f',color:'white',border:'none',padding:'8px 20px',borderRadius:'8px',cursor:'pointer',fontWeight:'700',fontSize:'14px'}}>+ הוסף יחידה</button>
+          </div>
+          {units.length===0&&(
+            <div style={{textAlign:'center',padding:'80px 0',color:'#94a3b8'}}>
+              <div style={{fontSize:'52px',marginBottom:'12px'}}>📜</div>
+              <p>לחצי על "הוסף יחידה" כדי להתחיל</p>
+            </div>
+          )}
+          <div style={{display:'grid',gap:'12px'}}>
+            {units.map(unit=>{
+              const s=statsFor(unit.id);
+              const chap=ALL_CH.find(c=>c.v===unit.chapter);
+              return(
+                <div key={unit.id} style={{background:'white',borderRadius:'12px',border:'1px solid #e2e8f0',padding:'16px 20px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'12px'}}>
+                  <div style={{flex:1}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px'}}>
+                      <span style={{fontWeight:'bold',fontSize:'15px',color:'#1e293b'}}>{unit.name||'(יחידה ללא שם)'}</span>
+                      {unit.character&&<span style={{background:unit.character==='david'?'#dbeafe':'#fdf4ff',color:unit.character==='david'?'#1d4ed8':'#7e22ce',border:`1px solid ${unit.character==='david'?'#93c5fd':'#d8b4fe'}`,padding:'1px 10px',borderRadius:'12px',fontSize:'12px',fontWeight:'700'}}>
+                        {unit.character==='david'?'דוד':'שלמה'}
+                      </span>}
+                    </div>
+                    {chap&&<div style={{fontSize:'12px',color:'#64748b',marginBottom:'2px'}}>{chap.l}</div>}
+                    {unit.sourceRef&&<div style={{fontSize:'12px',color:'#94a3b8',marginBottom:'6px'}}>מקביל: {unit.sourceRef}</div>}
+                    <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+                      {[['added','תוספות','#dcfce7','#86efac','#166534'],['omitted','השמטות','#fee2e2','#fca5a5','#991b1b'],['changed','שינויים','#fef9c3','#fde047','#854d0e']].map(([t,l,bg,br,c])=>
+                        s[t]>0&&<span key={t} style={{background:bg,border:`1px solid ${br}`,color:c,padding:'2px 10px',borderRadius:'12px',fontSize:'12px',fontWeight:'700'}}>{l}: {s[t]}</span>
+                      )}
+                      {(s.added+s.omitted+s.changed)===0&&<span style={{color:'#94a3b8',fontSize:'12px'}}>לא הוזנו טקסטים</span>}
+                    </div>
+                  </div>
+                  <div style={{display:'flex',gap:'8px',flexShrink:0}}>
+                    <button onClick={()=>{setActiveId(unit.id);setScreen('edit');setSaveErr('');}}
+                      style={{background:'#eff6ff',color:'#1d4ed8',border:'1px solid #bfdbfe',padding:'7px 16px',borderRadius:'8px',cursor:'pointer',fontWeight:'700',fontSize:'13px'}}>עריכה</button>
+                    <button onClick={()=>delUnit(unit.id)}
+                      style={{background:'#fff1f2',color:'#e11d48',border:'1px solid #fecdd3',padding:'7px 10px',borderRadius:'8px',cursor:'pointer'}}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── EDIT ── */}
+      {screen==='edit'&&!active&&(
+        <div style={{padding:'40px',textAlign:'center',color:'#94a3b8'}}>טוען...</div>
+      )}
+      {screen==='edit'&&active&&(
+        <div style={{maxWidth:'1200px',margin:'0 auto',padding:'20px 16px'}}>
+          {/* Navigation bar */}
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'14px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+              <button onClick={()=>setScreen('list')} style={{background:'none',border:'none',color:'#2563eb',cursor:'pointer',fontSize:'14px'}}>← רשימה</button>
+              <span style={{color:'#cbd5e1'}}>|</span>
+              {(()=>{
+                const idx=units.findIndex(u=>u.id===activeId);
+                const prev=units[idx-1];
+                const next=units[idx+1];
+                return(
+                  <>
+                    <button onClick={()=>{if(prev){setActiveId(prev.id);setSaveErr('');}}} disabled={!prev}
+                      style={{background:prev?'#eff6ff':'#f8fafc',color:prev?'#1d4ed8':'#cbd5e1',border:`1px solid ${prev?'#bfdbfe':'#e2e8f0'}`,padding:'5px 12px',borderRadius:'7px',cursor:prev?'pointer':'default',fontSize:'13px',fontWeight:'600'}}>
+                      ▶ קודמת
+                    </button>
+                    <span style={{fontSize:'12px',color:'#94a3b8'}}>{idx+1} / {units.length}</span>
+                    <button onClick={()=>{if(next){setActiveId(next.id);setSaveErr('');}}} disabled={!next}
+                      style={{background:next?'#eff6ff':'#f8fafc',color:next?'#1d4ed8':'#cbd5e1',border:`1px solid ${next?'#bfdbfe':'#e2e8f0'}`,padding:'5px 12px',borderRadius:'7px',cursor:next?'pointer':'default',fontSize:'13px',fontWeight:'600'}}>
+                      ◀ הבאה
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+            <div style={{display:'flex',gap:'10px',alignItems:'center'}}>
+              {saveErr&&<span style={{color:'#dc2626',fontSize:'13px',fontWeight:'600'}}>⚠ {saveErr}</span>}
+              <button onClick={saveUnit} style={{background:'#16a34a',color:'white',border:'none',padding:'8px 22px',borderRadius:'8px',cursor:'pointer',fontWeight:'700',fontSize:'14px'}}>💾 שמור</button>
+              <button onClick={addUnit} style={{background:'#2563eb',color:'white',border:'none',padding:'8px 22px',borderRadius:'8px',cursor:'pointer',fontWeight:'700',fontSize:'14px'}}>➕ חדשה</button>
+            </div>
+          </div>
+
+          {/* Meta */}
+          <div style={{background:'white',borderRadius:'10px',border:'1px solid #e2e8f0',padding:'16px 20px',marginBottom:'14px'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1.5fr 2fr 1fr',gap:'14px'}}>
+              <div>
+                <label style={{display:'block',fontSize:'11px',fontWeight:'700',color:'#64748b',marginBottom:'5px',textTransform:'uppercase'}}>כותרת *</label>
+                <input value={active.name} onChange={e=>updField('name',e.target.value)} placeholder='לדוגמה: הכתרת דוד'
+                  style={{width:'100%',border:'1px solid #cbd5e1',borderRadius:'7px',padding:'8px 10px',fontSize:'14px',outline:'none',boxSizing:'border-box'}} />
+              </div>
+              <div>
+                <label style={{display:'block',fontSize:'11px',fontWeight:'700',color:'#64748b',marginBottom:'5px',textTransform:'uppercase'}}>יחידה ספרותית *</label>
+                <select value={active.chapter} onChange={e=>updField('chapter',e.target.value)}
+                  style={{width:'100%',border:'1px solid #cbd5e1',borderRadius:'7px',padding:'8px 10px',fontSize:'14px',outline:'none',background:'white',boxSizing:'border-box'}}>
+                  <option value=''>— בחרי יחידה —</option>
+                  <optgroup label="דברי הימים א׳ — דוד">
+                    {CH_A.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}
+                  </optgroup>
+                  <optgroup label="דברי הימים ב׳ — שלמה">
+                    {CH_B.map(c=><option key={c.v} value={c.v}>{c.l}</option>)}
+                  </optgroup>
+                </select>
+              </div>
+              <div>
+                <label style={{display:'block',fontSize:'11px',fontWeight:'700',color:'#64748b',marginBottom:'5px',textTransform:'uppercase'}}>דמות</label>
+                <div style={{display:'flex',gap:'8px'}}>
+                  {[['david','דוד','#dbeafe','#1d4ed8','#93c5fd'],['solomon','שלמה','#fdf4ff','#7e22ce','#d8b4fe']].map(([v,l,bg,c,br])=>(
+                    <button key={v} onClick={()=>updField('character',active.character===v?'':v)}
+                      style={{flex:1,padding:'8px',border:`2px solid ${active.character===v?c:br}`,background:active.character===v?bg:'white',color:c,borderRadius:'8px',cursor:'pointer',fontWeight:'700',fontSize:'14px'}}>
+                      {active.character===v?'✓ ':''}{l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{marginTop:'12px'}}>
+              <label style={{display:'block',fontSize:'11px',fontWeight:'700',color:'#64748b',marginBottom:'5px',textTransform:'uppercase'}}>יחידה מקבילה (ידני)</label>
+              <input value={active.sourceRef||''} onChange={e=>updField('sourceRef',e.target.value)}
+                placeholder='לדוגמה: שמ"ב ה, א–ג'
+                style={{width:'100%',border:'1px solid #cbd5e1',borderRadius:'7px',padding:'8px 10px',fontSize:'14px',outline:'none',boxSizing:'border-box'}} />
+            </div>
+          </div>
+
+          {/* Legend */}
+          <div style={{display:'flex',gap:'10px',marginBottom:'12px',flexWrap:'wrap',alignItems:'center'}}>
+            {[['תוספת בדה"י','#dcfce7','#86efac','#166534'],['השמטה מהמקור','#fee2e2','#fca5a5','#991b1b'],['שינוי','#fef9c3','#fde047','#854d0e']].map(([l,bg,br,c])=>(
+              <span key={l} style={{background:bg,border:`1px solid ${br}`,color:c,padding:'3px 12px',borderRadius:'12px',fontSize:'12px',fontWeight:'700'}}>● {l}</span>
+            ))}
+            <span style={{background:'#dbeafe',border:'1px solid #93c5fd',color:'#1d4ed8',padding:'3px 12px',borderRadius:'12px',fontSize:'12px',fontWeight:'700',textDecoration:'underline double',textDecorationThickness:'2px'}}>● שינוי מיקום</span>
+            <span style={{color:'#94a3b8',fontSize:'12px'}}>לחצי על מילה לתיקון | לחצי על מספר פסוק לסימון פסוק שלם</span>
+          </div>
+
+          {/* Texts */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px',marginBottom:'14px'}}>
+            {[['chroniclesText','📘 דברי הימים','#eff6ff','#bfdbfe','#1d4ed8','הדבק את טקסט דה"י...'],
+              ['sourceText','📙 שמואל / מלכים','#fffbeb','#fde68a','#92400e','הדבק את הטקסט המקביל...']].map(([field,title,bg,border,color,ph])=>(
+              <div key={field} style={{background:'white',borderRadius:'10px',border:`1px solid ${border}`,padding:'14px'}}>
+                <div style={{fontWeight:'bold',fontSize:'13px',color,marginBottom:'8px'}}>{title}</div>
+                <textarea value={active[field]} onChange={e=>updField(field,e.target.value)} rows={7} placeholder={ph}
+                  style={{width:'100%',border:'1px solid #e2e8f0',borderRadius:'7px',padding:'8px 10px',fontSize:'14px',lineHeight:'1.8',resize:'vertical',outline:'none',boxSizing:'border-box',fontFamily:'inherit'}} />
+                <div style={{fontSize:'11px',color:'#94a3b8',marginTop:'4px',textAlign:'left'}}>{tokenize(active[field]||'').length} מילים</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Diff */}
+          {(active.chroniclesText||active.sourceText)&&diff.length>0&&(
+            <div style={{background:'white',borderRadius:'10px',border:'1px solid #e2e8f0',padding:'18px 20px',marginBottom:'14px'}}>
+              <h3 style={{margin:'0 0 14px',fontSize:'15px',fontWeight:'bold',color:'#1e293b'}}>🔍 השוואה מסומנת</h3>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px'}}>
+                <div>
+                  <div style={{fontSize:'12px',fontWeight:'700',color:'#1d4ed8',marginBottom:'8px'}}>דברי הימים</div>
+                  <div style={{lineHeight:'2.4',fontSize:'15px',background:'#f8faff',borderRadius:'8px',padding:'12px 14px',border:'1px solid #e0e7ff'}}>{renderSide('a',diff)}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:'12px',fontWeight:'700',color:'#92400e',marginBottom:'8px'}}>שמואל / מלכים</div>
+                  <div style={{lineHeight:'2.4',fontSize:'15px',background:'#fffdf0',borderRadius:'8px',padding:'12px 14px',border:'1px solid #fde68a'}}>{renderSide('b',diff)}</div>
+                </div>
+              </div>
+              {/* Unit summary */}
+              {(()=>{
+                const s=statsFor(active.id);
+                const tot=s.added+s.omitted+s.changed;
+                if(!tot&&!s.relocated)return null;
+                return(
+                  <div style={{marginTop:'14px',paddingTop:'12px',borderTop:'1px solid #f1f5f9',display:'flex',gap:'10px',flexWrap:'wrap',alignItems:'center'}}>
+                    <span style={{fontSize:'12px',fontWeight:'700',color:'#475569'}}>📊 סיכום יחידה:</span>
+                    {[['added','תוספות','#dcfce7','#166534'],['omitted','השמטות','#fee2e2','#991b1b'],['changed','שינויים','#fef9c3','#854d0e']].map(([t,l,bg,c])=>
+                      s[t]>0&&<span key={t} style={{background:bg,color:c,padding:'2px 10px',borderRadius:'10px',fontSize:'12px',fontWeight:'700'}}>{l}: {s[t]}</span>
+                    )}
+                    {s.relocated>0&&<span style={{background:'#dbeafe',color:'#1d4ed8',padding:'2px 10px',borderRadius:'10px',fontSize:'12px',fontWeight:'700',textDecoration:'underline double',textDecorationThickness:'2px'}}>מיקום: {s.relocated}</span>}
+                    <span style={{fontSize:'12px',color:'#94a3b8',marginRight:'auto'}}>סה"כ: {tot}</span>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Research Assistant */}
+          <ResearchAssistant
+            unit={active}
+            allUnits={units}
+            overrides={overrides}
+            onNoteChange={val=>updField('scholarship',val)}
+          />
+        </div>
+      )}
+
+      {/* ── SUMMARY ── */}
+      {screen==='summary'&&(
+        <div style={{maxWidth:'960px',margin:'0 auto',padding:'28px 16px'}}>
+          <h2 style={{margin:'0 0 20px',fontSize:'18px',fontWeight:'bold',color:'#1e293b'}}>סיכום ממצאים</h2>
+          {units.length===0&&<p style={{color:'#94a3b8',textAlign:'center'}}>אין יחידות עדיין</p>}
+          {units.length>0&&(()=>{
+            const tot={added:0,omitted:0,changed:0};
+            units.forEach(u=>{const s=statsFor(u.id);Object.keys(tot).forEach(k=>tot[k]+=s[k]);});
+            return(
+              <div style={{background:'linear-gradient(135deg,#1e3a5f,#2d5a9e)',color:'white',borderRadius:'12px',padding:'20px',marginBottom:'20px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'16px',textAlign:'center'}}>
+                {[['סה"כ הבדלים',tot.added+tot.omitted+tot.changed],['תוספות',tot.added],['השמטות',tot.omitted],['שינויים',tot.changed]].map(([l,v])=>(
+                  <div key={l}><div style={{fontSize:'30px',fontWeight:'bold'}}>{v}</div><div style={{fontSize:'12px',color:'#93c5fd',marginTop:'4px'}}>{l}</div></div>
+                ))}
+              </div>
+            );
+          })()}
+          {['david','solomon'].map(char=>{
+            const cu=units.filter(u=>u.character===char);
+            if(!cu.length)return null;
+            const tot={added:0,omitted:0,changed:0};
+            cu.forEach(u=>{const s=statsFor(u.id);Object.keys(tot).forEach(k=>tot[k]+=s[k]);});
+            return(
+              <div key={char} style={{background:'white',borderRadius:'12px',border:`2px solid ${char==='david'?'#93c5fd':'#d8b4fe'}`,padding:'14px 20px',marginBottom:'14px'}}>
+                <h3 style={{margin:'0 0 10px',color:char==='david'?'#1d4ed8':'#7e22ce',fontSize:'15px',fontWeight:'bold'}}>
+                  {char==='david'?'👑 דוד':'👑 שלמה'} — {cu.length} יחידות | {tot.added+tot.omitted+tot.changed} הבדלים
+                </h3>
+                <div style={{display:'flex',gap:'10px',flexWrap:'wrap'}}>
+                  {[['added','תוספות','#dcfce7','#166534'],['omitted','השמטות','#fee2e2','#991b1b'],['changed','שינויים','#fef9c3','#854d0e']].map(([t,l,bg,c])=>(
+                    <span key={t} style={{background:bg,color:c,padding:'3px 14px',borderRadius:'12px',fontSize:'13px',fontWeight:'700'}}>{l}: {tot[t]}</span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{background:'white',borderRadius:'12px',border:'1px solid #e2e8f0',overflow:'hidden',marginBottom:'20px'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:'14px'}}>
+              <thead style={{background:'#f8fafc'}}>
+                <tr>
+                  {['יחידה','יחידה ספרותית','דמות'].map(h=>(
+                    <th key={h} style={{padding:'11px 14px',textAlign:'right',fontWeight:'700',color:'#475569',fontSize:'12px',borderBottom:'2px solid #e2e8f0'}}>{h}</th>
+                  ))}
+                  <th colSpan={2} style={{padding:'6px 14px',textAlign:'center',fontWeight:'700',color:'#1d4ed8',fontSize:'12px',borderBottom:'1px solid #e2e8f0',background:'#eff6ff'}}>📖 דברי הימים</th>
+                  <th colSpan={2} style={{padding:'6px 14px',textAlign:'center',fontWeight:'700',color:'#b45309',fontSize:'12px',borderBottom:'1px solid #e2e8f0',background:'#fffbeb'}}>📖 מקבילה</th>
+                  <th style={{padding:'11px 14px',textAlign:'right',fontWeight:'700',color:'#475569',fontSize:'12px',borderBottom:'2px solid #e2e8f0'}}>סה"כ</th>
+                </tr>
+                <tr>
+                  {['יחידה','יחידה ספרותית','דמות'].map(h=>(
+                    <th key={h} style={{padding:'4px 14px',borderBottom:'2px solid #e2e8f0'}}></th>
+                  ))}
+                  {[['תוספות','#166534','#dcfce7'],['שינויים','#854d0e','#fef9c3']].map(([l,c,bg])=>(
+                    <th key={'a'+l} style={{padding:'4px 14px',textAlign:'right',fontWeight:'700',color:c,fontSize:'11px',borderBottom:'2px solid #e2e8f0',background:bg}}>{l}</th>
+                  ))}
+                  {[['השמטות','#991b1b','#fee2e2'],['שינויים','#854d0e','#fef9c3']].map(([l,c,bg])=>(
+                    <th key={'b'+l} style={{padding:'4px 14px',textAlign:'right',fontWeight:'700',color:c,fontSize:'11px',borderBottom:'2px solid #e2e8f0',background:bg}}>{l}</th>
+                  ))}
+                  <th style={{padding:'4px 14px',borderBottom:'2px solid #e2e8f0'}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {units.map((unit,i)=>{
+                  const s=statsFor(unit.id);const tot=s.added+s.omitted+s.changed;
+                  const chap=ALL_CH.find(c=>c.v===unit.chapter);
+                  return(
+                    <tr key={unit.id} style={{borderBottom:'1px solid #f1f5f9',background:i%2===0?'white':'#fafafa'}}>
+                      <td style={{padding:'10px 14px',fontWeight:'600'}}>{unit.name||'(ללא שם)'}</td>
+                      <td style={{padding:'10px 14px',fontSize:'12px',color:'#64748b'}}>
+                        {chap?.l||'—'}
+                        {unit.sourceRef&&<div style={{color:'#94a3b8',fontSize:'11px'}}>{unit.sourceRef}</div>}
+                      </td>
+                      <td style={{padding:'10px 14px'}}>{unit.character&&<span style={{background:unit.character==='david'?'#dbeafe':'#fdf4ff',color:unit.character==='david'?'#1d4ed8':'#7e22ce',padding:'1px 8px',borderRadius:'10px',fontSize:'12px',fontWeight:'700'}}>{unit.character==='david'?'דוד':'שלמה'}</span>}</td>
+                      <td style={{padding:'10px 14px',color:s.addedA>0?'#166534':'#cbd5e1',fontWeight:s.addedA>0?'bold':'normal',background:'#f0fdf4'}}>{s.addedA||'—'}</td>
+                      <td style={{padding:'10px 14px',color:s.changedA>0?'#854d0e':'#cbd5e1',fontWeight:s.changedA>0?'bold':'normal',background:'#f0fdf4'}}>{s.changedA||'—'}</td>
+                      <td style={{padding:'10px 14px',color:s.omittedB>0?'#991b1b':'#cbd5e1',fontWeight:s.omittedB>0?'bold':'normal',background:'#fefce8'}}>{s.omittedB||'—'}</td>
+                      <td style={{padding:'10px 14px',color:s.changedB>0?'#854d0e':'#cbd5e1',fontWeight:s.changedB>0?'bold':'normal',background:'#fefce8'}}>{s.changedB||'—'}</td>
+                      <td style={{padding:'10px 14px',fontWeight:'bold',color:'#2563eb'}}>{tot}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {units.filter(u=>u.scholarship).map(unit=>(
+            <div key={unit.id} style={{background:'white',borderRadius:'12px',border:'1px solid #e2e8f0',padding:'18px 20px',marginBottom:'12px'}}>
+              <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}}>
+                <span style={{fontWeight:'bold',fontSize:'14px',color:'#1e293b'}}>📚 {unit.name}</span>
+                {unit.character&&<span style={{background:unit.character==='david'?'#dbeafe':'#fdf4ff',color:unit.character==='david'?'#1d4ed8':'#7e22ce',padding:'1px 8px',borderRadius:'10px',fontSize:'12px',fontWeight:'700'}}>{unit.character==='david'?'דוד':'שלמה'}</span>}
+              </div>
+              <div style={{fontSize:'13px',lineHeight:'1.8',color:'#374151',whiteSpace:'pre-wrap',background:'#f8fafc',borderRadius:'7px',padding:'10px 14px',borderRight:'3px solid #6366f1'}}>{unit.scholarship}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── HOME ── */}
+      {screen==='home'&&(
+        <div style={{display:'flex',justifyContent:'center',alignItems:'center',gap:'40px',padding:'100px 40px',flexWrap:'wrap'}}>
+          {[
+            {key:'list',icon:'🔍',title:'השוואה',desc:'השוואת יחידות ספרותיות',border:'#bfdbfe',shadow:'rgba(37,99,235,0.15)',tc:'#1e3a5f'},
+            {key:'commentary',icon:'📚',title:'פרשנות',desc:'הזנת פירושי פרשנים',border:'#d8b4fe',shadow:'rgba(124,58,237,0.15)',tc:'#4c1d95'}
+          ].map(t=>(
+            <div key={t.key} onClick={()=>setScreen(t.key)}
+              style={{background:'white',borderRadius:'20px',border:`2px solid ${t.border}`,padding:'56px 52px',
+                textAlign:'center',cursor:'pointer',minWidth:'230px',
+                boxShadow:`0 8px 32px ${t.shadow}`}}>
+              <div style={{fontSize:'60px',marginBottom:'16px'}}>{t.icon}</div>
+              <div style={{fontSize:'26px',fontWeight:'bold',color:t.tc,marginBottom:'10px'}}>{t.title}</div>
+              <div style={{fontSize:'13px',color:'#64748b'}}>{t.desc}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── COMMENTARY LIST ── */}
+      {screen==='commentary'&&(
+        <div style={{maxWidth:'860px',margin:'0 auto',padding:'28px 16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'24px'}}>
+            <div>
+              <h2 style={{margin:0,fontSize:'17px',fontWeight:'bold',color:'#1e293b'}}>📚 פרשנות — בחרי יחידה</h2>
+              <div style={{fontSize:'12px',color:'#94a3b8',marginTop:'4px'}}>{units.length} יחידות</div>
+            </div>
+            <button onClick={()=>setScreen('home')}
+              style={{background:'none',border:'none',color:'#2563eb',cursor:'pointer',fontSize:'14px'}}>← בית</button>
+          </div>
+          {units.length===0&&(
+            <div style={{textAlign:'center',padding:'80px 0',color:'#94a3b8'}}>
+              <div style={{fontSize:'52px',marginBottom:'12px'}}>📚</div>
+              <p>אין יחידות — הוסיפי יחידות בלשונית ההשוואה</p>
+            </div>
+          )}
+          <div style={{display:'grid',gap:'10px'}}>
+            {units.map(unit=>{
+              const commentators=getCommentators(unit);
+              const unitCom=commentary[unit.id]||{};
+              const done=commentators.filter(c=>(unitCom[c]||'').trim()).length;
+              const chap=ALL_CH.find(c=>c.v===unit.chapter);
+              return(
+                <div key={unit.id}
+                  onClick={()=>{setComUnitId(unit.id);setComOpenName(null);setComSummary(null);setScreen('commentary-edit');}}
+                  style={{background:'white',borderRadius:'12px',border:'1px solid #e2e8f0',padding:'14px 20px',
+                    cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'12px'}}>
+                  <div>
+                    <div style={{fontWeight:'bold',fontSize:'15px',color:'#1e293b',marginBottom:'4px'}}>{unit.name||'(ללא שם)'}</div>
+                    <div style={{fontSize:'12px',color:'#64748b'}}>{chap?.l||'—'}</div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:'12px',flexShrink:0}}>
+                    <span style={{fontSize:'12px',fontWeight:'600',
+                      color:done===commentators.length&&done>0?'#16a34a':done>0?'#d97706':'#94a3b8'}}>
+                      {done}/{commentators.length} פרשנים
+                    </span>
+                    {done===commentators.length&&done>0&&<span style={{color:'#16a34a',fontSize:'16px'}}>✓</span>}
+                    <span style={{color:'#94a3b8'}}>←</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── COMMENTARY EDIT ── */}
+      {screen==='commentary-edit'&&(()=>{
+        const comUnit=units.find(u=>u.id===comUnitId);
+        if(!comUnit) return <div style={{padding:'40px',textAlign:'center',color:'#94a3b8'}}>לא נמצאה יחידה</div>;
+        const commentators=getCommentators(comUnit);
+        const unitCom=commentary[comUnitId]||{};
+        const chap=ALL_CH.find(c=>c.v===comUnit.chapter);
+
+        async function generateSummary(){
+          const entries=commentators.filter(c=>(unitCom[c]||'').trim());
+          if(!entries.length){alert('יש להזין לפחות פרשן אחד לפני יצירת הסיכום');return;}
+          setComLoading(true);setComSummary(null);
+          try{
+            const comTexts=entries.map(name=>`**${name}:**\n${unitCom[name]}`).join('\n\n---\n\n');
+            const prompt=`אתה עוזר מחקר לתזה בתנ"ך.
+יחידה ספרותית: "${comUnit.name}" — ${chap?.l||''} (מקביל: ${comUnit.sourceRef||'—'})
+
+להלן פירושי הפרשנים ליחידה זו (כולל מספרי עמודים):
+${comTexts}
+
+השב ב-JSON בלבד, ללא הסברים נוספים, ללא backticks.
+פורמט: מערך JSON של אובייקטים, כל אחד עם:
+- "verse": פסוק (כגון "א", "ב", "כללי")
+- "similar": מה הפרשנים מסכימים, כולל ציון עמודים רלוונטיים
+- "different": היכן חולקים, כולל ציון עמודים. אם אין מחלוקת: "אין מחלוקת"
+- "commentators": מערך שמות הפרשנים שהתייחסו לפסוק זה
+
+אם דעה אינה קשורה לפסוק ספציפי, השתמש ב"כללי".`;
+
+            const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
+              method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:2500,
+                messages:[{role:'user',content:prompt}]})
+            });
+            const data=await res.json();
+            const text=data.content?.map(b=>b.text||'').join('')||'';
+            try{
+              const clean=text.replace(/```json|```/g,'').trim();
+              setComSummary(JSON.parse(clean));
+            }catch{setComSummary([{verse:'—',similar:text,different:'—',commentators:[]}]);}
+          }catch(e){setComSummary([{verse:'שגיאה',similar:e.message,different:'—',commentators:[]}]);}
+          setComLoading(false);
+        }
+
+        return(
+          <div style={{maxWidth:'860px',margin:'0 auto',padding:'20px 16px'}}>
+            {/* Nav */}
+            <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'16px'}}>
+              <button onClick={()=>setScreen('commentary')}
+                style={{background:'none',border:'none',color:'#2563eb',cursor:'pointer',fontSize:'14px'}}>← פרשנות</button>
+              <span style={{color:'#cbd5e1'}}>|</span>
+              {(()=>{
+                const idx=units.findIndex(u=>u.id===comUnitId);
+                const prev=units[idx-1];
+                const next=units[idx+1];
+                return(
+                  <>
+                    <button onClick={()=>{if(prev){setComUnitId(prev.id);setComOpenName(null);setComSummary(null);}}} disabled={!prev}
+                      style={{background:prev?'#f5f3ff':'#f8fafc',color:prev?'#4c1d95':'#cbd5e1',border:`1px solid ${prev?'#d8b4fe':'#e2e8f0'}`,
+                        padding:'4px 10px',borderRadius:'7px',cursor:prev?'pointer':'default',fontSize:'13px',fontWeight:'600'}}>
+                      ▶ קודמת
+                    </button>
+                    <span style={{fontSize:'12px',color:'#94a3b8'}}>{idx+1} / {units.length}</span>
+                    <button onClick={()=>{if(next){setComUnitId(next.id);setComOpenName(null);setComSummary(null);}}} disabled={!next}
+                      style={{background:next?'#f5f3ff':'#f8fafc',color:next?'#4c1d95':'#cbd5e1',border:`1px solid ${next?'#d8b4fe':'#e2e8f0'}`,
+                        padding:'4px 10px',borderRadius:'7px',cursor:next?'pointer':'default',fontSize:'13px',fontWeight:'600'}}>
+                      ◀ הבאה
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Unit info */}
+            <div style={{background:'linear-gradient(135deg,#f5f3ff,#faf5ff)',borderRadius:'10px',border:'1px solid #d8b4fe',padding:'14px 20px',marginBottom:'18px'}}>
+              <div style={{fontWeight:'bold',fontSize:'17px',color:'#4c1d95',marginBottom:'4px'}}>{comUnit.name}</div>
+              <div style={{fontSize:'13px',color:'#6b21a8'}}>
+                {chap?.l||'—'}
+                {comUnit.sourceRef&&<span style={{color:'#94a3b8'}}> | מקביל: {comUnit.sourceRef}</span>}
+                {comUnit.character&&<span style={{marginRight:'8px',background:comUnit.character==='david'?'#dbeafe':'#fdf4ff',
+                  color:comUnit.character==='david'?'#1d4ed8':'#7e22ce',padding:'1px 10px',borderRadius:'10px',fontSize:'12px',fontWeight:'700'}}>
+                  {comUnit.character==='david'?'דוד':'שלמה'}
+                </span>}
+              </div>
+            </div>
+
+            {/* Commentators */}
+            <div style={{background:'white',borderRadius:'10px',border:'1px solid #e2e8f0',padding:'16px 20px',marginBottom:'14px'}}>
+              <div style={{fontSize:'13px',fontWeight:'700',color:'#1e293b',marginBottom:'12px'}}>📖 פרשנים</div>
+              <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'14px'}}>
+                {commentators.map(name=>{
+                  const has=(unitCom[name]||'').trim();
+                  const isOpen=comOpenName===name;
+                  return(
+                    <button key={name} onClick={()=>setComOpenName(isOpen?null:name)}
+                      style={{padding:'7px 18px',borderRadius:'20px',
+                        border:`2px solid ${isOpen?'#4c1d95':has?'#a3a3a3':'#e2e8f0'}`,
+                        background:isOpen?'#4c1d95':has?'#f3f4f6':'white',
+                        color:isOpen?'white':has?'#9ca3af':'#1e293b',
+                        cursor:'pointer',fontWeight:'600',fontSize:'13px'}}>
+                      {has&&!isOpen?'✓ ':''}{name}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Active commentator textarea */}
+              {comOpenName&&(
+                <div style={{borderTop:'1px solid #f1f5f9',paddingTop:'14px'}}>
+                  <div style={{fontSize:'13px',fontWeight:'700',color:'#4c1d95',marginBottom:'8px'}}>{comOpenName}</div>
+                  <textarea
+                    value={unitCom[comOpenName]||''}
+                    onChange={e=>setCommentary(comUnitId,comOpenName,e.target.value)}
+                    rows={9}
+                    placeholder={`הדביקי כאן את סיכום ${comOpenName} מ-NotebookLM כולל מספרי עמודים...`}
+                    style={{width:'100%',border:'1px solid #d8b4fe',borderRadius:'7px',padding:'10px 12px',
+                      fontSize:'14px',lineHeight:'1.8',resize:'vertical',outline:'none',
+                      boxSizing:'border-box',fontFamily:'inherit'}}
+                  />
+                  <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
+                    <button onClick={()=>setComOpenName(null)}
+                      style={{padding:'8px 22px',borderRadius:'8px',background:'#4c1d95',color:'white',
+                        border:'none',cursor:'pointer',fontWeight:'700',fontSize:'13px'}}>
+                      💾 שמור
+                    </button>
+                    <button onClick={()=>setCommentary(comUnitId,comOpenName,'')}
+                      style={{padding:'8px 14px',borderRadius:'8px',background:'#fff1f2',color:'#e11d48',
+                        border:'1px solid #fecdd3',cursor:'pointer',fontSize:'13px'}}>
+                      מחק
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Generate summary button */}
+            <button onClick={generateSummary} disabled={comLoading}
+              style={{width:'100%',padding:'13px',borderRadius:'10px',border:'none',marginBottom:'16px',
+                background:comLoading?'#e2e8f0':'linear-gradient(135deg,#4c1d95,#7e22ce)',
+                color:comLoading?'#94a3b8':'white',cursor:comLoading?'wait':'pointer',
+                fontWeight:'700',fontSize:'15px'}}>
+              {comLoading?'⏳ יוצר סיכום השוואתי...':'📊 צור סיכום השוואתי'}
+            </button>
+
+            {/* Summary table */}
+            {comSummary&&(
+              <div style={{background:'white',borderRadius:'10px',border:'1px solid #e2e8f0',overflow:'hidden',marginBottom:'20px'}}>
+                <div style={{background:'linear-gradient(135deg,#4c1d95,#7e22ce)',color:'white',padding:'12px 20px',
+                  fontWeight:'bold',fontSize:'14px'}}>
+                  📊 סיכום השוואתי — {comUnit.name}
+                </div>
+                <div style={{overflowX:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:'13px'}}>
+                    <thead>
+                      <tr style={{background:'#f5f3ff'}}>
+                        {['פסוק','דומה','שונה','פרשנים'].map(h=>(
+                          <th key={h} style={{padding:'10px 14px',textAlign:'right',fontWeight:'700',color:'#4c1d95',
+                            borderBottom:'2px solid #d8b4fe',fontSize:'12px',whiteSpace:'nowrap'}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {comSummary.map((row,i)=>(
+                        <tr key={i} style={{borderBottom:'1px solid #f1f5f9',background:i%2===0?'white':'#fdf8ff'}}>
+                          <td style={{padding:'10px 14px',fontWeight:'700',color:'#6b21a8',whiteSpace:'nowrap'}}>{row.verse}</td>
+                          <td style={{padding:'10px 14px',lineHeight:'1.75',color:'#1e293b'}}>{row.similar}</td>
+                          <td style={{padding:'10px 14px',lineHeight:'1.75',color:'#374151'}}>{row.different}</td>
+                          <td style={{padding:'10px 14px',fontSize:'12px',color:'#6b7280',whiteSpace:'nowrap'}}>
+                            {Array.isArray(row.commentators)?row.commentators.join(', '):row.commentators}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── QUICK POPUP ── */}
+      {quickPop&&(
+        <div style={{position:'fixed',top:Math.min(quickPop.y,window.innerHeight-260),left:Math.max(10,Math.min(quickPop.x,window.innerWidth-240)),
+            background:'white',borderRadius:'10px',boxShadow:'0 6px 30px rgba(0,0,0,0.2)',border:'1px solid #e2e8f0',padding:'8px',zIndex:1000,minWidth:'225px'}}
+          onClick={e=>e.stopPropagation()}>
+          {quickPop.isVerse?(
+            <>
+              <div style={{fontSize:'11px',fontWeight:'700',color:'#64748b',marginBottom:'6px',padding:'2px 6px',textTransform:'uppercase'}}>סמן פסוק כולו</div>
+              {[['added','כל הפסוק — תוספת בדה"י','#dcfce7','#166534'],['omitted','כל הפסוק — השמטה מהמקור','#fee2e2','#991b1b']].map(([t,l,bg,c])=>(
+                <button key={t} onClick={()=>markVerse(quickPop.chunk.id,t,quickPop.side)}
+                  style={{display:'block',width:'100%',textAlign:'right',padding:'8px 12px',border:'none',borderRadius:'7px',
+                    background:bg,color:c,cursor:'pointer',fontSize:'13px',fontWeight:'600',marginBottom:'2px'}}>
+                  {l}
+                </button>
+              ))}
+            </>
+          ):(
+            <>
+              <div style={{fontSize:'11px',fontWeight:'700',color:'#64748b',marginBottom:'6px',padding:'2px 6px',textTransform:'uppercase'}}>שנה סיווג</div>
+              {[['equal','זהה — אותה מילה','#f1f5f9','#475569'],['added','תוספת בדה"י','#dcfce7','#166534'],['omitted','השמטה מהמקור','#fee2e2','#991b1b'],['changed','שינוי','#fef9c3','#854d0e'],['hidden','הסתר מילה','#f1f5f9','#94a3b8']].map(([t,l,bg,c])=>{
+                const cur=effType(quickPop.chunk,quickPop.side);
+                return(
+                  <button key={t} onClick={()=>setQuickType(t,quickPop.side)}
+                    style={{display:'block',width:'100%',textAlign:'right',padding:'8px 12px',border:'none',borderRadius:'7px',
+                      background:cur===t?bg:'transparent',color:c,cursor:'pointer',fontSize:'13px',fontWeight:cur===t?'700':'400',marginBottom:'2px'}}>
+                    {cur===t?'✓ ':''}{l}
+                  </button>
+                );
+              })}
+              <div style={{borderTop:'1px solid #f1f5f9',marginTop:'4px',paddingTop:'4px'}}>
+                {(()=>{
+                  const isRel=!!(unitOv[quickPop.chunk.id]?.['relocated_'+quickPop.side]);
+                  return(
+                    <button onClick={()=>setQuickType('relocated',quickPop.side)}
+                      style={{display:'block',width:'100%',textAlign:'right',padding:'8px 12px',border:'none',borderRadius:'7px',
+                        background:isRel?'#dbeafe':'transparent',color:'#1d4ed8',cursor:'pointer',fontSize:'13px',
+                        fontWeight:isRel?'700':'400',textDecoration:'underline double',textDecorationThickness:'2px'}}>
+                      {isRel?'✓ ':''}{isRel?'הסר שינוי מיקום':'שינוי מיקום'}
+                    </button>
+                  );
+                })()}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

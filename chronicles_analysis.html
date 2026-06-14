@@ -1,0 +1,1892 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8"/>
+  <title>📖 כלי אנליטי — דברי הימים</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" onerror="document.getElementById('root').innerHTML='<div style=padding:40px;color:red;font-size:16px>שגיאה: לא ניתן לטעון React. נדרש חיבור אינטרנט בפתיחה הראשונה.</div>'"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:"Segoe UI",Arial,sans-serif;background:#0f172a;color:#e2e8f0;}
+    select,input,textarea,button{font-family:inherit;}
+    ::-webkit-scrollbar{width:5px;}
+    ::-webkit-scrollbar-track{background:#1e293b;}
+    ::-webkit-scrollbar-thumb{background:#475569;border-radius:3px;}
+  </style>
+</head>
+<body><div id="root"><div style="padding:40px;color:white;font-size:18px;text-align:center">⏳ טוען... אם מסך זה נשאר — סגרי ופתחי מחדש בכרום</div></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo,useRef} = React;
+
+// ── File API ──────────────────────────────────────────────────────────
+let gFH = null;
+async function fsSave(suggestedName){
+  try{ gFH=await window.showSaveFilePicker({suggestedName,types:[{description:"JSON",accept:{"application/json":[".json"]}}]}); return true; }catch{ return false; }
+}
+async function fsOpen(){
+  try{ const [h]=await window.showOpenFilePicker({types:[{description:"JSON",accept:{"application/json":[".json"]}}]}); gFH=h; const f=await h.getFile(); return JSON.parse(await f.text()); }catch{ return null; }
+}
+async function fsWrite(data){
+  if(!gFH)return false;
+  try{ const w=await gFH.createWritable(); await w.write(JSON.stringify(data,null,2)); await w.close(); return true; }catch{ return false; }
+}
+
+// ── Diff engine ───────────────────────────────────────────────────────
+function stripNiqqud(s){ return s.replace(/[\u0591-\u05C7]/g,''); }
+const NORM_MAP = {'דויד':'דוד','ירושלים':'ירושלם'};
+function norm(w){
+  const str = typeof w==='object'?w.word:w;
+  const s = stripNiqqud(str).replace(/[׃׀:.,;()\[\]״׳"'!?]+/g,'').trim();
+  return NORM_MAP[s]||s;
+}
+// tokenize returns [{raw, clean, isVerse}]
+// raw  = original token (e.g. "(א)")
+// clean = stripped of punctuation (e.g. "א" or "ישראל")
+// isVerse = true only for tokens like (א) (יב) — paren-wrapped 1-4 Hebrew letters
+function tokenize(t){
+  if(!t) return [];
+  return t.trim().split(/[\s\n\r]+/).map(raw=>{
+    const isVerse = /^\([\u05D0-\u05EA]{1,4}\)$/.test(raw.trim());
+    const clean   = raw.replace(/^[׃:,.;()\[\]״׳"'!?]+|[׃:,.;()\[\]״׳"'!?]+$/g,'');
+    return {raw, clean, isVerse};
+  }).filter(t=>t.raw.length>0);
+}
+
+// ── LCS diff ─────────────────────────────────────────────────────────
+// Deterministic ID based on position — so IDs survive re-renders
+function mkId(i){ return 'chunk_'+i; }
+
+function lcs(a,b){
+  // a,b are arrays of non-verse token objects
+  const m=a.length,n=b.length;
+  const dp=[];
+  for(let i=0;i<=m;i++){dp[i]=new Array(n+1).fill(0);}
+  for(let i=1;i<=m;i++)
+    for(let j=1;j<=n;j++)
+      dp[i][j]=norm(a[i-1].clean)===norm(b[j-1].clean)
+        ?dp[i-1][j-1]+1
+        :Math.max(dp[i-1][j],dp[i][j-1]);
+  const r=[];let i=m,j=n;
+  while(i>0||j>0){
+    if(i>0&&j>0&&norm(a[i-1].clean)===norm(b[j-1].clean)){r.unshift({t:'eq',a:a[i-1].raw,b:b[j-1].raw});i--;j--;}
+    else if(j>0&&(i===0||dp[i][j-1]>=dp[i-1][j])){r.unshift({t:'om',b:b[j-1].raw});j--;}
+    else{r.unshift({t:'ad',a:a[i-1].raw});i--;}
+  }
+  return r;
+}
+
+function buildChunks(raw){
+  const res=[];let i=0,pos=0;
+  while(i<raw.length){
+    const c=raw[i];
+    if(c.t==='ad'&&raw[i+1]&&raw[i+1].t==='om'){
+      res.push({id:mkId(pos++),type:'changed',aW:[c.a],bW:[raw[i+1].b]});i+=2;
+    } else if(c.t==='om'&&raw[i+1]&&raw[i+1].t==='ad'){
+      res.push({id:mkId(pos++),type:'changed',aW:[raw[i+1].a],bW:[c.b]});i+=2;
+    } else if(c.t==='ad'){
+      res.push({id:mkId(pos++),type:'added',aW:[c.a],bW:[]});i++;
+    } else if(c.t==='om'){
+      res.push({id:mkId(pos++),type:'omitted',aW:[],bW:[c.b]});i++;
+    } else {
+      res.push({id:mkId(pos++),type:'equal',aW:[c.a],bW:[c.b]});i++;
+    }
+  }
+  return res;
+}
+
+// Split text into verse segments: [{label, tokens}]
+function splitToVerses(allTokens){
+  const segs=[];let cur={label:'',tokens:[]};
+  allTokens.forEach(t=>{
+    if(t.isVerse){if(cur.tokens.length||cur.label)segs.push(cur);cur={label:t.raw,tokens:[]};}
+    else{cur.tokens.push(t);}
+  });
+  if(cur.tokens.length||cur.label)segs.push(cur);
+  return segs;
+}
+function verseSim(tokensA,tokensB){
+  if(!tokensA.length&&!tokensB.length)return 1;
+  if(!tokensA.length||!tokensB.length)return 0;
+  const setA=new Set(tokensA.map(t=>norm(t.clean)).filter(w=>w.length>1));
+  const setB=new Set(tokensB.map(t=>norm(t.clean)).filter(w=>w.length>1));
+  if(!setA.size&&!setB.size)return 1;
+  if(!setA.size||!setB.size)return 0;
+  let common=0;setA.forEach(w=>{if(setB.has(w))common++;});
+  return common/Math.max(setA.size,setB.size);
+}
+function matchVerses(versesA,versesB,threshold=0.25){
+  const m=versesA.length,n=versesB.length;
+  const sim=Array.from({length:m},(_,i)=>Array.from({length:n},(_,j)=>verseSim(versesA[i].tokens,versesB[j].tokens)));
+  const dp=Array.from({length:m+1},()=>new Array(n+1).fill(0));
+  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)
+    dp[i][j]=sim[i-1][j-1]>=threshold?dp[i-1][j-1]+1:Math.max(dp[i-1][j],dp[i][j-1]);
+  const pairs=[];let i=m,j=n;
+  while(i>0&&j>0){
+    if(sim[i-1][j-1]>=threshold&&dp[i][j]===dp[i-1][j-1]+1){pairs.unshift({aIdx:i-1,bIdx:j-1});i--;j--;}
+    else if(dp[i-1][j]>=dp[i][j-1])i--;else j--;
+  }
+  return pairs;
+}
+function computeDiff(tA,tB){
+  try{
+    const allA=tokenize(tA),allB=tokenize(tB);
+    if(!allA.length&&!allB.length)return[];
+    const versesA=splitToVerses(allA),versesB=splitToVerses(allB);
+    const pairs=matchVerses(versesA,versesB);
+    const matchedB=new Set(pairs.map(p=>p.bIdx));
+    const result=[];let pos=0,aIdx=0,bPtr=0;
+    for(const pair of pairs){
+      while(aIdx<pair.aIdx){
+        const vA=versesA[aIdx];
+        result.push({id:'v_'+pos++,type:'verse',aW:[vA.label],bW:[]});
+        vA.tokens.forEach(t=>result.push({id:'c_'+pos++,type:'unmatched',aW:[t.raw],bW:[]}));
+        aIdx++;
+      }
+      while(bPtr<pair.bIdx){
+        if(!matchedB.has(bPtr)){
+          const vB=versesB[bPtr];
+          result.push({id:'v_'+pos++,type:'verse',aW:[],bW:[vB.label]});
+          vB.tokens.forEach(t=>result.push({id:'c_'+pos++,type:'unmatched',aW:[],bW:[t.raw]}));
+        }
+        bPtr++;
+      }
+      const vA=versesA[pair.aIdx],vB=versesB[pair.bIdx];
+      result.push({id:'v_'+pos++,type:'verse',aW:[vA.label],bW:[vB.label]});
+      buildChunks(lcs(vA.tokens,vB.tokens)).forEach(ch=>{ch.id='c_'+pos++;result.push(ch);});
+      aIdx=pair.aIdx+1;bPtr=pair.bIdx+1;
+    }
+    while(aIdx<versesA.length){
+      const vA=versesA[aIdx];
+      result.push({id:'v_'+pos++,type:'verse',aW:[vA.label],bW:[]});
+      vA.tokens.forEach(t=>result.push({id:'c_'+pos++,type:'unmatched',aW:[t.raw],bW:[]}));
+      aIdx++;
+    }
+    while(bPtr<versesB.length){
+      const vB=versesB[bPtr];
+      result.push({id:'v_'+pos++,type:'verse',aW:[],bW:[vB.label]});
+      vB.tokens.forEach(t=>result.push({id:'c_'+pos++,type:'unmatched',aW:[],bW:[t.raw]}));
+      bPtr++;
+    }
+    return result;
+  }catch(e){console.error('diff error',e);return[];}
+}
+
+const DIFF_COLORS={
+  added:   {bg:"#166534",border:"1px solid #86efac",tc:"#dcfce7"},
+  omitted: {bg:"#7f1d1d",border:"1px solid #fca5a5",tc:"#fee2e2"},
+  changed: {bg:"#713f12",border:"1px solid #fde047",tc:"#fef9c3"},
+};
+
+function DiffPanel({unit}){
+  const [open,setOpen]=useState(true);
+  if(!unit||(!unit.chroniclesText&&!unit.sourceText)) return null;
+  const diff=useMemo(()=>{try{return computeDiff(unit.chroniclesText||"",unit.sourceText||"");}catch{return [];}},
+    [unit.chroniclesText,unit.sourceText]);
+  function side(s,chunks){
+    return chunks.map(ch=>{
+      const t=ch.type;
+      if(t==="verse") return <span key={ch.id} style={{color:"#475569",fontSize:"12px"}}>{(s==="a"?ch.aW:ch.bW).join(" ")} </span>;
+      if(t==="equal") return <span key={ch.id} style={{color:"#e2e8f0"}}>{(s==="a"?ch.aW:ch.bW).join(" ")} </span>;
+      let words,st=t;
+      if(s==="a"){
+        if(t==="omitted")return <span key={ch.id}/>;
+        words=ch.aW; st=t==="changed"?"changed":"added";
+      }else{
+        if(t==="added")return <span key={ch.id}/>;
+        words=ch.bW; st=t==="changed"?"changed":"omitted";
+      }
+      const c=DIFF_COLORS[st]||{};
+      return <span key={ch.id}><span style={{background:c.bg,border:c.border,borderRadius:"4px",padding:"2px 5px",color:c.tc,fontWeight:"600",display:"inline-block"}}>{words.join(" ")}</span> </span>;
+    });
+  }
+  return(
+    <div style={{background:"#0f172a",border:"1px solid #334155",borderRadius:"10px",marginBottom:"12px"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:"none",border:"none",cursor:"pointer"}}>
+        <span style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9"}}>📜 השוואה מסומנת</span>
+        <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+          {[["תוספת","#166534","#86efac"],["השמטה","#7f1d1d","#fca5a5"],["שינוי","#713f12","#fde047"]].map(([l,bg,tc])=>
+            <span key={l} style={{background:bg,color:tc,padding:"1px 6px",borderRadius:"8px",fontSize:"10px",fontWeight:"700"}}>{l}</span>
+          )}
+          <span style={{color:"#64748b",fontSize:"12px"}}>{open?"▲":"▼"}</span>
+        </div>
+      </button>
+      {open&&(
+        <div style={{padding:"0 12px 12px"}}>
+          <div style={{marginBottom:"12px"}}>
+            <div style={{fontSize:"11px",fontWeight:"700",color:"#93c5fd",marginBottom:"6px"}}>דברי הימים</div>
+            <div style={{background:"#1e293b",borderRadius:"6px",padding:"10px 14px",fontSize:"14px",lineHeight:"2.4"}}>
+              {side("a",diff)}
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:"11px",fontWeight:"700",color:"#fbbf24",marginBottom:"6px"}}>{unit.sourceRef||"שמואל / מלכים"}</div>
+            <div style={{background:"#1e293b",borderRadius:"6px",padding:"10px 14px",fontSize:"14px",lineHeight:"2.4"}}>
+              {side("b",diff)}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Data ──────────────────────────────────────────────────────────────
+const DIMS=[
+  {id:"d1",label:"ממד 1: רוחני-תיאולוגי",color:"#818cf8",concepts:["רוח/ריח","חכמה","בינה","עצה","גבורה","דעת","יראה","צניעות","ענווה"]},
+  {id:"d2",label:"ממד 2: חברתי-משפטי",color:"#34d399",concepts:["משפט","צדקה","מוסר","יושר","חסד"]},
+  {id:"d3",label:"ממד 3: מדיני-לאומי",color:"#fbbf24",concepts:["שלום","ביטחון","רועה"]},
+  {id:"d4",label:"ממד 4: הברית והנצחיות",color:"#f87171",concepts:["ברית","נצח","עולם"]},
+];
+
+// DEFAULT_CONCEPTS — hardcoded, never lost on update
+// Each param: { q: "שאלה אנליטית", ind: "אינדיקטור בטקסט" }
+const DEFAULT_CONCEPTS = {
+  "בינה": { params: [
+    {q:"האם הדמות יודעת להפריד בין העיקר לבין הטפל בבואה להגיב למציאות?", ind:"תיאור של החלטה או פעולה שבו הדמות ממקדת את עיסוקה בנושא מרכזי, תוך הימנעות מהתעסקות בפרטים שאינם מהותיים, ומקבלת החלטה או נוקטת עמדה על בסיס הבחנה זו."},
+    {q:"האם הדמות חוקרת את המשמעות העמוקה וההשלכות ארוכות הטווח של המידע המובא לפניה?", ind:"תיאור פעולה של התבוננות או בחינה של משמעות עמוקה של מצב או מידע, כולל פירוש להשלכות עתידיות או מערכתיות."},
+    {q:"האם הדמות מקבלת החלטות לאחר שקילת חלופות ובחינת סיכונים, תוך שהיא נמנעת מתגובות אימפולסיביות או ספונטניות?", ind:"הצגת תהליך (מפורש או משתמע) של שיקול דעת לפני פעולה, כגון: התייעצות, תפילה, או המתנה, בניגוד לפעולה מיידית ואימפולסיבית."},
+    {q:"האם הדמות מגלה יכולת לזהות דפוסים חוזרים ולהסיק מסקנות מניסיון העבר כדי להבין מה הוביל להצלחה או לכישלון?", ind:"תיאור שבו הדמות מזהה בעיה, תבנית, דפוס חוזר או קשר סיבתי ופועלת לתקנה באמצעים קונקרטיים (רפורמה, ארגון מחדש, הוראות)."},
+    {q:"האם הדמות מתרגמת את תפיסת המציאות שלה לתוכנית פעולה קונקרטית, הכוללת ניהול משאבים וקביעת סדרי עדיפויות?", ind:"תיאור שבו הבנה של מצב מתורגמת לתוכנית מעשית, המעידה על חשיבה מערכתית ולא תגובתית."},
+    {q:"האם הדמות שואלת על המניעים והגורמים הנסתרים העומדים מאחורי דברים שהיא שומעת או רואה?", ind:"תיאור שבו הדמות פונה לברר, לשאול, לחפש מידע, להתייעץ או להקשיב לדעות או גורמים שונים לפני הכרעה."},
+    {q:"האם הדמות בוחנת את הממד המוסרי של מעשיה ('מה ראוי') ולא רק את מידת היעילות הטכנית שלהם?", ind:"תיאור שבו הדמות שוקלת לא רק את יעילות המעשה אלא גם את משמעותו המוסרית."},
+    {q:"האם הדמות מגלה רגישות להשלכות שיש להכרעותיה על אחרים ועל מערכת הצדק הכוללת?", ind:"תיאור שבו הדמות לוקחת בחשבון את השפעת פעולותיה על אנשים אחרים או על מערכת הצדק."},
+    {q:"האם הדמות מודעת למגבלות הידע שלה ובוחרת לעצור, להכיר בחוסר הבנה או להתייעץ עם גורמים נוספים?", ind:"תיאור שבו הדמות מכירה במגבלות ידיעותיה ופונה לייעוץ, חקירה או עזרה מגורם נוסף על מנת לשנות כיוון, תיקון או קבלה של עמדה אחרת."},
+    {q:"האם הדמות פועלת מתוך כפיפות לסדר עליון או לאמת רוחנית המכוונת את שיקול דעתה ומעניקה לו מסגרת?", ind:"תיאור שבו ההחלטה או הפעולה נעשית מתוך הכרה בסמכות עליונה או אמת רוחנית שמכוונת את שיקול הדעת."}
+  ]},
+  "מוסר": { params: [
+    {q:"האם הדמות מפגינה נכונות ללמוד מהדרכה חיצונית ולתקן את דרכיה?", ind:"תיאור שבו הדמות מקבלת הדרכה ממקור חיצוני ופועלת לפיה באופן מודע, תוך שינוי או כיוון התנהגות."},
+    {q:"האם הדמות מתייחסת לביקורת כהזדמנות לשיפור עצמי ולמידה?", ind:"תגובה לביקורת הכוללת: הכרה בטעות, קבלה של התוכחה או שינוי התנהגות בעקבותיה (ולא דחייה או התעלמות)."},
+    {q:"האם הדמות פועלת מתוך הבנת המשמעות של התנהגות ראויה, ולא רק מתוך ציות טכני?", ind:"קישור מפורש או משתמע בין מעשה לבין ערכו המוסרי (טוב/רע), ולא רק תיאור טכני של הפעולה."},
+    {q:"האם הדמות מגלה משמעת עצמית ומחויבות עקבית למערכת ערכים ברורה בהחלטותיה ובהתנהלותה?", ind:"פעולה הנעשית מתוך התחשבות בתוצאותיה על אחרים או על הקהילה, ולא רק מתוך אינטרס אישי או מיידי."},
+    {q:"האם הדמות פועלת ביושר ובהגינות כלפי הסובבים אותה?", ind:"תיאור שבו הדמות פועלת ביושר ובהגינות כלפי אחרים במסגרת התנהלותה."},
+    {q:"האם הדמות נוקטת עמדה פעילה ומבקשת לתקן מצבי עוול או התנהגות בלתי ראויה שהיא נתקלת בהם?", ind:"תיאור שבו הדמות משנה את התנהגותה בעקבות ביקורת, כישלון או מצב שלילי שנוצר."},
+    {q:"האם הדמות מגלה אחריות מיוחדת כלפי הקבוצות החלשות בחברה ופועלת להבטחת יחס הוגן?", ind:"תיאור שבו הדמות פועלת מתוך מחויבות כלפי הקבוצה שאליה היא שייכת ולוקחת אחריות על התנהלותה בתוכה."},
+    {q:"האם הדמות נמנעת מניצול כוחה, סמכותה או מעמדה הבכיר כדי לפגוע באחרים?", ind:"תיאור שבו הדמות נמנעת משימוש בכוח, סמכות או מעמד לצורך פגיעה או ניצול של אחרים."},
+    {q:"האם הדמות מקבלת החלטות המבוססות על עקרונות יציבים, גם כאשר אלו עומדים בניגוד לאינטרסים או לנוחות אישית?", ind:"תיאור שבו הדמות פועלת על בסיס עקרונות עקביים גם כאשר היא ניצבת מול לחצים או אינטרסים מנוגדים."},
+    {q:"האם הדמות מוכנה לעמוד על עקרונותיה ולהתמיד בהם גם כאשר הדבר כרוך בקושי אישי, חברתי או פוליטי?", ind:"תיאור פעולה או עמדה שבו הדמות שומרת על ערכים מוסריים גם כאשר הדבר כרוך בפגיעה אפשרית במעמדה, בקשריה או באינטרסים שלה."}
+  ]},
+  "משפט": { params: [
+    {q:"האם הדמות פועלת מתוך מחויבות עמוקה לסדר חברתי תקין ולנורמות של הגינות כלפי כלל חברי הקהילה?", ind:"תיאור של פעולה שבו הדמות פועלת מתוך מחויבות לסדר חברתי תקין (חקיקה, ארגון, תיקון עוולות) ולשמירה על זכויות כלל חברי הקהילה."},
+    {q:"האם הדמות רואה עצמה אחראית באופן אישי למניעת עוולות ולהבטחת יושר במרחב הציבורי והחברתי?", ind:"תיאור שבו הדמות פועלת באופן יזום למניעת עוולות ולהבטחת יושר במרחב הציבורי או החברתי."},
+    {q:"האם הדמות מקבלת החלטות המבוססות על שאיפה ליציבות מוסרית רחבה?", ind:"תיאור שבו הדמות מקבלת החלטות שאינן מושפעות מאינטרסים אישיים או נטיות אישיות."},
+    {q:"האם הדמות מתערבת באופן פעיל במצבים של מחלוקת, אי-צדק או פגיעה בזולת במטרה להכריע ולהשיב את הסדר על כנו?", ind:"תיאור שבו הדמות פועלת במצבים של מחלוקת או אי-צדק כדי להכריע או להשיב את הסדר על כנו, ע\"י תיקון או ענישה."},
+    {q:"האם הדמות בוחנת את המציאות באופן שקול ומעמיק לפני שהיא ניגשת להכריע בסכסוכים או בחיכוך בין צדדים?", ind:"תיאור שבו הדמות בוחנת את הנתונים או את המצב לפני קבלת החלטה או הכרעה."},
+    {q:"האם הדמות שואפת ליצור ולתחזק מערכת יחסים הוגנת בתוך החברה, מעבר למתן פתרון נקודתי?", ind:"תיאור שבו הדמות פועלת לקביעת נהלים, תפקידים או מוסדות ולחיזוק מערכת של חוקים או הסדרים שמטרתם להסדיר יחסים חברתיים לאורך זמן."},
+    {q:"האם הדמות מגלה רגישות גבוהה למצבים של ניצול או עושק ופועלת אקטיבית להגן על אלו שאין בידם כוח להגן על עצמם?", ind:"תיאור שבו הדמות מגלה רגישות למצבים של ניצול או עושק ופועלת להגן על מי שאין בידם כוח להגן על עצמם."},
+    {q:"האם הדמות משתמשת בסמכותה ככלי ליצירת איזון חברתי ולהבטחת הגינות בין קבוצות שונות בחברה?", ind:"תיאור שבו הדמות פועלת כדי ליצור איזון בין קבוצות שונות בחברה ולהפחית מתחים ביניהן."},
+    {q:"האם הדמות פועלת בעקביות על פי נורמות קבועות ונוהג מוסרי ברור שנקבע ע\"י ה'?", ind:"תיאור שבו הדמות פועלת על פי נורמות קבועות, ברורות ומוסכמות ולא באופן שרירותי."},
+    {q:"האם הנהגתה של הדמות מבססת יציבות ואמון בקרב הציבור?", ind:"תיאור שבו החלטות הדמות מתוארות כהוגנות, נטולות הטיה אישית או אינטרסנטיות, ומבוססות על שיקול ענייני."}
+  ]},
+  "צדקה": { params: [
+    {q:"האם הדמות פועלת באופן אקטיבי ליצירת סדר חברתי הוגן, מעבר לציות טכני לנורמות החברתיות המקובלות?", ind:"תיאור שבו הדמות פועלת באופן אקטיבי ליצירת סדר חברתי הוגן המבטיח תנאי קיום בסיסיים לכלל חברי הקהילה."},
+    {q:"האם הדמות חותרת למימוש עקרונות של יושר וחמלה בהחלטותיה?", ind:"תיאור שבו הדמות פועלת בהתאם לעקרונות של יושר וחמלה במסגרת פעולותיה."},
+    {q:"האם הדמות מגלה רגישות מיוחדת ומחויבות אישית להגנה על אוכלוסיות פגיעות שאינן מסוגלות להגן על עצמן?", ind:"תיאור שבו הדמות מגלה רגישות מוסרית לפגיעה באחר ואינה מתעלמת ממנה."},
+    {q:"האם הדמות פועלת באופן יזום כדי למנוע מצבי ניצול, עושק או עיוות דין כלפי אלו הנמצאים בשולי החברה?", ind:"תיאור שבו הדמות פועלת באופן יזום כדי למנוע מצבים של ניצול, עושק או עיוות דין."},
+    {q:"האם הדמות נוקטת בפעולות מתקנות שמטרתן להשיב את האיזון החברתי ולהבטיח קיום הוגן לכלל חברי הקהילה?", ind:"תיאור שבו הדמות נוקטת פעולות מתקנות שמטרתן להשיב את האיזון החברתי ולהבטיח קיום הוגן לכל חברי הקהילה."},
+    {q:"האם הדמות מעדיפה פתרונות המקדמים תיקון וחסד על פני יישום נוקשה של הכללים?", ind:"תיאור שבו הדמות מעדיפה פתרונות של תיקון וחסד על פני ענישה או נקמה."},
+    {q:"האם הדמות תופסת את התנהלות ההגינות וחסד כלפי הזולת כביטוי לנאמנות עמוקה לברית?", ind:"תיאור שבו הדמות פועלת מתוך תפיסה של הנהגה המבוססת על מחויבות עמוקה לברית או ליחסים מחייבים."},
+    {q:"האם הדמות תופסת את התנהלות ההגינות וחסד כלפי הזולת כחלק בלתי נפרד מעבודת ה'?", ind:"תיאור שבו הדמות מבינה את תפקידה כהתחייבות מתמשכת ולא כפעולה נקודתית בלבד."},
+    {q:"האם מעשיה של הדמות מעידים על שאיפה לממש את המטרה המוסרית והערכית העמוקה של חוקי ה'?", ind:"תיאור שבו פעולות הדמות משקפות מערכת ערכים רחבה של חוק, צדק או עקרונות מנחים."},
+    {q:"האם הדמות פועלת מתוך תפיסה שהצדקה היא ביטוי של הזדהות עם רצון ה' ולא רק קיום חיצוני?", ind:"תיאור שבו הדמות פועלת מתוך פנימיות ולא רק מתוך ציות חיצוני לנורמות."}
+  ]},
+  "ביטחון": { params: [
+    {q:"האם הדמות מבטאת אמון בה' כמקור ההגנה או ההצלחה?", ind:"תיאור שבו הדמות מבטאת אמון בה' במקום הסתמכות על מקורות הגנה אנושיים או חומריים."},
+    {q:"האם הדמות שומרת על שלווה פנימית ופועלת מתוך יציבות רגשית גם כאשר היא מצויה תחת איום או סכנה מוחשיים?", ind:"תיאור שבו הדמות שומרת על תחושת אמון פנימית גם כאשר אין תנאים חיצוניים של ביטחון או שפע."},
+    {q:"האם הדמות נמנעת מלתלות את יהבה באמצעים אנושיים וחומריים כגון עוצמה צבאית, הון, מעמד או בריתות פוליטיות?", ind:"תיאור שבו הדמות אינה תולה את ביטחונה בכוח צבאי, הון, מעמד או בריתות פוליטיות."},
+    {q:"האם הדמות פועלת מתוך ענווה וזהירות, ונמנעת מהפגנת שאננות, יהירות או תחושת עליונות מופרזת כלפי המציאות?", ind:"תיאור שבו הדמות פועלת מתוך ענווה ואינה מייחסת לעצמה מקור כוח עצמאי."},
+    {q:"האם הדמות מפגינה חוסן ושקט נפשי במצבי משבר, מתוך אמונה בה'?", ind:"תיאור שבו הדמות מבטאת חוסר חשש או רוגע גם כאשר היא ניצבת מול סכנה או איום."},
+    {q:"האם הדמות נמנעת מפעולות פזיזות המונעות מרגשות של פחד או חרדה, ובוחרת לפעול מתוך שקילה ושיקול דעת?", ind:"תיאור שבו הדמות אינה פועלת מתוך פחד או חרדה אלא מתוך שיקול דעת יציב."},
+    {q:"האם הדמות מחברת בין תחושת האמון הפנימית שלה לבין מחויבות לערכים מוסריים, חברתיים ונאמנות לעקרונות הברית?", ind:"תיאור שבו תחושת הביטחון הפנימית של הדמות קשורה למחויבותה לפעול בהתאם לערכים או עקרונות."},
+    {q:"האם פעולותיה של הדמות מעידות על אמון עמוק בהשגחת ה'?", ind:"תיאור שבו הביטחון של הדמות נשען על אמון עמוק ומתמשך בה'."},
+    {q:"האם הדמות מכירה בכך שהצלחותיה תלויות בעזרת ה' ולא רק ביכולותיה?", ind:"תיאור שבו הדמות מייחסת את הצלחותיה לעזרה אלוהית ולא רק לכישוריה האישיים."},
+    {q:"האם הדמות פועלת מתוך תחושת שליחות ולא מתוך שאיפה לכוח?", ind:"תיאור שבו הדמות פועלת כשליחה של ה' ולא מתוך רצון לשלטון עצמי."}
+  ]},
+  "ענווה": { params: [
+    {q:"האם הדמות מכפיפה עצמה לרצון ה'?", ind:"תיאור שבו הדמות מכפיפה את רצונה או פעולתה לרצון ה'."},
+    {q:"האם הדמות מבטאת יראת שמים?", ind:"תיאור שבו הדמות מבטאת תפיסה של עצמה שאינה מתרוממת או מגדילה את עצמה."},
+    {q:"האם הדמות נמנעת מהפעלת כוח שרירותי?", ind:"תיאור שבו הדמות נמנעת מהפעלת כוח באופן שרירותי."},
+    {q:"האם הדמות נמנעת מהאדרת עצמה?", ind:"תיאור שבו הדמות פועלת מתוך הכנעה ולא מתוך התנשאות."},
+    {q:"האם הדמות מגלה רגישות למצוקה של אחרים?", ind:"תיאור שבו הדמות מגלה רגישות למצוקה של אחרים."},
+    {q:"האם הדמות רואה עצמה חלק מן העם?", ind:"תיאור שבו הדמות רואה את עצמה כחלק מן העם ולא מעליו."},
+    {q:"האם לדמות יש אחריות קולקטיבית?", ind:"תיאור שבו הדמות מוותרת על אינטרס אישי לטובת ערך אחר."},
+    {q:"האם הדמות חותרת לשלום כאשר אפשרי?", ind:"תיאור שבו הדמות פועלת כדי להגיע לשלום כאשר הדבר אפשרי."},
+    {q:"האם הדמות מייחסת את ניצחונה לה'?", ind:"תיאור שבו הדמות אינה מייחסת הצלחה לעצמה בלבד."},
+    {q:"האם הדמות מגלה ריסון עצמי?", ind:"תיאור שבו הדמות מפגינה ריסון עצמי בפעולותיה או בתגובותיה."}
+  ]},
+  "שלום": { params: [
+    {q:"האם הדמות פועלת ליצירת מציאות של שלמות, רווחה והרמוניה בין יחידים ובין קבוצות שונות בחברה?", ind:"תיאור שבו הדמות פועלת ליצירת מציאות של שלמות, רווחה והרמוניה בין יחידים ובין קבוצות בחברה."},
+    {q:"האם הדמות משקיעה מאמצים בשיקום ובביסוס מערכות יחסים תקינות ויציבות, מעבר לניסיון פסיבי להימנע מעימותים?", ind:"תיאור שבו הדמות מאזנת בין יחסים חברתיים, כלכליים או פוליטיים כדי למנוע מתחים."},
+    {q:"האם הדמות פועלת להסרת גורמים של עוינות ולבניית אמון הדדי המבוסס על נאמנות ושיתוף פעולה?", ind:"תיאור שבו הדמות פועלת להסרת גורמים המעוררים עוינות או חוסר אמון."},
+    {q:"האם הדמות חותרת לכינונו של סדר חברתי המבטיח ביטחון, יציבות ורווחה לכלל חברי הקהילה?", ind:"תיאור שבו הדמות חותרת לכינון סדר חברתי המבוסס על ביטחון, יציבות ורווחה לכלל הקהילה."},
+    {q:"האם הדמות מקדמת מציאות של צדק ומשפט מתוך הבנה שאלו הם היסודות ההכרחיים ליציבות חברתית ארוכת טווח?", ind:"תיאור שבו הדמות מקדמת מציאות של צדק ומשפט מתוך הבנה שהם יסוד לשלום מתמשך."},
+    {q:"האם הדמות נוקטת בפעולות אקטיביות ליישוב סכסוכים ולחיזוק האחדות והלכידות בקרב העם?", ind:"תיאור שבו הדמות נוקטת פעולות אקטיביות ליישוב סכסוכים ולהפחתת עימותים."},
+    {q:"האם הדמות נמנעת מחיפוש תהילה אישית או הפגנת עוצמה דרך עימותים צבאיים או פוליטיים מתמשכים?", ind:"תיאור שבו הדמות אינה פונה מיד לשימוש בכוח או לאלימות אלא מחפשת דרכים אחרות לפתרון."},
+    {q:"האם הדמות שואפת לבסס סדר המבוסס על יושר, נאמנות ואמון?", ind:"תיאור שבו הדמות פועלת לביסוס סדר הנשען על יושר, נאמנות ואמון."},
+    {q:"האם הדמות מצליחה ליצור עבור הקהילה תנאים המאפשרים שגשוג כלכלי וחברתי לצד ביטחון אישי?", ind:"תיאור שבו הדמות פועלת ליצירת תנאים המאפשרים ביטחון אישי, חברתי או כלכלי."},
+    {q:"האם הצלחת הנהגתה של הדמות נמדדת ביחס של הדמות לתוכנית ה'?", ind:"תיאור שבו הצלחת פעולות הדמות או הנהגתה נמדדת ביחס לביצוע התוכנית האלוהית."}
+  ]},
+  "עצה": { params: [
+    {q:"האם הדמות מגבשת תוכנית פעולה מדודה ומחושבת המבוססת על שיקול דעת מעמיק לפני שהיא ניגשת לביצוע המשימה?", ind:"תיאור שבו הדמות מגבשת תוכנית פעולה מסודרת ומבוססת מידע לפני ביצוע המעשה."},
+    {q:"האם הדמות מתייעצת עם אחרים לפני קבלת החלטה מרכזית?", ind:"תיאור שבו הדמות מתייעצת עם אחרים לפני קבלת החלטה מרכזית."},
+    {q:"האם הדמות מצליחה להעביר את רעיונותיה משלב המחשבה והתכנון לשלב של תוצאה מוחשית ויציבה במציאות?", ind:"תיאור שבו הדמות מצליחה להפוך מחשבה או רעיון לתוצאה מוחשית בפועל."},
+    {q:"האם הדמות פועלת מתוך הבנה שהצלחת המעשים תלויה בכפיפותה לסדר אלוהי רחב יותר ולא רק ביכולותיה האנושיות?", ind:"תיאור שבו הדמות פועלת מתוך הבנה רחבה של ההשלכות מעבר להיבט הצבאי בלבד."},
+    {q:"האם עצת הדמות מיוחסת לה' כמקורה, ולא רק לשיקול דעת אנושי?", ind:"תיאור שבו הדמות מבססת את החלטתה על מקור עליון ולא רק על שיקול אישי."},
+    {q:"האם הדמות נעזרת בדעתם של אנשים בעלי חכמה וניסיון ובוחנת את עמדתם לפני שהיא מקבלת הכרעה?", ind:"תיאור שבו הדמות שוקלת דעות של אנשים אחרים לפני קבלת הכרעה."},
+    {q:"האם הדמות משקיעה זמן ומחשבה בשקילת דעותיהם של הסובבים אותה לעומקן לפני שהיא פועלת?", ind:"תיאור שבו הדמות שוקלת את תוצאות מעשיה לפני שהיא פועלת."},
+    {q:"האם הדמות בוחנת האם תוכניותיה מתאימות לרצון האל ולעקרונות המוסריים העומדים בבסיסם?", ind:"תיאור שבו הדמות בוחנת את התאמת החלטותיה לרצון ה'."},
+    {q:"האם הדמות מפגינה שילוב של תבונה תכנונית יחד עם העוצמה הנדרשת למימוש המטרות בשטח?", ind:"תיאור שבו התכנון של הדמות קשור ישירות ליכולת לבצע בפועל."},
+    {q:"האם המניע העומד מאחורי פעולותיה של הדמות הוא הבטחת יציבותו, שלומו וביטחונו של הכלל?", ind:"תיאור שבו הצלחת הפעולה מיוחסת לאופן שבו תוכננה מראש."}
+  ]}
+};
+
+const SEMANTIC = {"בינה": {"pos": "בינה, תבונה, נבון, להבין, חכמה, דעת, ידע, שכל, ערמה, עצה, תורה, משפט, ראה, שמע, להתבונן, ירה, למד, גלה, הודיע", "neg": "בער, כסיל, פתי, חסר-לב, עולה, שמן, כישלון, רשע"}, "גבורה": {"pos": "עז, חיל, תקופה, אמץ, עוצמה, עצה", "neg": "חולשה, רפיות, אמך, מורד-לב, שבר, כישלון, רשע"}, "דעת": {"pos": "ידע, הבין, חכם, בינה, הכיר, זכר, ראה, למד, דרש, חסד, אמת, צדקה, משפט, יראה, לב", "neg": "שכח, לא ידע, בינה, בער, כסיל, בד, מעל"}, "חכמה": {"pos": "יעץ, חכם, תבונה, תכון, שכל, מוסר, תוכחה, אמר-ה', נשיה, מחשבות, סוד, גבורה, תת, לשמוע, להחליץ, להביר, להשלים, לבצע", "neg": "איוולת, כסילות, רשע, עולה"}, "עצה": {"pos": "בינה, דעת, תבונה, עצה", "neg": "השפלה, כאב"}, "ענווה": {"pos": "צדק, הגינות, דרך, הצלחה, תקינות, סדר, צדקה, משפט, טוב, מוסר, חסיד, חליגה", "neg": "עקוב, גלוז, רשע"}, "יושר": {"pos": "משפט, חסד, אמת, רחמים, שלום, זיכוי, ישועה, גאולה, צדק, אמונה, חמלה, רחום, חנון, חסד, ישע, זרע, גבורה, ברכה, ישר, תמים, טוב, טהור, זכה, חכמה, כבוד, הפארת, ענה", "neg": "רשע, רשעה"}, "צדקה": {"pos": "תורה, חסד, חלק, צדק, אורח, לעשות משפט, חוקה, ריב, דרך, נתיב, ציווה, נתן, דיבר, שם, ספר, לימד, תורה, הודיע", "neg": "עושק, קיפוח, להסות, לעוות, לגמול, לרוצץ, לדכא, למאמס, לסור, לא-שמר"}, "מוסר": {"pos": "הוכיח, הדרכה, תיקון, ענוש, משפט, תוכחה, חכמה, בינה, צדק, דעת, תורה, לקח, שמע, הצלחה", "neg": "איוולת, כסילות, רשע, חסא, דחיה, סירוב, מרד, כישלון, קלון, איבוד, הרס, מוות"}, "ביטחון": {"pos": "שאנות, מנוחה, תקווה, שכב, רבץ, לחסות, לקוות, ברון, אשרי", "neg": "השיעות, כסילות, אכזבה, מרמה, שוט-ונוחות, בוטח-בליבו, כישלון, בושה"}, "שלום": {"pos": "שלמונים, שלם, שלמים, טוב, צדקה, ברית, בטח, שלווה, ישועה, שמחה, חסד, אמת, נח, ברכה", "neg": "מלחמה, רע, חמס"}, "ברית": {"pos": "לאכול, שמיעה, קשר, לקבע, לגאול, חוק, מצווה, עדות, משפט, אמונה, חסד, שמר, לזכור, צדק, לכרות, חוקים", "neg": "מעל, בגד, חנף, שכחה, עוון, עברה"}, "עולם": {"pos": "נצח, תמיד, דור", "neg": "רגע, חלף, הפסק, קץ, הבל, עת, קצרה"}, "נצח": {"pos": "נצח, תמיד, תקיף, רם", "neg": "בגידה, מעל, עוון, חסר, אכזר, רשע, זרות, גדות-לב"}, "חסד": {"pos": "אמת, רחמים, אהבה, ברית, טוב, חן", "neg": "התנשאות, יוהרה, חוסר-ציות"}, "יראה": {"pos": "פחד, דעת, בינה, צדקה, אהבה, למד, חתת, רעד, כבד, נשא, עדר, בטח, דבק, שמע, עבד, חכמה, מוסר, אמונה, לב", "neg": "התנשאות, יוהרה, חוסר-ציות"}, "צניעות": {"pos": "ענווה, יראה, צדק, טוב, שלום, צדקה", "neg": "גאון, עושק, חמס, יהירות, אלימות, מרי, עצמאי"}, "רועה": {"pos": "טיפול, האכלה, דאגה, הגנה, נוהג, דרך, נשא, שמר, נצר, פקד, מלך, נגיד, שר, השגיח, משפט, מרעה, מרעית, עדר, צדק, עם, קהל, ישראל, מרווה, חכמה, חסד, ביטחון", "neg": "זנח, השחית, עזב, רע, כסיל, שודד, פיזור, נדח, גלות"}, "תורה": {"pos": "להורות, לכוון, להנחות, מוסר, חוק, משפט, ישר, צדק, ברית, חכמה, דרך, תמים, שלום, סדר", "neg": "עוון, רשע, מרי, שכחה, טעות, סרות"}};
+
+// ── Commentators ─────────────────────────────────────────────────────
+const STORAGE_KEY="chronicles_v7";
+const CONCEPTS_KEY="chronicles_concepts_backup";
+const ANALYSIS_KEY="chronicles_analysis_backup";
+const ANALYSIS_CHR_KEY="chronicles_analysis_chr_backup";
+const ANALYSIS_SRC_KEY="chronicles_analysis_src_backup";
+const LS={
+  load(){ try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;} },
+  save(d){ try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{} }
+};
+const CLS={
+  load(){ try{const r=localStorage.getItem(CONCEPTS_KEY);return r?JSON.parse(r):null;}catch{return null;} },
+  save(concepts){ try{localStorage.setItem(CONCEPTS_KEY,JSON.stringify(concepts));}catch{} }
+};
+const ALS={
+  load(){ try{const r=localStorage.getItem(ANALYSIS_KEY);return r?JSON.parse(r):null;}catch{return null;} },
+  save(analysis){ try{localStorage.setItem(ANALYSIS_KEY,JSON.stringify(analysis));}catch{} }
+};
+// Separate backups for chronicles and source analysis
+const ACLS={
+  load(){ try{const r=localStorage.getItem(ANALYSIS_CHR_KEY);return r?JSON.parse(r):null;}catch{return null;} },
+  save(d){ try{localStorage.setItem(ANALYSIS_CHR_KEY,JSON.stringify(d));}catch{} }
+};
+const ASLS={
+  load(){ try{const r=localStorage.getItem(ANALYSIS_SRC_KEY);return r?JSON.parse(r):null;}catch{return null;} },
+  save(d){ try{localStorage.setItem(ANALYSIS_SRC_KEY,JSON.stringify(d));}catch{} }
+};
+
+// ── Shared styles ─────────────────────────────────────────────────────
+const S={
+  input:{width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:"6px",padding:"7px 10px",fontSize:"13px",color:"#e2e8f0",outline:"none",boxSizing:"border-box"},
+  label:{display:"block",fontSize:"11px",fontWeight:"700",color:"#64748b",marginBottom:"4px",textTransform:"uppercase"},
+  btnPrimary:{background:"#818cf8",color:"white",border:"none",padding:"8px 20px",borderRadius:"7px",cursor:"pointer",fontWeight:"700",fontSize:"13px"},
+  card:{background:"#1e293b",border:"1px solid #334155",borderRadius:"10px",padding:"14px"},
+};
+
+// ── Modal ─────────────────────────────────────────────────────────────
+function Modal({title,onClose,children}){
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div dir="rtl" style={{background:"#1e293b",borderRadius:"12px",padding:"22px",width:"520px",maxWidth:"95vw",maxHeight:"88vh",overflowY:"auto",border:"1px solid #334155"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
+          <h3 style={{color:"#f1f5f9",fontSize:"15px",fontWeight:"bold"}}>{title}</h3>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:"18px"}}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ── Entry editor ──────────────────────────────────────────────────────
+function EntryEditor({unitId,conceptName,conceptParams,entry,onChange,unitText,sourceText,sourceRef,scholarship,analysisMode,customSemantic,character}){
+  const e=entry||{explicit_note:"",implicit_note:"",params:(conceptParams||[]).map(()=>({found:null,verse:""}))};
+  const [saved,setSaved]=useState(false);
+  function upd(k,v){onChange({...e,[k]:v});}
+  function updP(i,k,v){const ps=[...(e.params||[])];while(ps.length<(conceptParams||[]).length)ps.push({found:null,verse:""});ps[i]={...ps[i],[k]:v};onChange({...e,params:ps});}
+  function saveAll(){onChange({...e});setSaved(true);setTimeout(()=>setSaved(false),2000);}
+  const params=conceptParams||[];
+  const modeLabel=analysisMode==="source"?'📙 מקבילה':'📘 דה"י';
+  // חיפוש שדה סמנטי — קודם ב-SEMANTIC הקבוע, אחר כך ב-customSemantic
+  const sem=SEMANTIC[conceptName]||(customSemantic||{})[conceptName]||null;
+
+  // ── Explicit AI — שומר אוטומטית ────────────────────────────────────
+  const [explAiLoad,setExplAiLoad]=useState(false);
+  const [explAiRes,setExplAiRes]=useState("");
+
+  async function runExplicitAI(){
+    if(!unitText){setExplAiRes("אין טקסט ביחידה זו.");return;}
+    if(!sem){setExplAiRes("אין שדה סמנטי מוגדר — פתחי את עריכת המושג והגדירי שדה סמנטי חיובי ושלילי.");return;}
+    setExplAiLoad(true);setExplAiRes("");
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. בדוק האם מילים מהשדה הסמנטי של המושג "${conceptName}" מופיעות בטקסט.
+
+שדה סמנטי חיובי: ${sem.pos}
+שדה סמנטי שלילי (הפוך): ${sem.neg}
+
+טקסט (${modeLabel}):
+${unitText}
+
+ענה בעברית בתמציתיות:
+1. **מילים שנמצאו מהשדה החיובי** — כל מילה + מספר פסוק מדויק.
+2. **מילים שנמצאו מהשדה ההפוך** — אותו פורמט.
+3. **מסקנה** — האם המושג "${conceptName}" מופיע ישירות בטקסט?`;
+    try{
+      const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:500,messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      const text=data.content?.map(b=>b.text||"").join("")||"שגיאה";
+      setExplAiRes(text);
+      // שמירה אוטומטית לתיבה
+      onChange({...e,explicit_note:text});
+    }catch(err){setExplAiRes("שגיאת חיבור: "+err.message);}
+    setExplAiLoad(false);
+  }
+
+  // ── Implicit AI — ממלא פרמטרים אוטומטית ───────────────────────────
+  const [implAiLoad,setImplAiLoad]=useState(false);
+  const [implAiMsg,setImplAiMsg]=useState("");
+
+  async function runImplicitAI(){
+    if(!unitText){setImplAiMsg("אין טקסט ביחידה זו.");return;}
+    const validParams=params.filter(p=>p&&(typeof p==="object"?p.q:p).trim());
+    if(!validParams.length){setImplAiMsg("אין פרמטרים מוגדרים.");return;}
+    setImplAiLoad(true);setImplAiMsg("");
+
+    const paramsList=validParams.map((p,i)=>{
+      const q=typeof p==="object"?p.q:p;
+      const ind=typeof p==="object"?p.ind:"";
+      return `${i+1}. שאלה: ${q}${ind?`\n   אינדיקטור: ${ind}`:""}`;
+    }).join("\n\n");
+
+    const semInfo=sem?`\nשדה סמנטי חיובי: ${sem.pos}\nשדה סמנטי שלילי: ${sem.neg}`:"";
+
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. בדוק האם המושג "${conceptName}" נרמז בטקסט לפי הפרמטרים.
+
+⚠️ הנחיה קריטית: המחקר עוסק אך ורק בדמותו של ${character==="solomon"?"שלמה המלך":"דוד המלך"}. בדוק את הפרמטרים רק ביחס ל${character==="solomon"?"שלמה":"דוד"} — לא ביחס לדמויות אחרות המופיעות ביחידה כגון שרים, זקנים, עם, לויים או כל דמות אחרת.
+
+טקסט (${modeLabel}):
+${unitText}
+${semInfo}
+${e.explicit_note?`\nממצא גלוי שכבר נמצא:\n${e.explicit_note}`:""}
+
+פרמטרים לבדיקה:
+${paramsList}
+
+הוראות קריטיות:
+- ענה ONLY ב-JSON תקני, ללא טקסט לפני או אחרי
+- עבור כל פרמטר לפי מספרו הסדרי (1 עד ${validParams.length})
+- found: true אם יש ראיה ברורה בטקסט שמתייחסת ל${character==="solomon"?"שלמה":"דוד"} ספציפית, false אם לא
+- verse: מספר הפסוק אם found=true (למשל "(א)" או "(ג)"), אחרת ""
+- note: הסבר קצר בעברית (מקסימום 50 מילים) — ציין את הקשר ל${character==="solomon"?"שלמה":"דוד"}
+
+פורמט JSON:
+[
+  {"param":1,"found":true,"verse":"(א)","note":"הסבר"},
+  {"param":2,"found":false,"verse":"","note":"לא נמצא"},
+  ...
+]`;
+
+    try{
+      const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      const raw=data.content?.map(b=>b.text||"").join("")||"";
+      // Parse JSON
+      const clean=raw.replace(/```json|```/g,"").trim();
+      const parsed=JSON.parse(clean);
+      // Fill params automatically
+      const newPs=[...(e.params||[])];
+      while(newPs.length<validParams.length)newPs.push({found:null,verse:""});
+      parsed.forEach(item=>{
+        const idx=item.param-1;
+        if(idx>=0&&idx<validParams.length){
+          newPs[idx]={found:item.found,verse:item.verse||"",note:item.note||""};
+        }
+      });
+      // Build implicit note
+      const notes=parsed.filter(item=>item.note).map(item=>`פרמטר ${item.param}: ${item.found?"✅":"❌"} ${item.note}`).join("\n");
+      onChange({...e,params:newPs,implicit_note:notes});
+      setImplAiMsg(`✓ ${parsed.filter(i=>i.found).length} פרמטרים נמצאו — עברי ותקני`);
+    }catch(err){
+      setImplAiMsg("שגיאה בפרסור JSON: "+err.message+". נסי שוב.");
+    }
+    setImplAiLoad(false);
+  }
+
+  return(
+    <div>
+      {/* ── גלוי ── */}
+      <div style={{background:"#0f172a",borderRadius:"8px",padding:"12px",marginBottom:"12px",border:`1px solid ${e.explicit_note?"#34d39966":"#334155"}`}}>
+        <div style={{fontSize:"12px",fontWeight:"700",color:"#34d399",marginBottom:"8px"}}>📗 גלוי — מופיע ישירות בטקסט {modeLabel}</div>
+        {sem&&(
+          <div style={{marginBottom:"8px"}}>
+            <div style={{fontSize:"11px",color:"#64748b",marginBottom:"3px"}}>שדה סמנטי חיובי:</div>
+            <div style={{fontSize:"12px",color:"#86efac",lineHeight:"1.7",background:"#0a1628",borderRadius:"5px",padding:"6px 10px"}}>
+              {sem.pos}
+            </div>
+            <div style={{fontSize:"11px",color:"#64748b",marginBottom:"3px",marginTop:"6px"}}>שדה סמנטי הפך:</div>
+            <div style={{fontSize:"12px",color:"#fca5a5",lineHeight:"1.7",background:"#1a0a0a",borderRadius:"5px",padding:"6px 10px"}}>
+              {sem.neg}
+            </div>
+          </div>
+        )}
+        <button onClick={runExplicitAI} disabled={explAiLoad}
+          style={{width:"100%",marginBottom:"8px",padding:"8px",borderRadius:"7px",border:"none",
+            cursor:explAiLoad?"wait":"pointer",background:explAiLoad?"#1e293b":"#064e3b",
+            color:explAiLoad?"#475569":"#34d399",fontSize:"13px",fontWeight:"700"}}>
+          {explAiLoad?"⏳ מחפש...":"🔍 שלב א׳ — בדוק גלוי (נשמר אוטומטית)"}
+        </button>
+        {explAiRes&&(
+          <div style={{background:"#022c22",border:"1px solid #065f46",borderRadius:"7px",padding:"10px 12px",
+            fontSize:"12px",color:"#d1fae5",lineHeight:"1.8",whiteSpace:"pre-wrap",direction:"rtl",marginBottom:"8px"}}>
+            {explAiRes}
+          </div>
+        )}
+        <label style={{...S.label,marginTop:"6px"}}>הערות גלוי (ערכי ותקני)</label>
+        <textarea value={e.explicit_note||""} onChange={ev=>upd("explicit_note",ev.target.value)} rows={4}
+          placeholder="נשמר אוטומטית לאחר בדיקת ה-AI — ערכי לפי הצורך..."
+          style={{...S.input,resize:"vertical",lineHeight:"1.7"}}/>
+      </div>
+
+      {/* ── נרמז ── */}
+      <div style={{background:"#0f172a",borderRadius:"8px",padding:"12px",marginBottom:"10px",border:`1px solid ${(e.params||[]).some(p=>p.found===true)?"#818cf866":"#334155"}`}}>
+        <div style={{fontSize:"12px",fontWeight:"700",color:"#818cf8",marginBottom:"8px"}}>
+          📘 נרמז — {(e.params||[]).filter(p=>p.found===true).length}/{params.filter(p=>p&&(p.q||p).toString().trim()).length} פרמטרים נמצאו
+        </div>
+        <button onClick={runImplicitAI} disabled={implAiLoad}
+          style={{width:"100%",marginBottom:"8px",padding:"8px",borderRadius:"7px",border:"none",
+            cursor:implAiLoad?"wait":"pointer",background:implAiLoad?"#1e293b":"#312e81",
+            color:implAiLoad?"#475569":"#a5b4fc",fontSize:"13px",fontWeight:"700"}}>
+          {implAiLoad?"⏳ בודק פרמטרים...":"🤖 שלב ב׳ — התחל בדיקה בנרמז (ממלא אוטומטית)"}
+        </button>
+        {implAiMsg&&(
+          <div style={{fontSize:"12px",color:implAiMsg.startsWith("✓")?"#34d399":"#fca5a5",marginBottom:"8px",padding:"6px 10px",background:"#1e293b",borderRadius:"6px"}}>
+            {implAiMsg}
+          </div>
+        )}
+        {params.length===0?(
+          <div style={{fontSize:"12px",color:"#475569",marginBottom:"8px"}}>אין פרמטרים מוגדרים</div>
+        ):(
+          <div style={{marginBottom:"10px"}}>
+            {params.map((param,i)=>{
+              const paramQ=typeof param==="object"?(param.q||""):param;
+              const paramInd=typeof param==="object"?(param.ind||""):"";
+              if(!paramQ.trim())return null;
+              const p=(e.params||[])[i]||{found:null,verse:""};
+              return(
+                <div key={i} style={{background:"#1e293b",borderRadius:"7px",padding:"10px",marginBottom:"6px",border:`1px solid ${p.found===true?"#818cf866":p.found===false?"#47456633":"#334155"}`}}>
+                  <div style={{fontSize:"12px",color:"#cbd5e1",marginBottom:"5px",lineHeight:"1.6",fontWeight:"600"}}>{i+1}. {paramQ}</div>
+                  {paramInd&&(
+                    <div style={{fontSize:"11px",color:"#64748b",background:"#0a1628",borderRadius:"5px",padding:"6px 10px",marginBottom:"7px",lineHeight:"1.6",borderRight:"2px solid #334155"}}>
+                      <span style={{color:"#475569",fontSize:"10px",fontWeight:"700"}}>אינדיקטור: </span>{paramInd}
+                    </div>
+                  )}
+                  {p.note&&(
+                    <div style={{fontSize:"11px",color:"#94a3b8",background:"#0f172a",borderRadius:"5px",padding:"5px 8px",marginBottom:"6px",lineHeight:"1.6",fontStyle:"italic"}}>
+                      💬 {p.note}
+                    </div>
+                  )}
+                  <div style={{display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap"}}>
+                    {[["true","כן ✓","#818cf8"],["false","לא ✗","#475569"],["null","לא נבדק","#334155"]].map(([v,l,bg])=>(
+                      <button key={v} onClick={()=>updP(i,"found",v==="null"?null:v==="true")}
+                        style={{padding:"4px 12px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600",
+                          background:String(p.found)===v?bg:"#0f172a",color:String(p.found)===v?"white":"#475569"}}>
+                        {l}
+                      </button>
+                    ))}
+                    {p.found===true&&<input value={p.verse||""} onChange={ev=>updP(i,"verse",ev.target.value)} placeholder="פסוק..." style={{...S.input,flex:1,minWidth:"100px",padding:"4px 8px",fontSize:"12px"}}/>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {scholarship&&(
+          <div style={{marginBottom:"10px",background:"#1e293b",borderRadius:"6px",padding:"10px 12px",border:"1px solid #334155"}}>
+            <div style={{fontSize:"11px",fontWeight:"700",color:"#64748b",marginBottom:"4px"}}>📝 הערות מכלי ההשוואה</div>
+            <div style={{fontSize:"12px",color:"#94a3b8",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{scholarship}</div>
+          </div>
+        )}
+        <label style={{...S.label,marginTop:"6px"}}>הערות נרמז</label>
+        <textarea value={e.implicit_note||""} onChange={ev=>upd("implicit_note",ev.target.value)} rows={3}
+          placeholder="נשמר אוטומטית לאחר בדיקת ה-AI — ערכי לפי הצורך..."
+          style={{...S.input,resize:"vertical",lineHeight:"1.7"}}/>
+        {/* כפתור שמור שינויים */}
+        <button onClick={saveAll}
+          style={{width:"100%",marginTop:"10px",padding:"9px",borderRadius:"8px",border:"none",cursor:"pointer",
+            background:saved?"#16a34a":"#1d4ed8",color:"white",fontSize:"13px",fontWeight:"700",transition:"background 0.3s"}}>
+          {saved?"✓ נשמר!":"💾 שמור שינויים"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Header ────────────────────────────────────────────────────────────
+function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImportConcepts,analysisMode,setAnalysisMode}){
+  const fileRef=React.useRef();
+  const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
+  const modeLabel=analysisMode==="chronicles"?"📘 ניתוח דה\"י":"📙 ניתוח מקבילות";
+  return(
+    <div style={{background:"#1e293b",borderBottom:"1px solid #334155",padding:"8px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:"6px",position:"sticky",top:0,zIndex:100}}>
+      <div style={{fontSize:"15px",fontWeight:"bold",color:"#f1f5f9",cursor:"pointer"}} onClick={()=>setTab("home")}>📖 כלי אנליטי</div>
+      <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
+        {msg&&<span style={{color:"#34d399",fontSize:"12px",fontWeight:"600"}}>{msg}</span>}
+        <button onClick={onLoad} style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #475569",cursor:"pointer",fontSize:"12px",background:"#334155",color:"#94a3b8"}}>📂 פתח</button>
+        <button onClick={onSave} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",background:"#16a34a",color:"white"}}>💾 שמור</button>
+        <button onClick={onSaveAs} style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #475569",cursor:"pointer",fontSize:"12px",background:"#334155",color:"#94a3b8"}}>שמור בשם</button>
+        <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
+        <button onClick={onExportConcepts} title="ייצוא קריטריונים לקובץ" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #4338ca",cursor:"pointer",fontSize:"12px",background:"#1e1b4b",color:"#a5b4fc"}}>🔒 גיבוי קריטריונים</button>
+        <input ref={fileRef} type="file" accept=".json" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>{try{onImportConcepts(JSON.parse(ev.target.result));}catch{alert("קובץ לא תקין");}};r.readAsText(f);}e.target.value="";}}/>
+        <button onClick={()=>fileRef.current.click()} title="שחזור קריטריונים מקובץ" style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #4338ca",cursor:"pointer",fontSize:"12px",background:"#1e1b4b",color:"#a5b4fc"}}>📥 שחזר קריטריונים</button>
+        <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
+        {/* Mode selector */}
+        <div style={{display:"flex",gap:"3px",background:"#0f172a",borderRadius:"16px",padding:"2px",border:`1px solid ${modeColor}44`}}>
+          {[["chronicles","📘 דה\"י","#93c5fd"],["source","📙 מקבילות","#fbbf24"]].map(([m,l,c])=>(
+            <button key={m} onClick={()=>setAnalysisMode(m)}
+              style={{padding:"3px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:"700",
+                background:analysisMode===m?c+"33":"transparent",color:analysisMode===m?c:"#475569"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+        <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
+        {[["home","🏠"],["byunit","יחידה"],["byconcept","מושג"],["matrix","מטריצה"],["charts","גרפים"],["compare","🔍 סינתזה השוואתית"],["synthesis","✍️ כתיבה"]].map(([t,l])=>(
+          <button key={t} onClick={()=>setTab(t)} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600",background:tab===t?"#818cf8":"transparent",color:tab===t?"white":"#64748b"}}>{l}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────
+function App(){
+  const [raw,setRaw]=useState({units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[]});
+  const [tab,setTab]=useState("home");
+  // analysisMode: "chronicles" = ניתוח דה"י, "source" = ניתוח מקבילה
+  const [analysisMode,setAnalysisMode]=useState("chronicles");
+  const [activeUnit,setActiveUnit]=useState(null);
+  const [initConcept,setInitConcept]=useState(null);
+  const [msg,setMsg]=useState("");
+  const [editConcept,setEditConcept]=useState(null);
+  const [showAdd,setShowAdd]=useState(false);
+  const [newName,setNewName]=useState("");
+  const [newDim,setNewDim]=useState("d1");
+  const [newParams,setNewParams]=useState(Array(10).fill(""));
+
+  function flash(m){setMsg(m);setTimeout(()=>setMsg(""),2000);}
+
+  function setData(fn){
+    setRaw(prev=>{
+      const next=typeof fn==="function"?fn(prev):fn;
+      LS.save(next);
+      if(next.analysis&&Object.keys(next.analysis).length>0) ALS.save(next.analysis);
+      if(next.analysis_chronicles&&Object.keys(next.analysis_chronicles).length>0) ACLS.save(next.analysis_chronicles);
+      if(next.analysis_source&&Object.keys(next.analysis_source).length>0) ASLS.save(next.analysis_source);
+      if(gFH)fsWrite(next).catch(()=>{});
+      return next;
+    });
+  }
+
+  useEffect(()=>{
+    const d=LS.load();
+    const conceptsBackup=CLS.load();
+    const analysisBackup=ALS.load();
+    const analysisChrBackup=ACLS.load();
+    const analysisSrcBackup=ASLS.load();
+    let base={units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[]};
+    Object.keys(DEFAULT_CONCEPTS).forEach(name=>{
+      base.concepts[name]={params: DEFAULT_CONCEPTS[name].params};
+    });
+    if(d){
+      if(conceptsBackup) Object.keys(conceptsBackup).forEach(k=>{ base.concepts[k]=conceptsBackup[k]; });
+      const merged={...base,...d,concepts:{...base.concepts,...(d.concepts||{})}};
+      if(analysisBackup&&Object.keys(analysisBackup).length>0) merged.analysis={...analysisBackup,...(merged.analysis||{})};
+      if(analysisChrBackup&&Object.keys(analysisChrBackup).length>0) merged.analysis_chronicles={...analysisChrBackup,...(merged.analysis_chronicles||{})};
+      if(analysisSrcBackup&&Object.keys(analysisSrcBackup).length>0) merged.analysis_source={...analysisSrcBackup,...(merged.analysis_source||{})};
+      // Migrate old analysis to analysis_chronicles if analysis_chronicles is empty
+      if(merged.analysis&&Object.keys(merged.analysis).length>0&&(!merged.analysis_chronicles||Object.keys(merged.analysis_chronicles).length===0)){
+        merged.analysis_chronicles=merged.analysis;
+      }
+      setRaw(merged);
+    } else if(conceptsBackup){
+      const base2={...base,concepts:{...base.concepts,...conceptsBackup}};
+      if(analysisBackup) base2.analysis=analysisBackup;
+      if(analysisChrBackup) base2.analysis_chronicles=analysisChrBackup;
+      if(analysisSrcBackup) base2.analysis_source=analysisSrcBackup;
+      setRaw(base2);
+    } else {
+      if(analysisBackup) base.analysis=analysisBackup;
+      if(analysisChrBackup) base.analysis_chronicles=analysisChrBackup;
+      if(analysisSrcBackup) base.analysis_source=analysisSrcBackup;
+      setRaw(base);
+    }
+  },[]);
+
+  async function loadFile(){
+    const d=await fsOpen();
+    if(!d){alert("לא ניתן לקרוא");return;}
+    const defaultConcepts={};
+    Object.keys(DEFAULT_CONCEPTS).forEach(name=>{
+      defaultConcepts[name]={params: DEFAULT_CONCEPTS[name].params};
+    });
+    const existingAnalysis=ALS.load()||raw.analysis||{};
+    const existingChr=ACLS.load()||raw.analysis_chronicles||{};
+    const existingSrc=ASLS.load()||raw.analysis_source||{};
+    const merged={
+      ...d,
+      concepts:{...defaultConcepts,...(d.concepts||{})},
+      analysis:{...existingAnalysis,...(d.analysis||{})},
+      analysis_chronicles:{...existingChr,...(d.analysis_chronicles||{})},
+      analysis_source:{...existingSrc,...(d.analysis_source||{})}
+    };
+    // Migrate old analysis to analysis_chronicles if needed
+    if(merged.analysis&&Object.keys(merged.analysis).length>0&&(!merged.analysis_chronicles||Object.keys(merged.analysis_chronicles).length===0)){
+      merged.analysis_chronicles=merged.analysis;
+    }
+    console.log("after merge, units count:", merged.units?.length);
+    console.log("setRaw called with:", merged);
+    setRaw(merged);
+    LS.save(merged);
+    flash("✓ נטען — הניתוח הקיים נשמר");
+  }
+  async function saveFile(){
+    if(!gFH){const ok=await fsSave("chronicles_data.json");if(!ok)return;}
+    const ok=await fsWrite(raw);
+    ok?flash("✓ נשמר"):alert("שגיאה");
+  }
+  async function saveAs(){
+    gFH=null;
+    const ok=await fsSave("chronicles_data.json");if(!ok)return;
+    await fsWrite(raw); flash("✓ נשמר");
+  }
+
+  // All concepts
+  const allConcepts=useMemo(()=>{
+    const r=[];
+    DIMS.forEach(d=>d.concepts.forEach(name=>r.push({name,dimId:d.id})));
+    (raw.customConcepts||[]).forEach(c=>r.push({name:c.name,dimId:c.dimId}));
+    return r;
+  },[raw.customConcepts]);
+
+  // All units from app1
+  const allUnits=useMemo(()=>{
+    if(!(raw.units||[]).length)return [];
+    return (raw.units||[]).map(u=>({
+      id:u.id,label:u.name||u.chapter||"",character:u.character||"",
+      chroniclesText:u.chroniclesText||"",sourceText:u.sourceText||"",
+      sourceRef:u.sourceRef||"",scholarship:u.scholarship||"",
+    }));
+  },[raw.units]);
+
+  function getE(uid,cname,mode){
+    const store=mode==="source"?"analysis_source":"analysis_chronicles";
+    return raw[store]?.[uid]?.[cname]||null;
+  }
+  function setE(uid,cname,entry,mode){
+    const store=mode==="source"?"analysis_source":"analysis_chronicles";
+    setData(prev=>({...prev,[store]:{...prev[store],[uid]:{...(prev[store]?.[uid]||{}),[cname]:entry}}}));
+  }
+  function getParams(cname){const fromRaw=(raw.concepts?.[cname]?.params)||[];return fromRaw.length>0?fromRaw:(DEFAULT_CONCEPTS[cname]?.params)||[];}
+
+  // Progress - based on current analysis mode
+  const prog=useMemo(()=>{
+    const tot=allUnits.length*allConcepts.length;
+    let doneChr=0,doneSrc=0;
+    allUnits.forEach(u=>allConcepts.forEach(c=>{
+      const ec=getE(u.id,c.name,"chronicles");
+      if(ec&&(ec.explicit_note||(ec.params||[]).some(p=>p.found!==null)))doneChr++;
+      const es=getE(u.id,c.name,"source");
+      if(es&&(es.explicit_note||(es.params||[]).some(p=>p.found!==null)))doneSrc++;
+    }));
+    return{tot,doneChr,doneSrc,pctChr:tot?Math.round(doneChr/tot*100):0,pctSrc:tot?Math.round(doneSrc/tot*100):0};
+  },[raw.analysis_chronicles,raw.analysis_source,allUnits,allConcepts]);
+
+  function saveConcept(name,params,sem){
+    setData(prev=>{
+      const updated={...prev,
+        concepts:{...prev.concepts,[name]:{...(prev.concepts?.[name]||{}),params,sem}},
+        customSemantic:{...(prev.customSemantic||{})}
+      };
+      if(sem)updated.customSemantic[name]=sem;
+      CLS.save(updated.concepts);
+      return updated;
+    });
+    setEditConcept(null); flash("✓ נשמר");
+  }
+  function addConcept(){
+    if(!newName.trim())return;
+    setData(prev=>{
+      const updated={...prev,
+        customConcepts:[...(prev.customConcepts||[]),{name:newName.trim(),dimId:newDim}],
+        concepts:{...prev.concepts,[newName.trim()]:{params:newParams}}
+      };
+      CLS.save(updated.concepts);
+      return updated;
+    });
+    setNewName(""); setNewParams(Array(10).fill("")); setShowAdd(false); flash("✓ נוסף");
+  }
+
+  const dim4concept=(cname)=>DIMS.find(d=>d.concepts.includes(cname))||DIMS.find(d=>d.id===(raw.customConcepts||[]).find(c=>c.name===cname)?.dimId)||DIMS[0];
+
+  function exportConcepts(){
+    const exportData={concepts:raw.concepts||{},...(raw.customSemantic?{customSemantic:raw.customSemantic}:{})};
+    const blob=new Blob([JSON.stringify(exportData,null,2)],{type:"application/json"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="chronicles_concepts_backup.json";a.click();
+    flash("✓ קריטריונים יוצאו");
+  }
+  function importConcepts(data){
+    setData(prev=>{
+      const importedConcepts=data.concepts||data;
+      const updated={...prev,concepts:{...prev.concepts,...importedConcepts}};
+      if(data.customSemantic)updated.customSemantic={...(prev.customSemantic||{}),...data.customSemantic};
+      CLS.save(updated.concepts);
+      return updated;
+    });
+    flash("✓ קריטריונים שוחזרו");
+  }
+
+  return(
+    <div dir="rtl" style={{minHeight:"100vh",background:"#0f172a"}}>
+      <Header msg={msg} tab={tab} setTab={setTab} onLoad={loadFile} onSave={saveFile} onSaveAs={saveAs} onExportConcepts={exportConcepts} onImportConcepts={importConcepts} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
+
+      {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>}
+      {tab==="byunit"&&<ByUnitTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} onUnitSelect={setActiveUnit} analysisMode={analysisMode}/>}
+      {tab==="byconcept"&&<ByConceptTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} initConcept={initConcept} setInitConcept={setInitConcept} setEditConcept={setEditConcept} analysisMode={analysisMode}/>}
+      {tab==="matrix"&&<MatrixTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} dim4concept={dim4concept} analysisMode={analysisMode}/>}
+      {tab==="charts"&&<ChartsTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} dim4concept={dim4concept} analysisMode={analysisMode}/>}
+      {tab==="compare"&&<CompareTab allUnits={allUnits} allConcepts={allConcepts} getE={getE} dim4concept={dim4concept} getParams={getParams}/>}
+      {tab==="synthesis"&&<SynthesisTab allUnits={allUnits} allConcepts={allConcepts} getE={getE} analysisMode={analysisMode}/>}
+
+      {editConcept&&(()=>{
+        const dim=dim4concept(editConcept);
+        return(
+        <Modal title={`✎ עריכת מושג — ${editConcept} | ${dim?.label||""}`} onClose={()=>setEditConcept(null)}>
+          <ConceptParamsEditor key={editConcept+JSON.stringify(getParams(editConcept))} name={editConcept} params={getParams(editConcept)} semData={raw.customSemantic?.[editConcept]} dimLabel={dim?.label} onSave={saveConcept} onClose={()=>setEditConcept(null)}/>
+        </Modal>
+        );
+      })()}
+      {showAdd&&(
+        <Modal title="הוספת מושג חדש" onClose={()=>setShowAdd(false)}>
+          <label style={S.label}>שם</label>
+          <input value={newName} onChange={e=>setNewName(e.target.value)} style={{...S.input,marginBottom:"10px"}}/>
+          <label style={S.label}>ממד</label>
+          <select value={newDim} onChange={e=>setNewDim(e.target.value)} style={{...S.input,marginBottom:"10px"}}>
+            {DIMS.map(d=><option key={d.id} value={d.id}>{d.label}</option>)}
+          </select>
+          <label style={S.label}>פרמטרים</label>
+          {newParams.map((p,i)=><input key={i} value={p} onChange={e=>{const a=[...newParams];a[i]=e.target.value;setNewParams(a);}} placeholder={`פרמטר ${i+1}`} style={{...S.input,marginBottom:"5px"}}/>)}
+          <button onClick={addConcept} style={{...S.btnPrimary,marginTop:"10px"}}>✓ הוסף</button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ConceptParamsEditor({name,params,semData,onSave,onClose}){
+  const existing=SEMANTIC[name]||semData||{pos:"",neg:""};
+  const [semPos,setSemPos]=useState(existing.pos||"");
+  const [semNeg,setSemNeg]=useState(existing.neg||"");
+  const [ps,setPs]=useState(()=>{
+    const a=[...(params||[])];
+    while(a.length<10)a.push({q:"",ind:""});
+    return a.map(p=>typeof p==="object"&&p!==null?{q:p.q||"",ind:p.ind||""}:{q:String(p||""),ind:""});
+  });
+  function updQ(i,v){const a=[...ps];a[i]={...a[i],q:v};setPs(a);}
+  function updI(i,v){const a=[...ps];a[i]={...a[i],ind:v};setPs(a);}
+  return(
+    <div>
+      {/* Semantic fields */}
+      <div style={{marginBottom:"14px",background:"#0f172a",borderRadius:"7px",padding:"12px",border:"1px solid #334155"}}>
+        <div style={{fontSize:"11px",color:"#34d399",fontWeight:"700",marginBottom:"8px"}}>שדות סמנטיים</div>
+        <label style={{...S.label,color:"#86efac"}}>שדה סמנטי חיובי</label>
+        <textarea value={semPos} onChange={e=>setSemPos(e.target.value)} rows={2}
+          placeholder="מילים מהשדה החיובי, מופרדות בפסיק..."
+          style={{...S.input,resize:"vertical",fontSize:"12px",marginBottom:"8px"}}/>
+        <label style={{...S.label,color:"#fca5a5"}}>שדה סמנטי שלילי (הפוך)</label>
+        <textarea value={semNeg} onChange={e=>setSemNeg(e.target.value)} rows={2}
+          placeholder="מילים מהשדה השלילי, מופרדות בפסיק..."
+          style={{...S.input,resize:"vertical",fontSize:"12px"}}/>
+      </div>
+      {/* Parameters */}
+      <div style={{fontSize:"11px",color:"#818cf8",fontWeight:"700",marginBottom:"8px"}}>10 פרמטרים ואינדיקטורים</div>
+      {ps.map((p,i)=>(
+        <div key={i} style={{marginBottom:"10px",background:"#0f172a",borderRadius:"7px",padding:"10px",border:"1px solid #334155"}}>
+          <div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"5px"}}>פרמטר {i+1}</div>
+          <input value={p.q} onChange={e=>updQ(i,e.target.value)} placeholder="שאלה אנליטית..." style={{...S.input,marginBottom:"5px"}}/>
+          <textarea value={p.ind} onChange={e=>updI(i,e.target.value)} placeholder="אינדיקטור בטקסט..." rows={2} style={{...S.input,resize:"vertical",fontSize:"12px",color:"#94a3b8"}}/>
+        </div>
+      ))}
+      <div style={{display:"flex",gap:"8px",marginTop:"10px"}}>
+        <button onClick={()=>onSave(name,ps,{pos:semPos,neg:semNeg})} style={S.btnPrimary}>✓ שמור</button>
+        <button onClick={onClose} style={{...S.btnPrimary,background:"#334155"}}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Home Tab ──────────────────────────────────────────────────────────
+function HomeTab({allUnits,allConcepts,prog,raw,setTab,setEditConcept,setShowAdd,getE,dim4concept,getParams,setInitConcept,analysisMode,setAnalysisMode}){
+  return(
+    <div style={{maxWidth:"860px",margin:"0 auto",padding:"28px 16px"}}>
+      {/* Progress cards */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"20px"}}>
+        <div style={{...S.card,background:analysisMode==="chronicles"?"linear-gradient(135deg,#1e3a5f,#0f172a)":"linear-gradient(135deg,#1e293b,#0f172a)",border:analysisMode==="chronicles"?"1px solid #93c5fd44":"1px solid #334155",cursor:"pointer"}}
+          onClick={()=>{setAnalysisMode("chronicles");setTab("byunit");}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+            <div>
+              <div style={{fontSize:"14px",fontWeight:"bold",color:"#93c5fd"}}>📘 ניתוח דברי הימים</div>
+              <div style={{fontSize:"11px",color:"#64748b"}}>{prog.doneChr} / {prog.tot} תאים</div>
+            </div>
+            <div style={{fontSize:"28px",fontWeight:"bold",color:"#93c5fd"}}>{prog.pctChr}%</div>
+          </div>
+          <div style={{background:"#0f172a",borderRadius:"6px",height:"8px",overflow:"hidden"}}>
+            <div style={{width:prog.pctChr+"%",height:"100%",background:"linear-gradient(90deg,#93c5fd,#818cf8)",transition:"width 0.5s"}}/>
+          </div>
+          <div style={{fontSize:"11px",color:"#475569",marginTop:"6px"}}>לחצי להתחיל ניתוח דה"י</div>
+        </div>
+        <div style={{...S.card,background:analysisMode==="source"?"linear-gradient(135deg,#3f2a00,#0f172a)":"linear-gradient(135deg,#1e293b,#0f172a)",border:analysisMode==="source"?"1px solid #fbbf2444":"1px solid #334155",cursor:"pointer"}}
+          onClick={()=>{setAnalysisMode("source");setTab("byunit");}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+            <div>
+              <div style={{fontSize:"14px",fontWeight:"bold",color:"#fbbf24"}}>📙 ניתוח מקבילות (שמ"ב / מל"א)</div>
+              <div style={{fontSize:"11px",color:"#64748b"}}>{prog.doneSrc} / {prog.tot} תאים</div>
+            </div>
+            <div style={{fontSize:"28px",fontWeight:"bold",color:"#fbbf24"}}>{prog.pctSrc}%</div>
+          </div>
+          <div style={{background:"#0f172a",borderRadius:"6px",height:"8px",overflow:"hidden"}}>
+            <div style={{width:prog.pctSrc+"%",height:"100%",background:"linear-gradient(90deg,#fbbf24,#f59e0b)",transition:"width 0.5s"}}/>
+          </div>
+          <div style={{fontSize:"11px",color:"#475569",marginTop:"6px"}}>לחצי להתחיל ניתוח מקבילות</div>
+        </div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"20px"}}>
+        {[["compare","🔍 סינתזה השוואתית","#34d399","השוואה אוטומטית בין הניתוחים"],["byconcept","🔍 לפי מושג","#818cf8",""],["matrix","📊 מטריצה","#fbbf24",""],["charts","📈 גרפים","#f87171",""]].map(([t,l,c,desc])=>(
+          <button key={t} onClick={()=>setTab(t)} style={{background:"#1e293b",border:`1px solid ${c}33`,borderRadius:"10px",padding:"16px",textAlign:"right",cursor:"pointer",color:c,fontSize:"14px",fontWeight:"600"}}>
+            {l}{desc&&<div style={{fontSize:"11px",color:"#64748b",marginTop:"4px",fontWeight:"400"}}>{desc}</div>}
+          </button>
+        ))}
+      </div>
+
+      <div style={S.card}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
+          <div style={{fontSize:"14px",fontWeight:"bold",color:"#f1f5f9"}}>מושגים ({allConcepts.length})</div>
+          <button onClick={()=>setShowAdd(true)} style={{...S.btnPrimary,background:"#334155",color:"#94a3b8",fontSize:"12px",padding:"5px 12px"}}>+ הוסף מושג</button>
+        </div>
+        {DIMS.map(dim=>{
+          const cs=allConcepts.filter(c=>c.dimId===dim.id);
+          if(!cs.length)return null;
+          return(
+            <div key={dim.id} style={{marginBottom:"12px"}}>
+              <div style={{fontSize:"11px",color:dim.color,fontWeight:"700",marginBottom:"6px"}}>{dim.label}</div>
+              <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                {cs.map(c=>{
+                  const filled=allUnits.filter(u=>{const e=getE(u.id,c.name);return e&&(e.explicit||(e.params||[]).some(p=>p.found!==null));}).length;
+                  return(
+                    <button key={c.name} onClick={()=>setEditConcept(c.name)}
+                      style={{background:"#0f172a",border:`2px solid ${dim.color}55`,borderRadius:"16px",color:filled?dim.color:"#475569",
+                        padding:"4px 14px",cursor:"pointer",fontSize:"12px",fontWeight:filled?"700":"400",
+                        display:"inline-flex",alignItems:"center",gap:"5px"}}
+                      title="לחצי לעריכת פרמטרים, אינדיקטורים ושדות סמנטיים">
+                      {c.name}
+                      {(()=>{
+                        const paramCount=getParams(c.name).filter(p=>{const q=typeof p==="object"?p.q:p;return q&&q.trim();}).length;
+                        return paramCount>0?(
+                          <span style={{fontSize:"10px",background:dim.color+"33",color:dim.color,padding:"0 5px",borderRadius:"8px",fontWeight:"700"}} title={`${paramCount} פרמטרים`}>
+                            {paramCount}/10
+                          </span>
+                        ):(
+                          <span style={{fontSize:"10px",color:"#475569"}} title="אין פרמטרים">∅</span>
+                        );
+                      })()}
+                      {filled>0&&<span style={{fontSize:"10px",background:"#1e293b",color:"#64748b",padding:"0 4px",borderRadius:"8px"}} title={`${filled} יחידות נותחו`}>{filled}✓</span>}
+                      <span style={{fontSize:"10px",color:dim.color,opacity:0.7}}>✎</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── By Unit Tab ───────────────────────────────────────────────────────
+function ByUnitTab({allUnits,allConcepts,raw,getE,setE,getParams,dim4concept,onUnitSelect,analysisMode}){
+  const [uid,setUid]=useState(null);
+  const unit=allUnits.find(u=>u.id===uid);
+  const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
+  const modeLabel=analysisMode==="chronicles"?'📘 ניתוח דה"י':'📙 ניתוח מקבילות';
+  const unitText=analysisMode==="chronicles"?unit?.chroniclesText:unit?.sourceText;
+  const sourceText=analysisMode==="chronicles"?unit?.sourceText:unit?.chroniclesText;
+  const done=unit?allConcepts.filter(c=>{const e=getE(unit.id,c.name,analysisMode);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found!==null));}).length:0;
+
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"220px 1fr",height:"calc(100vh - 46px)"}}>
+      {/* Sidebar */}
+      <div style={{background:"#1e293b",borderLeft:"1px solid #334155",overflowY:"auto",padding:"10px"}}>
+        <div style={{fontSize:"11px",fontWeight:"700",color:modeColor,marginBottom:"8px",textTransform:"uppercase"}}>{modeLabel}</div>
+        {["david","solomon"].map(ch=>{
+          const us=allUnits.filter(u=>u.character===ch||(ch==="david"&&!u.character));
+          if(!us.length)return null;
+          return(
+            <div key={ch} style={{marginBottom:"10px"}}>
+              <div style={{fontSize:"10px",color:ch==="david"?"#93c5fd":"#d8b4fe",fontWeight:"700",marginBottom:"4px"}}>{ch==="david"?"👑 דוד":"👑 שלמה"}</div>
+              {us.map(u=>{
+                const d=allConcepts.filter(c=>{const e=getE(u.id,c.name,analysisMode);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found!==null));}).length;
+                return(
+                  <button key={u.id} onClick={()=>{setUid(u.id);onUnitSelect&&onUnitSelect(u);}}
+                    style={{display:"block",width:"100%",textAlign:"right",padding:"6px 8px",borderRadius:"6px",border:"none",cursor:"pointer",marginBottom:"2px",fontSize:"11px",
+                      background:uid===u.id?"#334155":"transparent",color:uid===u.id?"#f1f5f9":"#64748b",
+                      borderRight:uid===u.id?`3px solid ${modeColor}`:"3px solid transparent"}}>
+                    <span>{u.label}</span>
+                    {d>0&&<span style={{color:modeColor,fontSize:"10px",float:"left"}}>{d}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+      {/* Main */}
+      <div style={{overflowY:"auto",padding:"16px"}}>
+        {!unit?(
+          <div style={{padding:"60px",textAlign:"center",color:"#334155"}}>בחרי יחידה מהרשימה</div>
+        ):(
+          <>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"12px"}}>
+              <div>
+                <div style={{fontSize:"16px",fontWeight:"bold",color:"#f1f5f9"}}>{unit.label}</div>
+                <div style={{fontSize:"12px",color:modeColor,fontWeight:"700"}}>{modeLabel}</div>
+                <div style={{fontSize:"11px",color:"#64748b"}}>{unit.character==="david"?"👑 דוד":unit.character==="solomon"?"👑 שלמה":""}{unit.sourceRef&&` | מקביל: ${unit.sourceRef}`}</div>
+              </div>
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:"20px",fontWeight:"bold",color:modeColor}}>{done}/{allConcepts.length}</div>
+                <div style={{fontSize:"10px",color:"#64748b"}}>נבדקו</div>
+              </div>
+            </div>
+            {/* Show relevant text only - no diff panel */}
+            <div style={{background:"#1e293b",border:`1px solid ${modeColor}44`,borderRadius:"8px",padding:"10px 14px",marginBottom:"12px",fontSize:"14px",lineHeight:"2",color:"#e2e8f0",direction:"rtl"}}>
+              <div style={{fontSize:"11px",fontWeight:"700",color:modeColor,marginBottom:"6px"}}>{analysisMode==="chronicles"?'📘 טקסט דברי הימים':'📙 טקסט המקבילה'}</div>
+              {unitText||<span style={{color:"#475569"}}>אין טקסט</span>}
+            </div>
+            {DIMS.map(dim=>{
+              const cs=allConcepts.filter(c=>c.dimId===dim.id);
+              if(!cs.length)return null;
+              return(
+                <div key={dim.id} style={{marginBottom:"10px"}}>
+                  <div style={{fontSize:"11px",color:dim.color,fontWeight:"700",marginBottom:"6px"}}>{dim.label}</div>
+                  {cs.map(c=><ConceptRow key={c.name} conceptName={c.name} dimColor={dim.color} params={getParams(c.name)} entry={getE(unit.id,c.name,analysisMode)} onChange={e=>setE(unit.id,c.name,e,analysisMode)} unitText={unitText} sourceText={sourceText} sourceRef={unit.sourceRef} scholarship={unit.scholarship} analysisMode={analysisMode} customSemantic={raw.customSemantic||{}} character={unit.character||"david"}/>)}
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConceptRow({conceptName,dimColor,params,entry,onChange,unitText,sourceText,sourceRef,scholarship,analysisMode,customSemantic,character}){
+  const [open,setOpen]=useState(false);
+  const e=entry;
+  const hasE=!!(e?.explicit_note?.trim());
+  const implN=(e?.params||[]).filter(p=>p.found===true).length;
+  const done=hasE||implN>0;
+  const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
+  return(
+    <div style={{marginBottom:"5px"}}>
+      <button onClick={()=>setOpen(o=>!o)}
+        style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderRadius:"7px",border:`1px solid ${open?dimColor+"66":"#334155"}`,background:open?"#263148":"#1e293b",cursor:"pointer",textAlign:"right"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"7px"}}>
+          <span style={{fontSize:"13px",color:done?"#f1f5f9":"#475569",fontWeight:done?"600":"400"}}>{conceptName}</span>
+          {hasE&&<span style={{background:"#166534",color:"#86efac",padding:"1px 7px",borderRadius:"9px",fontSize:"10px"}}>גלוי</span>}
+          {implN>0&&<span style={{background:"#1e3a5f",color:modeColor,padding:"1px 7px",borderRadius:"9px",fontSize:"10px"}}>נרמז: {implN}</span>}
+        </div>
+        <span style={{color:"#475569",fontSize:"11px"}}>{open?"▲":"▼"}</span>
+      </button>
+      {open&&(
+        <div style={{background:"#1e293b",border:`1px solid ${dimColor}33`,borderTop:"none",borderRadius:"0 0 7px 7px",padding:"14px"}}>
+          <EntryEditor unitId={null} conceptName={conceptName} conceptParams={params} entry={entry} onChange={onChange} unitText={unitText} sourceText={sourceText} sourceRef={sourceRef} scholarship={scholarship} analysisMode={analysisMode} customSemantic={customSemantic||{}} character={character}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── By Concept Tab ────────────────────────────────────────────────────
+function ByConceptTab({allUnits,allConcepts,raw,getE,setE,getParams,dim4concept,initConcept,setInitConcept,setEditConcept,analysisMode}){
+  const [cname,setCname]=useState(()=>initConcept||null);
+  const [uid,setUid]=useState(null);
+  React.useEffect(()=>{if(initConcept){setCname(initConcept);setInitConcept(null);}},[initConcept]);
+  const dim=cname?dim4concept(cname):null;
+  const unit=allUnits.find(u=>u.id===uid);
+  const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
+  const done=cname?allUnits.filter(u=>{const e=getE(u.id,cname,analysisMode);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found!==null));}).length:0;
+
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"180px 1fr",height:"calc(100vh - 46px)"}}>
+      {/* Sidebar */}
+      <div style={{background:"#1e293b",borderLeft:"1px solid #334155",overflowY:"auto",padding:"10px"}}>
+        {DIMS.map(dim=>{
+          const cs=allConcepts.filter(c=>c.dimId===dim.id);
+          if(!cs.length)return null;
+          return(
+            <div key={dim.id} style={{marginBottom:"10px"}}>
+              <div style={{fontSize:"10px",color:dim.color,fontWeight:"700",marginBottom:"4px"}}>{dim.label.split(":")[1]?.trim()}</div>
+              {cs.map(c=>{
+                const d=allUnits.filter(u=>{const e=getE(u.id,c.name);return e&&(e.explicit||(e.params||[]).some(p=>p.found!==null));}).length;
+                return(
+                  <button key={c.name} onClick={()=>{setCname(c.name);setUid(null);}}
+                    style={{display:"block",width:"100%",textAlign:"right",padding:"5px 8px",borderRadius:"5px",border:"none",cursor:"pointer",marginBottom:"1px",fontSize:"11px",
+                      background:cname===c.name?"#334155":"transparent",color:cname===c.name?"#f1f5f9":"#64748b",
+                      borderRight:cname===c.name?`3px solid ${dim.color}`:"3px solid transparent"}}>
+                    {c.name}{d>0&&<span style={{color:dim.color,fontSize:"10px",float:"left"}}>{d}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+      {/* Main */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 480px",height:"calc(100vh - 46px)"}}>
+        {/* Units list */}
+        <div style={{overflowY:"auto",padding:"16px"}}>
+          {!cname?(
+            <div style={{padding:"60px",textAlign:"center",color:"#334155"}}>בחרי מושג מהרשימה</div>
+          ):(
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
+                <div>
+                  <div style={{fontSize:"16px",fontWeight:"bold",color:"#f1f5f9"}}>{cname}</div>
+                  <div style={{fontSize:"11px",color:dim?.color||"#818cf8"}}>{dim?.label}</div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:"20px",fontWeight:"bold",color:dim?.color||"#818cf8"}}>{done}/{allUnits.length}</div>
+                    <div style={{fontSize:"10px",color:"#64748b"}}>יחידות</div>
+                  </div>
+                  <button onClick={()=>setEditConcept(cname)}
+                    style={{background:"#1e293b",border:`1px solid ${dim?.color||"#818cf8"}44`,borderRadius:"8px",padding:"6px 12px",cursor:"pointer",color:dim?.color||"#818cf8",fontSize:"11px",fontWeight:"700"}}
+                    title="ערוך פרמטרים ואינדיקטורים">
+                    ✎ פרמטרים
+                  </button>
+                </div>
+              </div>
+              {["david","solomon"].map(ch=>{
+                const us=allUnits.filter(u=>u.character===ch||(ch==="david"&&!u.character));
+                if(!us.length)return null;
+                return(
+                  <div key={ch} style={{marginBottom:"12px"}}>
+                    <div style={{fontSize:"12px",color:ch==="david"?"#93c5fd":"#d8b4fe",fontWeight:"700",marginBottom:"6px"}}>{ch==="david"?"👑 דוד":"👑 שלמה"}</div>
+                    {us.map(u=>{
+                      const e=getE(u.id,cname,analysisMode);
+                      const hasE=!!(e?.explicit_note?.trim());
+                      const implN=(e?.params||[]).filter(p=>p.found===true).length;
+                      const done2=hasE||implN>0;
+                      const isActive=uid===u.id;
+                      return(
+                        <div key={u.id} style={{marginBottom:"4px"}}>
+                          <button onClick={()=>setUid(isActive?null:u.id)}
+                            style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",borderRadius:"7px",border:`1px solid ${isActive?(dim?.color||"#818cf8")+"66":"#334155"}`,background:isActive?"#263148":"#1e293b",cursor:"pointer",textAlign:"right"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:"7px"}}>
+                              <span style={{fontSize:"12px",color:done2?"#f1f5f9":"#475569",fontWeight:done2?"600":"400"}}>{u.label}</span>
+                              {hasE&&<span style={{background:"#166534",color:"#86efac",padding:"1px 6px",borderRadius:"8px",fontSize:"10px"}}>גלוי</span>}
+                              {implN>0&&<span style={{background:"#1e3a5f",color:modeColor,padding:"1px 6px",borderRadius:"8px",fontSize:"10px"}}>נרמז: {implN}</span>}
+                            </div>
+                            <span style={{color:"#475569",fontSize:"11px"}}>{isActive?"▲":"▼"}</span>
+                          </button>
+                          {isActive&&(
+                            <div style={{background:"#1e293b",border:`1px solid ${dim?.color||"#818cf8"}33`,borderTop:"none",borderRadius:"0 0 7px 7px",padding:"14px"}}>
+                              <EntryEditor unitId={u.id} conceptName={cname} conceptParams={getParams(cname)} entry={e} onChange={entry=>setE(u.id,cname,entry,analysisMode)} unitText={analysisMode==="chronicles"?u.chroniclesText:u.sourceText} sourceText={analysisMode==="chronicles"?u.sourceText:u.chroniclesText} sourceRef={u.sourceRef} scholarship={u.scholarship} analysisMode={analysisMode} customSemantic={raw.customSemantic||{}} character={u.character||"david"}/>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+        {/* Right: comparison panel */}
+        <div style={{background:"#0f172a",borderRight:"1px solid #334155",overflowY:"auto",padding:"12px"}}>
+          {unit?(
+            <DiffPanel unit={unit}/>
+          ):(
+            <div style={{padding:"40px 0",textAlign:"center",color:"#334155",fontSize:"12px"}}>לחצי על יחידה לצפייה בהשוואה</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Matrix Tab ────────────────────────────────────────────────────────
+function MatrixTab({allUnits,allConcepts,raw,getE,dim4concept,analysisMode}){
+  const [ch,setCh]=useState("all");
+  const units=ch==="all"?allUnits:allUnits.filter(u=>u.character===ch||(ch==="david"&&!u.character));
+  const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
+  const modeLabel=analysisMode==="chronicles"?'📘 דה"י':'📙 מקבילות';
+  function cellSt(uid,cname){
+    const e=getE(uid,cname,analysisMode);if(!e)return"empty";
+    const hE=!!(e.explicit_note?.trim()),iN=(e.params||[]).filter(p=>p.found===true).length>0;
+    if(hE&&iN)return"both";if(hE)return"explicit";if(iN)return"implicit";
+    if((e.params||[]).some(p=>p.found===false))return"checked";return"empty";
+  }
+  const C={both:"#34d399",explicit:"#86efac",implicit:"#818cf8",checked:"#334155",empty:"#1e293b"};
+  return(
+    <div style={{padding:"16px",overflowX:"auto"}}>
+      <div style={{display:"flex",gap:"10px",marginBottom:"14px",alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{fontSize:"15px",fontWeight:"bold",color:modeColor}}>מטריצה — {modeLabel}</div>
+        {[["all","הכל"],["david","דוד"],["solomon","שלמה"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setCh(v)} style={{padding:"3px 10px",borderRadius:"12px",border:"none",cursor:"pointer",fontSize:"12px",background:ch===v?"#818cf8":"#334155",color:ch===v?"white":"#94a3b8"}}>{l}</button>
+        ))}
+        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+          {[["both","גלוי+נרמז"],["explicit","גלוי"],["implicit","נרמז"],["checked","נבדק"],["empty","לא נבדק"]].map(([k,l])=>(
+            <span key={k} style={{display:"flex",alignItems:"center",gap:"3px",fontSize:"10px",color:"#64748b"}}>
+              <span style={{width:"10px",height:"10px",background:C[k],borderRadius:"2px",border:k==="empty"?"1px solid #334155":"none",display:"inline-block"}}/>
+              {l}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{borderCollapse:"collapse",fontSize:"11px"}}>
+          <thead>
+            <tr>
+              <th style={{padding:"5px 8px",background:"#1e293b",color:"#64748b",textAlign:"right",position:"sticky",right:0,minWidth:"150px",borderBottom:"1px solid #334155",zIndex:2}}>יחידה</th>
+              {DIMS.map(dim=>allConcepts.filter(c=>c.dimId===dim.id).map(c=>(
+                <th key={c.name} style={{padding:"4px 3px",background:"#1e293b",color:dim.color,textAlign:"center",borderBottom:"1px solid #334155",minWidth:"44px",writingMode:"vertical-rl",height:"70px"}}>{c.name}</th>
+              )))}
+            </tr>
+          </thead>
+          <tbody>
+            {units.map((u,ri)=>(
+              <tr key={u.id} style={{background:ri%2===0?"#0f172a":"#111827"}}>
+                <td style={{padding:"4px 8px",color:u.character==="solomon"?"#d8b4fe":"#93c5fd",position:"sticky",right:0,background:ri%2===0?"#0f172a":"#111827",borderBottom:"1px solid #1e293b",fontSize:"11px",maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",zIndex:1}}>
+                  {u.label}
+                </td>
+                {DIMS.map(dim=>allConcepts.filter(c=>c.dimId===dim.id).map(c=>(
+                  <td key={c.name} style={{textAlign:"center",padding:"3px",borderBottom:"1px solid #1e293b"}}>
+                    <div style={{width:"20px",height:"20px",background:C[cellSt(u.id,c.name)],borderRadius:"3px",margin:"auto",border:cellSt(u.id,c.name)==="empty"?"1px solid #334155":"none"}}/>
+                  </td>
+                )))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Charts Tab ────────────────────────────────────────────────────────
+function ChartsTab({allUnits,allConcepts,raw,getE,dim4concept,analysisMode}){
+  const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
+  const modeLabel=analysisMode==="chronicles"?'📘 דה"י':'📙 מקבילות';
+  function Bar({val,max,color,label,val2,color2,label2}){
+    const p=max?Math.round(val/max*100):0;
+    const p2=max&&val2!=null?Math.round(val2/max*100):0;
+    return(
+      <div style={{marginBottom:"7px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:"2px"}}>
+          <span style={{fontSize:"11px",color:"#94a3b8"}}>{label}</span>
+          <span style={{fontSize:"11px",color:"#64748b"}}>{val}{val2!=null?` / ${val2}`:""}</span>
+        </div>
+        <div style={{background:"#0f172a",borderRadius:"4px",height:"9px",overflow:"hidden",display:"flex"}}>
+          <div style={{width:p+"%",background:color,borderRadius:"4px",transition:"width 0.4s"}}/>
+          {val2!=null&&<div style={{width:p2+"%",background:color2,transition:"width 0.4s"}}/>}
+        </div>
+      </div>
+    );
+  }
+  const david=allUnits.filter(u=>u.character==="david"||!u.character);
+  const solomon=allUnits.filter(u=>u.character==="solomon");
+  return(
+    <div style={{maxWidth:"800px",margin:"0 auto",padding:"20px 16px"}}>
+      <div style={{...S.card,marginBottom:"16px"}}>
+        <div style={{fontSize:"13px",fontWeight:"bold",color:modeColor,marginBottom:"8px"}}>מושגים לפי דמות — {modeLabel} <span style={{fontSize:"11px",color:"#64748b",fontWeight:"400"}}>■ כחול=דוד ■ סגול=שלמה</span></div>
+        {DIMS.map(dim=>(
+          <div key={dim.id} style={{marginBottom:"10px"}}>
+            <div style={{fontSize:"10px",color:dim.color,fontWeight:"700",marginBottom:"5px"}}>{dim.label}</div>
+            {allConcepts.filter(c=>c.dimId===dim.id).map(c=>{
+              const d=david.filter(u=>{const e=getE(u.id,c.name,analysisMode);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found===true));}).length;
+              const s=solomon.filter(u=>{const e=getE(u.id,c.name,analysisMode);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found===true));}).length;
+              return <Bar key={c.name} label={c.name} val={d} val2={s} max={allUnits.length} color="#93c5fd" color2="#d8b4fe"/>;
+            })}
+          </div>
+        ))}
+      </div>
+      <div style={S.card}>
+        <div style={{fontSize:"13px",fontWeight:"bold",color:modeColor,marginBottom:"8px"}}>גלוי מול נרמז — {modeLabel} <span style={{fontSize:"11px",color:"#64748b",fontWeight:"400"}}>■ ירוק=גלוי ■ סגול=נרמז</span></div>
+        {DIMS.map(dim=>(
+          <div key={dim.id} style={{marginBottom:"10px"}}>
+            <div style={{fontSize:"10px",color:dim.color,fontWeight:"700",marginBottom:"5px"}}>{dim.label}</div>
+            {allConcepts.filter(c=>c.dimId===dim.id).map(c=>{
+              const exp=allUnits.filter(u=>{const e=getE(u.id,c.name,analysisMode);return !!(e?.explicit_note?.trim());}).length;
+              const imp=allUnits.filter(u=>{const e=getE(u.id,c.name,analysisMode);return (e?.params||[]).some(p=>p.found===true);}).length;
+              return <Bar key={c.name} label={c.name} val={exp} val2={imp} max={allUnits.length} color="#34d399" color2="#818cf8"/>;
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+// ── Compare Tab (סינתזה השוואתית) ────────────────────────────────────
+function CompareTab({allUnits,allConcepts,getE,dim4concept,getParams}){
+  const [selUnit,setSelUnit]=useState(null);
+  const [aiLoading,setAiLoading]=useState(false);
+  const [aiResult,setAiResult]=useState("");
+  const unit=allUnits.find(u=>u.id===selUnit);
+
+  function getChrEntry(uid,cname){ return getE(uid,cname,"chronicles"); }
+  function getSrcEntry(uid,cname){ return getE(uid,cname,"source"); }
+
+  function conceptStatus(uid,cname){
+    const ec=getChrEntry(uid,cname);
+    const es=getSrcEntry(uid,cname);
+    const chrFound=ec&&(ec.explicit_note?.trim()||(ec.params||[]).some(p=>p.found===true));
+    const srcFound=es&&(es.explicit_note?.trim()||(es.params||[]).some(p=>p.found===true));
+    if(chrFound&&srcFound)return"both";
+    if(chrFound)return"chr_only";
+    if(srcFound)return"src_only";
+    const chrChecked=ec&&(ec.params||[]).some(p=>p.found!==null);
+    const srcChecked=es&&(es.params||[]).some(p=>p.found!==null);
+    if(chrChecked||srcChecked)return"neither_checked";
+    return"empty";
+  }
+
+  const STATUS_STYLE={
+    both:      {bg:"#166534",tc:"#86efac",label:"בדה\"י ובמקבילה"},
+    chr_only:  {bg:"#1e3a5f",tc:"#93c5fd",label:"רק בדה\"י"},
+    src_only:  {bg:"#713f12",tc:"#fbbf24",label:"רק במקבילה"},
+    neither_checked:{bg:"#334155",tc:"#94a3b8",label:"נבדק — לא נמצא"},
+    empty:     {bg:"transparent",tc:"#475569",label:"טרם נבדק"},
+  };
+
+  async function runCompareSynthesis(){
+    if(!unit)return;
+    setAiLoading(true);setAiResult("");
+
+    // Build comparison summary
+    const compLines=[];
+    DIMS.forEach(dim=>{
+      const chrFound=[],srcFound=[],bothFound=[],onlyChr=[],onlySrc=[];
+      allConcepts.filter(c=>c.dimId===dim.id).forEach(c=>{
+        const st=conceptStatus(unit.id,c.name);
+        if(st==="both")bothFound.push(c.name);
+        else if(st==="chr_only")onlyChr.push(c.name);
+        else if(st==="src_only")onlySrc.push(c.name);
+      });
+      if(bothFound.length||onlyChr.length||onlySrc.length){
+        const parts=[];
+        if(bothFound.length)parts.push("בשניהם: "+bothFound.join(", "));
+        if(onlyChr.length)parts.push("רק בדה\"י: "+onlyChr.join(", "));
+        if(onlySrc.length)parts.push("רק במקבילה: "+onlySrc.join(", "));
+        compLines.push(dim.label+"\n"+parts.map(p=>"  • "+p).join("\n"));
+      }
+    });
+
+    // Build diff summary
+    let diffSummary="";
+    try{
+      const diff=computeDiff(unit.chroniclesText||"",unit.sourceText||"");
+      const added=[],omitted=[],changed=[];
+      diff.forEach(ch=>{
+        if(ch.type==="added"&&ch.aW?.length)added.push(ch.aW.join(" "));
+        else if(ch.type==="omitted"&&ch.bW?.length)omitted.push(ch.bW.join(" "));
+        else if(ch.type==="changed")changed.push((ch.aW||[]).join(" "));
+      });
+      const parts=[];
+      if(added.length)parts.push("תוספות ("+added.length+"): "+added.join(", "));
+      if(omitted.length)parts.push("השמטות ("+omitted.length+"): "+omitted.join(", "));
+      if(changed.length)parts.push("שינויים ("+changed.length+"): "+changed.join(", "));
+      diffSummary=parts.join(" | ")||"אין הבדלים";
+    }catch{}
+
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. נתח את ממצאי הניתוח ההשוואתי.
+
+יחידה: ${unit.label} | דמות: ${unit.character==="david"?"דוד":"שלמה"} | מקביל: ${unit.sourceRef||"—"}
+
+שינויים שעשה הכרוניסט:
+${diffSummary}
+
+ממצאי הניתוח ההשוואתי:
+${compLines.join("\n\n")||"אין ממצאים עדיין"}
+
+ענה בעברית אקדמית קצרה (100-150 מילה):
+1. מושגים שהכרוניסט הוסיף (רק בדה"י) — מה משמעותם?
+2. מושגים שנעדרים מדה"י — מה ניתן ללמוד מכך?
+3. מסקנה: כיצד שינויי הכרוניסט קשורים לחזון הנבואי?`;
+
+    try{
+      const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:600,messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      setAiResult(data.content?.map(b=>b.text||"").join("")||"שגיאה");
+    }catch(e){setAiResult("שגיאת חיבור: "+e.message);}
+    setAiLoading(false);
+  }
+
+  const davidUnits=allUnits.filter(u=>u.character==="david"||!u.character);
+  const solomonUnits=allUnits.filter(u=>u.character==="solomon");
+
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"200px 1fr",height:"calc(100vh - 46px)"}}>
+      {/* Sidebar */}
+      <div style={{background:"#1e293b",borderLeft:"1px solid #334155",overflowY:"auto",padding:"10px"}}>
+        <div style={{fontSize:"11px",fontWeight:"700",color:"#34d399",marginBottom:"8px"}}>🔍 בחרי יחידה</div>
+        {[["דוד","david","#93c5fd",davidUnits],["שלמה","solomon","#d8b4fe",solomonUnits]].map(([name,ch,color,us])=>(
+          <div key={ch} style={{marginBottom:"10px"}}>
+            <div style={{fontSize:"10px",color,fontWeight:"700",marginBottom:"4px"}}>👑 {name}</div>
+            {us.map(u=>{
+              const hasChr=allConcepts.some(c=>{const e=getChrEntry(u.id,c.name);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found!==null));});
+              const hasSrc=allConcepts.some(c=>{const e=getSrcEntry(u.id,c.name);return e&&(e.explicit_note||(e.params||[]).some(p=>p.found!==null));});
+              return(
+                <button key={u.id} onClick={()=>{setSelUnit(u.id);setAiResult("");}}
+                  style={{display:"block",width:"100%",textAlign:"right",padding:"6px 8px",borderRadius:"6px",border:"none",cursor:"pointer",marginBottom:"2px",fontSize:"11px",
+                    background:selUnit===u.id?"#334155":"transparent",color:selUnit===u.id?"#f1f5f9":"#64748b",
+                    borderRight:selUnit===u.id?"3px solid #34d399":"3px solid transparent"}}>
+                  <span>{u.label}</span>
+                  <span style={{float:"left",fontSize:"9px"}}>
+                    {hasChr&&<span style={{color:"#93c5fd"}}>📘</span>}
+                    {hasSrc&&<span style={{color:"#fbbf24"}}>📙</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* Main */}
+      <div style={{overflowY:"auto",padding:"16px"}}>
+        {!unit?(
+          <div style={{padding:"60px",textAlign:"center",color:"#334155"}}>
+            <div style={{fontSize:"40px",marginBottom:"12px"}}>🔍</div>
+            <div style={{fontSize:"14px",color:"#475569"}}>בחרי יחידה לסינתזה השוואתית</div>
+            <div style={{fontSize:"12px",color:"#334155",marginTop:"6px"}}>השוואה בין ניתוח דה"י לניתוח המקבילה</div>
+          </div>
+        ):(
+          <>
+            {/* Header */}
+            <div style={{background:"linear-gradient(135deg,#1e293b,#0f172a)",border:"1px solid #334155",borderRadius:"10px",padding:"14px 18px",marginBottom:"16px"}}>
+              <div style={{fontSize:"16px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>{unit.label}</div>
+              <div style={{fontSize:"12px",color:"#64748b"}}>{unit.character==="david"?"👑 דוד":"👑 שלמה"}{unit.sourceRef&&` | מקביל: ${unit.sourceRef}`}</div>
+              <div style={{display:"flex",gap:"10px",marginTop:"10px",flexWrap:"wrap"}}>
+                {[["📘 ניתוח דה\"י","#93c5fd"],[" 📙 ניתוח מקבילה","#fbbf24"]].map(([l,c])=>(
+                  <span key={l} style={{background:c+"22",border:`1px solid ${c}44`,color:c,padding:"2px 10px",borderRadius:"10px",fontSize:"11px",fontWeight:"700"}}>{l}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Legend */}
+            <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
+              {Object.entries(STATUS_STYLE).filter(([k])=>k!=="empty").map(([k,v])=>(
+                <span key={k} style={{background:v.bg,color:v.tc,padding:"2px 10px",borderRadius:"10px",fontSize:"11px",fontWeight:"700"}}>● {v.label}</span>
+              ))}
+            </div>
+
+            {/* Comparison by dimension */}
+            {DIMS.map(dim=>{
+              const cs=allConcepts.filter(c=>c.dimId===dim.id);
+              return(
+                <div key={dim.id} style={{background:"#1e293b",border:`1px solid ${dim.color}33`,borderRadius:"10px",padding:"12px 14px",marginBottom:"10px"}}>
+                  <div style={{fontSize:"12px",fontWeight:"700",color:dim.color,marginBottom:"10px"}}>{dim.label}</div>
+                  <div style={{display:"grid",gap:"6px"}}>
+                    {cs.map(c=>{
+                      const st=conceptStatus(unit.id,c.name);
+                      const sty=STATUS_STYLE[st];
+                      const ec=getChrEntry(unit.id,c.name);
+                      const es=getSrcEntry(unit.id,c.name);
+                      const chrImplN=(ec?.params||[]).filter(p=>p.found===true).length;
+                      const srcImplN=(es?.params||[]).filter(p=>p.found===true).length;
+                      const chrVerse=(ec?.params||[]).filter(p=>p.found===true&&p.verse).map(p=>p.verse).join(", ");
+                      const srcVerse=(es?.params||[]).filter(p=>p.found===true&&p.verse).map(p=>p.verse).join(", ");
+                      if(st==="empty")return(
+                        <div key={c.name} style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 10px",borderRadius:"6px",background:"#0f172a",opacity:0.4}}>
+                          <span style={{fontSize:"12px",color:"#475569"}}>{c.name}</span>
+                          <span style={{fontSize:"10px",color:"#334155"}}>טרם נבדק</span>
+                        </div>
+                      );
+                      return(
+                        <div key={c.name} style={{background:sty.bg+"33",border:`1px solid ${sty.bg}`,borderRadius:"6px",padding:"8px 10px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"8px"}}>
+                            <span style={{fontSize:"13px",fontWeight:"700",color:sty.tc}}>{c.name}</span>
+                            <span style={{background:sty.bg,color:sty.tc,padding:"1px 8px",borderRadius:"8px",fontSize:"10px",fontWeight:"700",whiteSpace:"nowrap"}}>{sty.label}</span>
+                          </div>
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px",marginTop:"6px"}}>
+                            {/* Chr side */}
+                            <div style={{background:"#1d3a5f22",borderRadius:"5px",padding:"6px 8px",borderRight:"2px solid #93c5fd44"}}>
+                              <div style={{fontSize:"10px",fontWeight:"700",color:"#93c5fd",marginBottom:"3px"}}>📘 דה"י</div>
+                              {ec?.explicit_note?.trim()&&<div style={{fontSize:"11px",color:"#d1fae5",marginBottom:"3px",lineHeight:"1.5"}}>{ec.explicit_note.substring(0,80)}{ec.explicit_note.length>80?"...":""}</div>}
+                              {chrImplN>0&&<div style={{fontSize:"10px",color:"#93c5fd"}}>נרמז: {chrImplN} פרמטרים{chrVerse&&` | פסוק: ${chrVerse}`}</div>}
+                              {!ec?.explicit_note?.trim()&&chrImplN===0&&(ec?.params||[]).some(p=>p.found!==null)&&<div style={{fontSize:"10px",color:"#475569"}}>נבדק — לא נמצא</div>}
+                            </div>
+                            {/* Src side */}
+                            <div style={{background:"#3f2a0022",borderRadius:"5px",padding:"6px 8px",borderRight:"2px solid #fbbf2444"}}>
+                              <div style={{fontSize:"10px",fontWeight:"700",color:"#fbbf24",marginBottom:"3px"}}>📙 מקבילה</div>
+                              {es?.explicit_note?.trim()&&<div style={{fontSize:"11px",color:"#fef3c7",marginBottom:"3px",lineHeight:"1.5"}}>{es.explicit_note.substring(0,80)}{es.explicit_note.length>80?"...":""}</div>}
+                              {srcImplN>0&&<div style={{fontSize:"10px",color:"#fbbf24"}}>נרמז: {srcImplN} פרמטרים{srcVerse&&` | פסוק: ${srcVerse}`}</div>}
+                              {!es?.explicit_note?.trim()&&srcImplN===0&&(es?.params||[]).some(p=>p.found!==null)&&<div style={{fontSize:"10px",color:"#475569"}}>נבדק — לא נמצא</div>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* AI Synthesis */}
+            <div style={{background:"#1e293b",border:"1px solid #334155",borderRadius:"10px",padding:"14px",marginTop:"8px"}}>
+              <div style={{fontSize:"13px",fontWeight:"700",color:"#a78bfa",marginBottom:"10px"}}>🤖 סינתזה השוואתית — AI</div>
+              <button onClick={runCompareSynthesis} disabled={aiLoading}
+                style={{width:"100%",padding:"10px",borderRadius:"8px",border:"none",cursor:aiLoading?"wait":"pointer",
+                  background:aiLoading?"#334155":"#7c3aed",color:aiLoading?"#475569":"white",fontSize:"13px",fontWeight:"700",marginBottom:"10px"}}>
+                {aiLoading?"⏳ מנתח...":"🔍 נתח את ההבדלים בין דה\"י למקבילה"}
+              </button>
+              {aiResult&&(
+                <div style={{background:"#0f172a",border:"1px solid #7c3aed44",borderRadius:"8px",padding:"12px 14px",fontSize:"13px",color:"#e2e8f0",lineHeight:"1.9",whiteSpace:"pre-wrap",direction:"rtl"}}>
+                  {aiResult}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Synthesis Tab ─────────────────────────────────────────────────────
+const SYNTH_KEY="chronicles_synthesis_v1";
+const SLS={
+  load(){ try{const r=localStorage.getItem(SYNTH_KEY);return r?JSON.parse(r):{};}catch{return{};} },
+  save(d){ try{localStorage.setItem(SYNTH_KEY,JSON.stringify(d));}catch{} }
+};
+
+function SynthesisTab({allUnits,allConcepts,getE,analysisMode}){
+  const [mode,setMode]=React.useState("unit");
+  const [selUnit,setSelUnit]=React.useState(null);
+  const [selDim,setSelDim]=React.useState("d1");
+  const [aiLoading,setAiLoading]=React.useState(false);
+  const [aiResult,setAiResult]=React.useState("");
+  const [editText,setEditText]=React.useState("");
+  const [scholars,setScholars]=React.useState("");
+  const [saved,setSaved]=React.useState(()=>SLS.load());
+  const [showSaved,setShowSaved]=React.useState(false);
+  const [saveMsg,setSaveMsg]=React.useState("");
+
+  function flash(m){setSaveMsg(m);setTimeout(()=>setSaveMsg(""),2500);}
+
+  function buildDiffSummary(u){
+    try{
+      const diff=computeDiff(u.chroniclesText||"",u.sourceText||"");
+      const added=[],omitted=[],changed=[];
+      diff.forEach(ch=>{
+        if(ch.type==="added"&&ch.aW&&ch.aW.length)added.push(ch.aW.join(" "));
+        else if(ch.type==="omitted"&&ch.bW&&ch.bW.length)omitted.push(ch.bW.join(" "));
+        else if(ch.type==="changed"){const w=(ch.aW||[]).join(" ");if(w)changed.push(w);}
+      });
+      const parts=[];
+      if(added.length)parts.push("תוספות ("+added.length+"): "+added.join(", "));
+      if(omitted.length)parts.push("השמטות ("+omitted.length+"): "+omitted.join(", "));
+      if(changed.length)parts.push("שינויים ("+changed.length+"): "+changed.join(", "));
+      return parts.join(" | ")||"אין הבדלים מסומנים";
+    }catch{return"—";}
+  }
+
+  function buildAnalysisSummary(uid){
+    const lines=[];
+    DIMS.forEach(dim=>{
+      const found=[];
+      allConcepts.filter(c=>c.dimId===dim.id).forEach(c=>{
+        const e=getE(uid,c.name,analysisMode);
+        if(!e)return;
+        const hasExp=!!(e.explicit_note&&e.explicit_note.trim());
+        const implCount=(e.params||[]).filter(p=>p.found===true).length;
+        const implVerses=(e.params||[]).filter(p=>p.found===true&&p.verse).map(p=>p.verse).join(", ");
+        if(hasExp||implCount>0){
+          let entry=c.name;
+          if(hasExp)entry+=" [גלוי: "+(e.explicit_note.substring(0,100))+(e.explicit_note.length>100?"...":"")+"]";
+          if(implCount>0)entry+=" [נרמז: "+implCount+" פרמטרים"+(implVerses?" — פסוקים: "+implVerses:"")+"]";
+          found.push(entry);
+        }
+      });
+      if(found.length)lines.push(dim.label+":\n"+found.map(f=>"  • "+f).join("\n"));
+    });
+    return lines.join("\n\n")||"טרם בוצע ניתוח ליחידה זו";
+  }
+
+  async function runUnitSynthesis(){
+    if(!selUnit)return;
+    const u=allUnits.find(u=>u.id===selUnit);
+    if(!u)return;
+    setAiLoading(true);setAiResult("");setEditText("");
+    const diffSummary=buildDiffSummary(u);
+    const analysisSummary=buildAnalysisSummary(u.id);
+    const prompt=`אתה עוזר מחקר לתזת דוקטורט בתנ"ך. עליך לכתוב פסקה אקדמית מוכנה לתזה.
+
+הנושא: עיצוב דמויותיהם של דוד ושלמה בספר דברי הימים לאור חזון המלך האידיאלי בישעיהו, ירמיהו ויחזקאל.
+
+יחידה ספרותית: ${u.label}
+דמות: ${u.character==="david"?"דוד":u.character==="solomon"?"שלמה":"—"}
+מקביל: ${u.sourceRef||"—"}
+
+טקסט דברי הימים:
+${u.chroniclesText||"—"}
+
+טקסט מקביל:
+${u.sourceText||"—"}
+
+שינויים שעשה הכרוניסט:
+${diffSummary}
+
+ממצאי הניתוח לפי ממדים:
+${analysisSummary}
+
+הנחיות:
+• כתוב פסקה אקדמית אחת בעברית (כ-150-200 מילה)
+• התמקד בממצאים הבולטים ביותר
+• קשר בין שינויי הכרוניסט לממדים הנבואיים
+• ניסוח אקדמי מדויק, ללא כותרת
+• סמן [ביסוס נדרש] במקומות הדורשים ציטוט חוקרים`;
+    try{
+      const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      const text=data.content&&data.content.map(b=>b.text||"").join("")||"שגיאה";
+      setAiResult(text);setEditText(text);
+    }catch(err){setAiResult("שגיאת חיבור: "+err.message);}
+    setAiLoading(false);
+  }
+
+  async function runDimSynthesis(){
+    const dim=DIMS.find(d=>d.id===selDim);
+    if(!dim)return;
+    setAiLoading(true);setAiResult("");setEditText("");
+    const concepts=allConcepts.filter(c=>c.dimId===selDim);
+    const davidUnits=allUnits.filter(u=>u.character==="david"||!u.character);
+    const solomonUnits=allUnits.filter(u=>u.character==="solomon");
+    const statsText=concepts.map(c=>{
+      const dFound=davidUnits.filter(u=>{const e=getE(u.id,c.name,analysisMode);return e&&(e.explicit_note&&e.explicit_note.trim()||(e.params||[]).some(p=>p.found===true));});
+      const sFound=solomonUnits.filter(u=>{const e=getE(u.id,c.name,analysisMode);return e&&(e.explicit_note&&e.explicit_note.trim()||(e.params||[]).some(p=>p.found===true));});
+      const examples=[];
+      [...dFound,...sFound].slice(0,3).forEach(u=>{
+        const e=getE(u.id,c.name);
+        if(e&&e.explicit_note&&e.explicit_note.trim())examples.push(u.label+" (גלוי): "+e.explicit_note.substring(0,80));
+        const iv=(e&&e.params||[]).filter(p=>p.found===true&&p.verse).map(p=>p.verse).join(", ");
+        if(iv)examples.push(u.label+" (נרמז — פסוק: "+iv+")");
+      });
+      return "\nמושג: "+c.name+"\n  דוד: "+dFound.length+"/"+davidUnits.length+" | שלמה: "+sFound.length+"/"+solomonUnits.length+"\n  דוגמאות: "+(examples.length?examples.join("; "):"אין עדיין");
+    }).join("\n");
+    const prompt=`אתה עוזר מחקר לתזת דוקטורט בתנ"ך. עליך לכתוב ניתוח אקדמי מוכן לתזה.
+
+הנושא: עיצוב דמויותיהם של דוד ושלמה בספר דברי הימים לאור חזון המלך האידיאלי.
+
+ממד: ${dim.label}
+מושגים: ${concepts.map(c=>c.name).join(", ")}
+
+נתונים וממצאים:
+${statsText}
+
+סה"כ יחידות: ${allUnits.length} (דוד: ${davidUnits.length} | שלמה: ${solomonUnits.length})
+
+הנחיות:
+• שתי פסקאות אקדמיות בעברית (כ-250-300 מילה סה"כ)
+• פסקה א: ממצאים בדוד — מושגים בולטים, תדירות, דפוסים
+• פסקה ב: ממצאים בשלמה + השוואה לדוד
+• ציין מספרים: "המושג X מופיע ב-Y מתוך Z יחידות"
+• קשר לחזון הנבואי
+• [ביסוס נדרש] בנקודות הדורשות ציטוט
+• ללא כותרות`;
+    try{
+      const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1200,messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      const text=data.content&&data.content.map(b=>b.text||"").join("")||"שגיאה";
+      setAiResult(text);setEditText(text);
+    }catch(err){setAiResult("שגיאת חיבור: "+err.message);}
+    setAiLoading(false);
+  }
+
+  function saveSynthesis(){
+    const key=mode==="unit"?"unit_"+selUnit:"dim_"+selDim;
+    const label=mode==="unit"?(allUnits.find(u=>u.id===selUnit)||{label:"יחידה"}).label:(DIMS.find(d=>d.id===selDim)||{label:"ממד"}).label;
+    const entry={key,label,mode,text:editText,scholars,savedAt:new Date().toLocaleDateString("he-IL")};
+    const updated=Object.assign({},saved);updated[key]=entry;
+    setSaved(updated);SLS.save(updated);flash("✓ נשמר");
+  }
+
+  function loadSaved(key){
+    const entry=saved[key];
+    if(!entry)return;
+    setEditText(entry.text||"");setScholars(entry.scholars||"");setAiResult(entry.text||"");
+    if(entry.mode==="unit"){setMode("unit");setSelUnit(Number(entry.key.replace("unit_","")));}
+    else{setMode("dim");setSelDim(entry.key.replace("dim_",""));}
+  }
+
+  const davidUnits=allUnits.filter(u=>u.character==="david"||!u.character);
+  const solomonUnits=allUnits.filter(u=>u.character==="solomon");
+
+  return(
+    <div style={{maxWidth:"900px",margin:"0 auto",padding:"20px 16px"}}>
+      <div style={{background:"#1e293b",border:"1px solid #334155",borderRadius:"10px",padding:"14px",marginBottom:"16px",background:"linear-gradient(135deg,#1e293b,#0f172a)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"10px"}}>
+          <div>
+            <div style={{fontSize:"16px",fontWeight:"bold",color:"#f1f5f9"}}>✍️ סינתזה — טקסט מוכן לתזה</div>
+            <div style={{fontSize:"12px",color:"#64748b",marginTop:"3px"}}>שלב ג׳: ניתוח AI → שלב ד׳: עריכה + הוספת מחקרים</div>
+          </div>
+          <button onClick={()=>setShowSaved(s=>!s)}
+            style={{padding:"6px 14px",borderRadius:"14px",border:"1px solid #334155",cursor:"pointer",fontSize:"12px",background:"#334155",color:"#94a3b8"}}>
+            {showSaved?"▲ סגור":"📁 טיוטות ("+(Object.keys(saved).length)+")"}
+          </button>
+        </div>
+      </div>
+
+      {showSaved&&(
+        <div style={{background:"#1e293b",border:"1px solid #334155",borderRadius:"10px",padding:"14px",marginBottom:"16px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"10px"}}>טיוטות שמורות</div>
+          {Object.keys(saved).length===0?(
+            <div style={{fontSize:"12px",color:"#475569"}}>אין טיוטות עדיין</div>
+          ):(
+            <div style={{display:"grid",gap:"6px"}}>
+              {Object.values(saved).map(entry=>(
+                <div key={entry.key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#0f172a",borderRadius:"7px",padding:"8px 12px",border:"1px solid #334155"}}>
+                  <div>
+                    <span style={{fontSize:"12px",color:"#e2e8f0",fontWeight:"600"}}>{entry.label}</span>
+                    <span style={{fontSize:"11px",color:"#475569",marginRight:"8px"}}> — {entry.savedAt}</span>
+                  </div>
+                  <div style={{display:"flex",gap:"6px"}}>
+                    <button onClick={()=>loadSaved(entry.key)} style={{padding:"3px 10px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"11px",background:"#818cf8",color:"white"}}>טען</button>
+                    <button onClick={()=>{const u=Object.assign({},saved);delete u[entry.key];setSaved(u);SLS.save(u);}} style={{padding:"3px 10px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"11px",background:"#334155",color:"#94a3b8"}}>מחק</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:"8px",marginBottom:"16px"}}>
+        {[["unit","📄 לפי יחידה"],["dim","📊 לפי ממד"]].map(([v,l])=>(
+          <button key={v} onClick={()=>{setMode(v);setAiResult("");setEditText("");setScholars("");}}
+            style={{padding:"8px 18px",borderRadius:"20px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"600",
+              background:mode===v?"#818cf8":"#1e293b",color:mode===v?"white":"#64748b"}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {mode==="unit"&&(
+        <div style={{background:"#1e293b",border:"1px solid #334155",borderRadius:"10px",padding:"14px",marginBottom:"16px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"12px"}}>בחרי יחידה</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"12px"}}>
+            {[["דוד","david","#93c5fd",davidUnits],["שלמה","solomon","#d8b4fe",solomonUnits]].map(([name,char,color,units])=>(
+              <div key={char}>
+                <div style={{fontSize:"11px",color:color,fontWeight:"700",marginBottom:"6px"}}>👑 {name} ({units.length})</div>
+                <div style={{maxHeight:"200px",overflowY:"auto",display:"grid",gap:"3px"}}>
+                  {units.map(u=>(
+                    <button key={u.id} onClick={()=>{setSelUnit(u.id);setAiResult("");setEditText("");setScholars("");}}
+                      style={{padding:"5px 8px",borderRadius:"6px",border:"1px solid "+(selUnit===u.id?color:"#334155"),cursor:"pointer",textAlign:"right",
+                        background:selUnit===u.id?"#1e3a5f":"#0f172a",color:selUnit===u.id?"#e2e8f0":"#94a3b8",fontSize:"11px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <span>{u.label}</span>
+                      {saved["unit_"+u.id]&&<span style={{fontSize:"9px",color:"#34d399"}}>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          {selUnit&&(
+            <button onClick={runUnitSynthesis} disabled={aiLoading}
+              style={{width:"100%",padding:"10px",borderRadius:"8px",border:"none",cursor:aiLoading?"wait":"pointer",
+                background:aiLoading?"#1e293b":"#7c3aed",color:aiLoading?"#475569":"white",fontSize:"13px",fontWeight:"700"}}>
+              {aiLoading?"⏳ מייצר...":"🤖 צור סינתזה ליחידה זו"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {mode==="dim"&&(
+        <div style={{background:"#1e293b",border:"1px solid #334155",borderRadius:"10px",padding:"14px",marginBottom:"16px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"10px"}}>בחרי ממד נבואי</div>
+          <div style={{display:"grid",gap:"6px",marginBottom:"12px"}}>
+            {DIMS.map(dim=>{
+              const concepts=allConcepts.filter(c=>c.dimId===dim.id);
+              const totalFound=allUnits.filter(u=>concepts.some(c=>{const e=getE(u.id,c.name);return e&&(e.explicit_note&&e.explicit_note.trim()||(e.params||[]).some(p=>p.found===true));})).length;
+              return(
+                <button key={dim.id} onClick={()=>{setSelDim(dim.id);setAiResult("");setEditText("");setScholars("");}}
+                  style={{padding:"10px 14px",borderRadius:"8px",border:"2px solid "+(selDim===dim.id?dim.color:"#334155"),cursor:"pointer",textAlign:"right",
+                    background:selDim===dim.id?"#1e293b":"#0f172a",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <span style={{fontSize:"13px",fontWeight:"700",color:dim.color}}>{dim.label}</span>
+                    <span style={{fontSize:"11px",color:"#475569",marginRight:"8px"}}> | {concepts.map(c=>c.name).join(", ")}</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontSize:"11px",color:"#64748b"}}>{totalFound}/{allUnits.length}</span>
+                    {saved["dim_"+dim.id]&&<span style={{fontSize:"11px",color:"#34d399"}}>✓</span>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={runDimSynthesis} disabled={aiLoading}
+            style={{width:"100%",padding:"10px",borderRadius:"8px",border:"none",cursor:aiLoading?"wait":"pointer",
+              background:aiLoading?"#1e293b":"#7c3aed",color:aiLoading?"#475569":"white",fontSize:"13px",fontWeight:"700"}}>
+            {aiLoading?"⏳ מנתח...":"🤖 צור ניתוח לממד"}
+          </button>
+        </div>
+      )}
+
+      {(aiResult||editText)?(
+        <div style={{background:"#1e293b",border:"1px solid #334155",borderRadius:"10px",padding:"14px",marginBottom:"16px"}}>
+          <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
+            <span style={{background:"#7c3aed22",border:"1px solid #7c3aed44",color:"#a78bfa",padding:"2px 10px",borderRadius:"12px",fontSize:"11px",fontWeight:"700"}}>שלב ג׳: טקסט AI</span>
+            <span style={{background:"#05996022",border:"1px solid #05996044",color:"#34d399",padding:"2px 10px",borderRadius:"12px",fontSize:"11px",fontWeight:"700"}}>שלב ד׳: עריכה + מחקרים</span>
+          </div>
+          <label style={{display:"block",fontSize:"11px",fontWeight:"700",color:"#a5b4fc",marginBottom:"4px",textTransform:"uppercase"}}>עריכת הטקסט</label>
+          <textarea value={editText} onChange={e=>setEditText(e.target.value)} rows={10}
+            style={{width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:"6px",padding:"7px 10px",fontSize:"14px",color:"#e2e8f0",outline:"none",boxSizing:"border-box",resize:"vertical",lineHeight:"1.9",direction:"rtl",marginBottom:"12px",fontFamily:"inherit"}}/>
+          <label style={{display:"block",fontSize:"11px",fontWeight:"700",color:"#34d399",marginBottom:"4px",textTransform:"uppercase"}}>📚 הוספת מחקרים וציטוטים</label>
+          <textarea value={scholars} onChange={e=>setScholars(e.target.value)} rows={4}
+            style={{width:"100%",background:"#0f172a",border:"1px solid #065f46",borderRadius:"6px",padding:"7px 10px",fontSize:"13px",color:"#e2e8f0",outline:"none",boxSizing:"border-box",resize:"vertical",lineHeight:"1.8",direction:"rtl",marginBottom:"12px",fontFamily:"inherit"}}
+            placeholder={"לדוגמה:\n• Japhet 2009, עמ' 365 — על האידיאליזציה של דוד\n• Knoppers 2004, עמ' 132 — על כל ישראל\n• [ביסוס נדרש] — הוסיפי את הציטוט"}/>
+          {scholars.trim()&&(
+            <div style={{marginBottom:"12px"}}>
+              <div style={{fontSize:"11px",color:"#34d399",fontWeight:"700",marginBottom:"6px"}}>📋 טקסט מלא (מוכן להעתקה)</div>
+              <div style={{background:"#022c22",border:"1px solid #065f46",borderRadius:"7px",padding:"12px 14px",fontSize:"13px",color:"#d1fae5",lineHeight:"2",whiteSpace:"pre-wrap",direction:"rtl",fontFamily:"inherit"}}>
+                {editText+`\n\n`+scholars}
+              </div>
+            </div>
+          )}
+          <div style={{display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
+            <button onClick={saveSynthesis} style={{padding:"8px 20px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#16a34a",color:"white",fontSize:"13px",fontWeight:"700"}}>💾 שמור</button>
+            <button onClick={()=>{
+              const text=scholars.trim()?editText+"\n\n"+scholars:editText;
+              if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(()=>flash("✓ הועתק")).catch(()=>flash("לא ניתן להעתיק"));}
+              else flash("לא ניתן להעתיק");
+            }} style={{padding:"8px 20px",borderRadius:"8px",border:"1px solid #334155",cursor:"pointer",background:"#1e293b",color:"#94a3b8",fontSize:"13px",fontWeight:"700"}}>📋 העתק</button>
+            <button onClick={()=>{setAiResult("");setEditText("");setScholars("");}} style={{padding:"8px 14px",borderRadius:"8px",border:"1px solid #334155",cursor:"pointer",background:"transparent",color:"#64748b",fontSize:"12px"}}>נקה</button>
+            {saveMsg&&<span style={{color:"#34d399",fontSize:"12px",fontWeight:"700"}}>{saveMsg}</span>}
+          </div>
+        </div>
+      ):(
+        <div style={{textAlign:"center",padding:"40px 0",color:"#334155"}}>
+          <div style={{fontSize:"40px",marginBottom:"12px"}}>✍️</div>
+          <div style={{fontSize:"14px",color:"#475569"}}>בחרי יחידה או ממד ולחצי על "צור סינתזה"</div>
+          <div style={{fontSize:"12px",color:"#334155",marginTop:"6px"}}>הטקסט יהיה מוכן לעריכה ולהוספת מחקרים</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script></body></html>
