@@ -629,7 +629,7 @@ ${paramsList}
 }
 
 // ── Header ────────────────────────────────────────────────────────────
-function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImportConcepts,onExportAll,onImportAll,analysisMode,setAnalysisMode}){
+function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImportConcepts,onExportAll,onImportAll,onCloudSave,analysisMode,setAnalysisMode}){
   const fileRef=React.useRef();
   const fullImportRef=React.useRef();
   const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
@@ -641,6 +641,7 @@ function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImport
         {msg&&<span style={{color:"#34d399",fontSize:"12px",fontWeight:"600"}}>{msg}</span>}
         <button onClick={onLoad} style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #475569",cursor:"pointer",fontSize:"12px",background:"#334155",color:"#94a3b8"}}>📂 פתח</button>
         <button onClick={onSave} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",background:"#16a34a",color:"white"}}>💾 שמור</button>
+        <button onClick={onCloudSave} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",background:"#0891b2",color:"white"}}>☁️ שמור לענן</button>
         <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
         {/* Mode selector */}
         <div style={{display:"flex",gap:"3px",background:"#0f172a",borderRadius:"16px",padding:"2px",border:`1px solid ${modeColor}44`}}>
@@ -677,6 +678,7 @@ function App(){
   const [newParams,setNewParams]=useState(Array(10).fill(""));
 
   function flash(m){setMsg(m);setTimeout(()=>setMsg(""),2000);}
+  function cloudSave(){fbSave(raw);flash("☁️ נשמר לענן");}
 
   function setData(fn){
     setRaw(prev=>{
@@ -686,12 +688,6 @@ function App(){
       return next;
     });
   }
-
-  const isFirstLoad = React.useRef(true);
-  useEffect(()=>{
-    if(isFirstLoad.current){isFirstLoad.current=false;return;}
-    if(raw.units&&raw.units.length>0) fbSave(raw);
-  },[raw]);
 
   useEffect(()=>{
     let base={units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[]};
@@ -860,7 +856,7 @@ function App(){
 
   return(
     <div dir="rtl" style={{minHeight:"100vh",background:"#0f172a"}}>
-      <Header msg={msg} tab={tab} setTab={setTab} onLoad={loadFile} onSave={saveFile} onSaveAs={saveAs} onExportConcepts={exportConcepts} onImportConcepts={importConcepts} onExportAll={exportAll} onImportAll={importAll} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
+      <Header msg={msg} tab={tab} setTab={setTab} onLoad={loadFile} onSave={saveFile} onSaveAs={saveAs} onExportConcepts={exportConcepts} onImportConcepts={importConcepts} onExportAll={exportAll} onImportAll={importAll} onCloudSave={cloudSave} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
 
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>}
       {tab==="byunit"&&<ByUnitTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} onUnitSelect={setActiveUnit} analysisMode={analysisMode}/>}
