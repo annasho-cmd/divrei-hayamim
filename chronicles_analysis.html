@@ -438,7 +438,7 @@ ${unitText}
 3. **מסקנה** — האם המושג "${conceptName}" מופיע ישירות בטקסט?`;
     try{
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:500,messages:[{role:"user",content:prompt}]})});
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:500,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
       const text=data.content?.map(b=>b.text||"").join("")||"שגיאה";
       setExplAiRes(text);
@@ -494,7 +494,7 @@ ${paramsList}
 
     try{
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
       const raw=data.content?.map(b=>b.text||"").join("")||"";
       // Parse JSON
@@ -1491,7 +1491,7 @@ ${compLines.join("\n\n")||"אין ממצאים עדיין"}
 
     try{
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:600,messages:[{role:"user",content:prompt}]})});
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
       setAiResult(data.content?.map(b=>b.text||"").join("")||"שגיאה");
     }catch(e){setAiResult("שגיאת חיבור: "+e.message);}
@@ -1725,7 +1725,7 @@ ${analysisSummary}
 • סמן [ביסוס נדרש] במקומות הדורשים ציטוט חוקרים`;
     try{
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
       const text=data.content&&data.content.map(b=>b.text||"").join("")||"שגיאה";
       setAiResult(text);setEditText(text);
@@ -1774,7 +1774,7 @@ ${statsText}
 • ללא כותרות`;
     try{
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1200,messages:[{role:"user",content:prompt}]})});
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1200,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
       const text=data.content&&data.content.map(b=>b.text||"").join("")||"שגיאה";
       setAiResult(text);setEditText(text);
