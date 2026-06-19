@@ -6,6 +6,21 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBGFYQ5KQciHGqlsSqFW8F1-CLI6O-C9ys",
+      authDomain: "divrei-hayamim.firebaseapp.com",
+      databaseURL: "https://divrei-hayamim-default-rtdb.firebaseio.com",
+      projectId: "divrei-hayamim",
+      storageBucket: "divrei-hayamim.firebasestorage.app",
+      messagingSenderId: "102317276528",
+      appId: "1:102317276528:web:4b121eec9e51f5a0c263b5"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+  </script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:'Segoe UI',Arial,sans-serif;background:#f8fafc;}
@@ -270,6 +285,17 @@ const CH_B=[
 const ALL_CH = [...CH_A,...CH_B];
 
 const STORAGE_KEY='chronicles_v7';
+const FB_PATH = "research";
+const fbSave = (data) => {
+  try { db.ref(FB_PATH).set({json: JSON.stringify(data)}); } catch(e) { console.error("FB save error",e); }
+};
+const fbLoad = (cb) => {
+  db.ref(FB_PATH).once("value").then(snap => {
+    const v=snap.val();
+    if(!v){cb(null);return;}
+    try{ cb(JSON.parse(v.json)); }catch{ cb(null); }
+  });
+};
 const COMMENTATORS_A=['Dirksen','Braun','Myers','Knoppers','Andersen','יפת'];
 const COMMENTATORS_B=['Myers','Andersen','יפת'];
 function getCommentators(unit){ return unit?.character==='solomon'?COMMENTATORS_B:COMMENTATORS_A; }
@@ -421,30 +447,42 @@ function App(){
   const [comLoading,setComLoading]    = useState(false);
       const subs=[];
   // ── helpers that also cache to localStorage ──
-  function setUnits(u){ setUnitsRaw(u); try{localStorage.setItem(STORAGE_KEY,JSON.stringify({...extraData,units:u,overrides,commentary}));}catch{} }
+  function setUnits(u){ setUnitsRaw(u); const d={...extraData,units:u,overrides,commentary}; try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{} fbSave(d); }
   function setOv(ovOrFn){
     setOvRaw(prev=>{
       const ov=typeof ovOrFn==='function'?ovOrFn(prev):ovOrFn;
-      try{localStorage.setItem(STORAGE_KEY,JSON.stringify({...extraData,units,overrides:ov,commentary}));}catch{}
+      const d={...extraData,units,overrides:ov,commentary};
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{}
+      fbSave(d);
       return ov;
     });
   }
   function setCommentary(unitId,name,text){
     setCommentaryRaw(prev=>{
       const next={...prev,[unitId]:{...(prev[unitId]||{}),[name]:text}};
-      try{localStorage.setItem(STORAGE_KEY,JSON.stringify({...extraData,units,overrides,commentary:next}));}catch{}
+      const d={...extraData,units,overrides,commentary:next};
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{}
+      fbSave(d);
       return next;
     });
   }
 
   function flash(m){ setMsg(m); setTimeout(()=>setMsg(''),2000); }
 
-  // ── load from localStorage on start ──
+  // ── load from Firebase on start (fallback to localStorage) ──
   useEffect(()=>{
-    try{
-      const r=localStorage.getItem(STORAGE_KEY);
-      if(r){const d=JSON.parse(r);setUnitsRaw(d.units||[]);setOvRaw(d.overrides||{});setCommentaryRaw(d.commentary||{});const {units:_u,overrides:_o,commentary:_c,...rest}=d;setExtraData(rest);}
-    }catch{}
+    fbLoad(d=>{
+      if(d&&d.units&&d.units.length>0){
+        setUnitsRaw(d.units||[]);setOvRaw(d.overrides||{});setCommentaryRaw(d.commentary||{});
+        const {units:_u,overrides:_o,commentary:_c,...rest}=d;setExtraData(rest);
+        flash('✓ נטען מהענן');
+      } else {
+        try{
+          const r=localStorage.getItem(STORAGE_KEY);
+          if(r){const d2=JSON.parse(r);setUnitsRaw(d2.units||[]);setOvRaw(d2.overrides||{});setCommentaryRaw(d2.commentary||{});const {units:_u,overrides:_o,commentary:_c,...rest}=d2;setExtraData(rest);}
+        }catch{}
+      }
+    });
   },[]);
 
   // ── file ops ──
