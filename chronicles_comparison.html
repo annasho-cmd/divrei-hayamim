@@ -1174,14 +1174,23 @@ ${comTexts}
 
             const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
               method:'POST',headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:3000,
+              body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:6000,
                 messages:[{role:'user',content:prompt}]})
             });
             const data=await res.json();
             const text=data.content?.map(b=>b.text||'').join('')||'';
             try{
               const clean=text.replace(/```json|```/g,'').trim();
-              setComSummary(JSON.parse(clean));
+              let parsed;
+              try{
+                parsed=JSON.parse(clean);
+              }catch(parseErr){
+                const lastValid=clean.lastIndexOf('},');
+                if(lastValid>0){
+                  parsed=JSON.parse(clean.substring(0,lastValid+1)+']');
+                } else throw parseErr;
+              }
+              setComSummary(parsed);
             }catch{setComSummary([{verse:'—',similar:text,different:'—',commentators:[]}]);}
           }catch(e){setComSummary([{verse:'שגיאה',similar:e.message,different:'—',commentators:[]}]);}
           setComLoading(false);
