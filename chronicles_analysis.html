@@ -529,17 +529,23 @@ ${paramsList}
     setImplAiLoad(false);
   }
 
-  // ── Re-check with scholarship interpretation — תוצאה משנית להשוואה ──
+  // ── Re-check with commentators (פרשנים) — דף מלא להשוואה ───────────
+  const [showScholarPage,setShowScholarPage]=useState(false);
   const [scholarAiLoad,setScholarAiLoad]=useState(false);
   const [scholarAiMsg,setScholarAiMsg]=useState("");
-  const [scholarResults,setScholarResults]=useState(null); // array aligned to validParams, or null
+  const [scholarResults,setScholarResults]=useState(null); // array aligned to validParams, or null — last AI result
+  const [draftResults,setDraftResults]=useState(null); // editable copy shown in column ב
+  const [scholarEditMode,setScholarEditMode]=useState(false);
+  const [scholarSavedMsg,setScholarSavedMsg]=useState("");
+
+  const validParamsCount=params.filter(p=>p&&(typeof p==="object"?p.q:p).trim()).length;
 
   async function runImplicitWithScholarship(){
     if(!unitText){setScholarAiMsg("אין טקסט ביחידה זו.");return;}
-    if(!scholarship){setScholarAiMsg("אין פרשנות ממחקר תורת שמור ליחידה זו.");return;}
+    if(!scholarship){setScholarAiMsg("אין הערות פרשנים שמורות ליחידה זו — יש להעביר אותן מכלי ההשוואה.");return;}
     const validParams=params.filter(p=>p&&(typeof p==="object"?p.q:p).trim());
     if(!validParams.length){setScholarAiMsg("אין פרמטרים מוגדרים.");return;}
-    setScholarAiLoad(true);setScholarAiMsg("");setScholarResults(null);
+    setScholarAiLoad(true);setScholarAiMsg("");
 
     const paramsList=validParams.map((p,i)=>{
       const q=typeof p==="object"?p.q:p;
@@ -549,7 +555,7 @@ ${paramsList}
 
     const semInfo=sem?`\nשדה סמנטי חיובי: ${sem.pos}\nשדה סמנטי שלילי: ${sem.neg}`:"";
 
-    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. בדוק מחדש האם המושג "${conceptName}" נרמז בטקסט לפי הפרמטרים, בהתחשב בפרשנות ממחקר תורת המצורפת.
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. בדוק מחדש האם המושג "${conceptName}" נרמז בטקסט לפי הפרמטרים, בהתחשב בהשוואת הפרשנים המצורפת.
 
 ⚠️ הנחיה קריטית: המחקר עוסק אך ורק בדמותו של ${character==="solomon"?"שלמה המלך":"דוד המלך"}. בדוק את הפרמטרים רק ביחס ל${character==="solomon"?"שלמה":"דוד"} — לא ביחס לדמויות אחרות המופיעות ביחידה כגון שרים, זקנים, עם, לויים או כל דמות אחרת.
 
@@ -558,7 +564,7 @@ ${unitText}
 ${semInfo}
 ${e.explicit_note?`\nממצא גלוי שכבר נמצא:\n${e.explicit_note}`:""}
 
-📝 פרשנות ממחקר תורת על יחידה זו (יש להתחשב בה ולשקלל אותה בבדיקה):
+📝 השוואת פרשנים על יחידה זו (יש להתחשב בה ולשקלל אותה בבדיקה):
 ${scholarship}
 
 פרמטרים לבדיקה:
@@ -567,9 +573,9 @@ ${paramsList}
 הוראות קריטיות:
 - ענה ONLY ב-JSON תקני, ללא טקסט לפני או אחרי
 - עבור כל פרמטר לפי מספרו הסדרי (1 עד ${validParams.length})
-- found: true אם יש ראיה ברורה בטקסט שמתייחסת ל${character==="solomon"?"שלמה":"דוד"} ספציפית, בהתחשב בפרשנות, false אם לא
+- found: true אם יש ראיה ברורה בטקסט שמתייחסת ל${character==="solomon"?"שלמה":"דוד"} ספציפית, בהתחשב בפרשנים, false אם לא
 - verse: מספר הפסוק אם found=true (למשל "(א)" או "(ג)"), אחרת ""
-- note: הסבר קצר בעברית (מקסימום 50 מילים) — ציין כיצד הפרשנות השפיעה על המסקנה, אם בכלל
+- note: הסבר קצר בעברית (מקסימום 50 מילים) — ציין כיצד הפרשנים השפיעו על המסקנה, אם בכלל
 
 פורמט JSON:
 [
@@ -599,33 +605,38 @@ ${paramsList}
         return item?{found:item.found,verse:item.verse||"",note:item.note||""}:{found:null,verse:"",note:""};
       });
       setScholarResults(aligned);
-      setScholarAiMsg(`✓ ${aligned.filter(i=>i.found).length} פרמטרים נמצאו לאחר שקלול פרשנות — השוואי ובחרי`);
+      setDraftResults(aligned.map(r=>({...r})));
+      setScholarEditMode(false);
+      setScholarAiMsg(`✓ ${aligned.filter(i=>i.found).length} פרמטרים נמצאו לאחר שקלול פרשנים`);
     }catch(err){
       setScholarAiMsg("שגיאה בפרסור JSON: "+err.message+". נסי שוב.");
     }
     setScholarAiLoad(false);
   }
 
-  function applyScholarResult(i){
-    if(!scholarResults||!scholarResults[i])return;
-    const newPs=[...(e.params||[])];
-    while(newPs.length<validParamsCount)newPs.push({found:null,verse:""});
-    newPs[i]={found:scholarResults[i].found,verse:scholarResults[i].verse,note:scholarResults[i].note};
-    onChange({...e,params:newPs});
+  function updDraft(i,k,v){
+    setDraftResults(prev=>{
+      const next=[...(prev||[])];
+      next[i]={...next[i],[k]:v};
+      return next;
+    });
   }
 
-  function applyAllScholarResults(){
-    if(!scholarResults)return;
+  function saveScholarPage(){
+    if(!draftResults)return;
     const newPs=[...(e.params||[])];
     while(newPs.length<validParamsCount)newPs.push({found:null,verse:""});
-    scholarResults.forEach((r,i)=>{newPs[i]={found:r.found,verse:r.verse,note:r.note};});
-    const notes=scholarResults.filter(r=>r.note).map((r,i)=>`פרמטר ${i+1}: ${r.found?"✅":"❌"} ${r.note}`).join("\n");
+    draftResults.forEach((r,i)=>{newPs[i]={found:r.found,verse:r.verse,note:r.note};});
+    const notes=draftResults.filter(r=>r.note).map((r,i)=>`פרמטר ${i+1}: ${r.found?"✅":"❌"} ${r.note}`).join("\n");
     onChange({...e,params:newPs,implicit_note:notes});
+    setScholarResults(draftResults.map(r=>({...r}))); // עכשיו זה הבסיס המוצג בעמודה ב'
+    setScholarEditMode(false);
+    setScholarSavedMsg("✓ נשמר!");
+    setTimeout(()=>setScholarSavedMsg(""),2000);
   }
-
-  const validParamsCount=params.filter(p=>p&&(typeof p==="object"?p.q:p).trim()).length;
 
   return(
+    <>
     <div>
       {/* ── גלוי ── */}
       <div style={{background:"#0f172a",borderRadius:"8px",padding:"12px",marginBottom:"12px",border:`1px solid ${e.explicit_note?"#34d39966":"#334155"}`}}>
@@ -720,67 +731,11 @@ ${paramsList}
           </div>
         )}
         {scholarship&&(
-          <div style={{marginBottom:"10px"}}>
-            <button onClick={runImplicitWithScholarship} disabled={scholarAiLoad}
-              style={{width:"100%",marginBottom:"8px",padding:"8px",borderRadius:"7px",border:"none",
-                cursor:scholarAiLoad?"wait":"pointer",background:scholarAiLoad?"#1e293b":"#3b0764",
-                color:scholarAiLoad?"#475569":"#e9d5ff",fontSize:"13px",fontWeight:"700"}}>
-              {scholarAiLoad?"⏳ בודק מחדש עם פרשנות...":"🔄 בדוק מחדש עם פרשנות ממחקר תורת"}
-            </button>
-            {scholarAiMsg&&(
-              <div style={{fontSize:"12px",color:scholarAiMsg.startsWith("✓")?"#34d399":"#fca5a5",marginBottom:"8px",padding:"6px 10px",background:"#1e293b",borderRadius:"6px"}}>
-                {scholarAiMsg}
-              </div>
-            )}
-            {scholarResults&&(
-              <div style={{background:"#0f172a",borderRadius:"7px",padding:"10px",border:"1px solid #6b21a866"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
-                  <div style={{fontSize:"12px",fontWeight:"700",color:"#e9d5ff"}}>⚖️ השוואה: לפני / אחרי שקלול פרשנות</div>
-                  <button onClick={applyAllScholarResults}
-                    style={{padding:"4px 10px",borderRadius:"12px",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:"700",background:"#7e22ce",color:"white"}}>
-                    החל הכל
-                  </button>
-                </div>
-                {(()=>{
-                  let vi=-1;
-                  return params.map((param,i)=>{
-                    const paramQ=typeof param==="object"?(param.q||""):param;
-                    if(!paramQ.trim())return null;
-                    vi++;
-                    const sr=scholarResults[vi];
-                    if(!sr)return null;
-                    const cur=(e.params||[])[i]||{found:null,verse:""};
-                    const changed=cur.found!==sr.found;
-                    return(
-                      <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px",paddingBottom:"8px",borderBottom:"1px solid #1e293b"}}>
-                        <div style={{gridColumn:"1 / -1",fontSize:"11px",color:"#cbd5e1",fontWeight:"600",lineHeight:"1.5"}}>{i+1}. {paramQ}</div>
-                        <div style={{background:"#1e293b",borderRadius:"6px",padding:"8px"}}>
-                          <div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"4px"}}>לפני</div>
-                          <div style={{fontSize:"12px",color:cur.found===true?"#818cf8":cur.found===false?"#64748b":"#475569",fontWeight:"700",marginBottom:"3px"}}>
-                            {cur.found===true?"כן ✓":cur.found===false?"לא ✗":"לא נבדק"} {cur.verse&&`${cur.verse}`}
-                          </div>
-                          {cur.note&&<div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.5",fontStyle:"italic"}}>{cur.note}</div>}
-                        </div>
-                        <div style={{background:changed?"#3b076433":"#1e293b",borderRadius:"6px",padding:"8px",border:changed?"1px solid #a855f766":"none"}}>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}>
-                            <div style={{fontSize:"10px",color:"#c084fc",fontWeight:"700"}}>אחרי פרשנות</div>
-                            <button onClick={()=>applyScholarResult(vi)}
-                              style={{padding:"2px 8px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"10px",fontWeight:"700",background:"#7e22ce",color:"white"}}>
-                              החל
-                            </button>
-                          </div>
-                          <div style={{fontSize:"12px",color:sr.found===true?"#c084fc":sr.found===false?"#64748b":"#475569",fontWeight:"700",marginBottom:"3px"}}>
-                            {sr.found===true?"כן ✓":sr.found===false?"לא ✗":"לא נבדק"} {sr.verse&&`${sr.verse}`}
-                          </div>
-                          {sr.note&&<div style={{fontSize:"11px",color:"#d8b4fe",lineHeight:"1.5",fontStyle:"italic"}}>{sr.note}</div>}
-                        </div>
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-            )}
-          </div>
+          <button onClick={()=>setShowScholarPage(true)}
+            style={{width:"100%",marginBottom:"10px",padding:"8px",borderRadius:"7px",border:"none",cursor:"pointer",
+              background:"#3b0764",color:"#e9d5ff",fontSize:"13px",fontWeight:"700"}}>
+            📖 בדיקה של הנרמז עם פרשנים
+          </button>
         )}
         <label style={{...S.label,marginTop:"6px"}}>הערות נרמז</label>
         <textarea value={e.implicit_note||""} onChange={ev=>upd("implicit_note",ev.target.value)} rows={3}
@@ -794,6 +749,123 @@ ${paramsList}
         </button>
       </div>
     </div>
+
+    {/* ── דף מלא: בדיקת הנרמז עם פרשנים ── */}
+    {showScholarPage&&(
+      <div style={{position:"fixed",inset:0,background:"#0a0f1a",zIndex:2000,overflowY:"auto",direction:"rtl"}}>
+        <div style={{position:"sticky",top:0,background:"#1e293b",borderBottom:"1px solid #334155",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",zIndex:10}}>
+          <div style={{fontSize:"15px",fontWeight:"bold",color:"#f1f5f9"}}>📖 בדיקה של הנרמז עם פרשנים — {conceptName}</div>
+          <button onClick={()=>setShowScholarPage(false)}
+            style={{padding:"6px 14px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#334155",color:"#cbd5e1",fontSize:"13px",fontWeight:"700"}}>
+            ✕ סגירה
+          </button>
+        </div>
+
+        <div style={{maxWidth:"1100px",margin:"0 auto",padding:"20px"}}>
+          {/* חלון השוואת פרשנים */}
+          <div style={{background:"#1e293b",borderRadius:"10px",padding:"16px",marginBottom:"20px",border:"1px solid #334155"}}>
+            <div style={{fontSize:"13px",fontWeight:"700",color:"#fbbf24",marginBottom:"8px"}}>📝 השוואת פרשנים על היחידה (מכלי ההשוואה)</div>
+            {scholarship?(
+              <div style={{fontSize:"13px",color:"#e2e8f0",lineHeight:"1.8",whiteSpace:"pre-wrap"}}>{scholarship}</div>
+            ):(
+              <div style={{fontSize:"12px",color:"#64748b"}}>אין הערות פרשנים שמורות ליחידה זו — יש להעביר אותן מכלי ההשוואה.</div>
+            )}
+          </div>
+
+          {/* הרצת/הרצה חדשה של הבדיקה */}
+          <button onClick={runImplicitWithScholarship} disabled={scholarAiLoad||!scholarship}
+            style={{width:"100%",marginBottom:"10px",padding:"9px",borderRadius:"7px",border:"none",
+              cursor:scholarAiLoad?"wait":"pointer",background:scholarAiLoad?"#1e293b":"#3b0764",
+              color:scholarAiLoad?"#475569":"#e9d5ff",fontSize:"13px",fontWeight:"700"}}>
+            {scholarAiLoad?"⏳ בודק מחדש עם פרשנים...":scholarResults?"🔄 הרץ בדיקה מחדש":"🤖 הרץ בדיקה עם פרשנים"}
+          </button>
+          {scholarAiMsg&&(
+            <div style={{fontSize:"12px",color:scholarAiMsg.startsWith("✓")?"#34d399":"#fca5a5",marginBottom:"14px",padding:"6px 10px",background:"#1e293b",borderRadius:"6px"}}>
+              {scholarAiMsg}
+            </div>
+          )}
+
+          {scholarResults&&draftResults&&(
+            <>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"16px",marginBottom:"16px"}}>
+                {/* עמודה א — בדיקת הפרמטרים ללא הפרשנות */}
+                <div>
+                  <div style={{fontSize:"13px",fontWeight:"700",color:"#818cf8",marginBottom:"10px"}}>📘 בדיקת הפרמטרים ללא הפרשנות</div>
+                  {(()=>{
+                    let vi=-1;
+                    return params.map((param,i)=>{
+                      const paramQ=typeof param==="object"?(param.q||""):param;
+                      if(!paramQ.trim())return null;
+                      vi++;
+                      const cur=(e.params||[])[i]||{found:null,verse:""};
+                      return(
+                        <div key={i} style={{background:"#1e293b",borderRadius:"7px",padding:"10px",marginBottom:"8px",border:"1px solid #334155"}}>
+                          <div style={{fontSize:"11px",color:"#cbd5e1",fontWeight:"600",marginBottom:"5px",lineHeight:"1.5"}}>{i+1}. {paramQ}</div>
+                          <div style={{fontSize:"12px",color:cur.found===true?"#818cf8":cur.found===false?"#64748b":"#475569",fontWeight:"700",marginBottom:"4px"}}>
+                            {cur.found===true?"כן ✓":cur.found===false?"לא ✗":"לא נבדק"} {cur.verse&&cur.verse}
+                          </div>
+                          {cur.note&&<div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.5",fontStyle:"italic"}}>{cur.note}</div>}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+
+                {/* עמודה ב — בדיקה חוזרת עם הפרשנים, ניתנת לעריכה */}
+                <div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+                    <div style={{fontSize:"13px",fontWeight:"700",color:"#c084fc"}}>🔮 בדיקה חוזרת עם הפרשנים{scholarEditMode?" (במצב עריכה)":""}</div>
+                  </div>
+                  {draftResults.map((dr,vi)=>(
+                    <div key={vi} style={{background:scholarEditMode?"#3b076433":"#1e293b",borderRadius:"7px",padding:"10px",marginBottom:"8px",border:scholarEditMode?"1px solid #a855f766":"1px solid #334155"}}>
+                      {scholarEditMode?(
+                        <div>
+                          <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap",marginBottom:"7px"}}>
+                            {[["true","כן ✓","#c084fc"],["false","לא ✗","#475569"],["null","לא נבדק","#334155"]].map(([v,l,bg])=>(
+                              <button key={v} onClick={()=>updDraft(vi,"found",v==="null"?null:v==="true")}
+                                style={{padding:"4px 10px",borderRadius:"12px",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:"600",
+                                  background:String(dr.found)===v?bg:"#0f172a",color:String(dr.found)===v?"white":"#475569"}}>
+                                {l}
+                              </button>
+                            ))}
+                            <input value={dr.verse||""} onChange={ev=>updDraft(vi,"verse",ev.target.value)} placeholder="פסוק..."
+                              style={{...S.input,flex:1,minWidth:"80px",padding:"4px 8px",fontSize:"12px"}}/>
+                          </div>
+                          <textarea value={dr.note||""} onChange={ev=>updDraft(vi,"note",ev.target.value)} rows={2}
+                            placeholder="הערה / הסבר..." style={{...S.input,resize:"vertical",fontSize:"12px",lineHeight:"1.6"}}/>
+                        </div>
+                      ):(
+                        <div>
+                          <div style={{fontSize:"12px",color:dr.found===true?"#c084fc":dr.found===false?"#64748b":"#475569",fontWeight:"700",marginBottom:"4px"}}>
+                            {dr.found===true?"כן ✓":dr.found===false?"לא ✗":"לא נבדק"} {dr.verse&&dr.verse}
+                          </div>
+                          {dr.note&&<div style={{fontSize:"11px",color:"#d8b4fe",lineHeight:"1.5",fontStyle:"italic"}}>{dr.note}</div>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* פעולות: ערוך / שמור */}
+              <div style={{display:"flex",gap:"10px",alignItems:"center",marginBottom:"30px"}}>
+                <button onClick={()=>setScholarEditMode(m=>!m)}
+                  style={{padding:"9px 18px",borderRadius:"8px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"700",
+                    background:scholarEditMode?"#475569":"#334155",color:scholarEditMode?"white":"#cbd5e1"}}>
+                  {scholarEditMode?"✓ סיום עריכה":"✏️ ערוך"}
+                </button>
+                <button onClick={saveScholarPage}
+                  style={{padding:"9px 18px",borderRadius:"8px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:"700",
+                    background:scholarSavedMsg?"#16a34a":"#7e22ce",color:"white",transition:"background 0.3s"}}>
+                  {scholarSavedMsg||"💾 שמור"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
