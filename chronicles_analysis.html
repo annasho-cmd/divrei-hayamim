@@ -390,6 +390,16 @@ window.addEventListener("beforeunload",(e)=>{
   }
 });
 
+// ── AI helper: מחזירה תיאור שגיאה קריא מתוך תגובת ה-AI, במקום "שגיאה" ריקה ──
+function aiErrorText(data){
+  try{
+    if(data?.error?.message) return data.error.message;
+    if(data?.error) return JSON.stringify(data.error).slice(0,250);
+    if(typeof data?.message==="string") return data.message;
+    return "תגובה לא צפויה מהשרת: "+JSON.stringify(data).slice(0,250);
+  }catch{ return "תגובה לא צפויה מהשרת (לא ניתן לפענוח)."; }
+}
+
 // Keep localStorage as fallback
 const STORAGE_KEY="chronicles_v7";
 const LS={
@@ -460,11 +470,15 @@ ${unitText}
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:500,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
-      const text=data.content?.map(b=>b.text||"").join("")||"שגיאה";
-      setExplAiRes(text);
-      // שמירה אוטומטית לתיבה
-      onChange({...e,explicit_note:text});
-    }catch(err){setExplAiRes("שגיאת חיבור: "+err.message);}
+      if(!data.content||!data.content.length){
+        setExplAiRes("⚠️ שגיאת AI: "+aiErrorText(data));
+      }else{
+        const text=data.content.map(b=>b.text||"").join("");
+        setExplAiRes(text);
+        // שמירה אוטומטית לתיבה
+        onChange({...e,explicit_note:text});
+      }
+    }catch(err){setExplAiRes("⚠️ שגיאת חיבור: "+err.message);}
     setExplAiLoad(false);
   }
 
@@ -516,7 +530,10 @@ ${paramsList}
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:4000,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
-      const raw=data.content?.map(b=>b.text||"").join("")||"";
+      if(!data.content||!data.content.length){
+        throw new Error("שגיאת AI: "+aiErrorText(data));
+      }
+      const raw=data.content.map(b=>b.text||"").join("");
       // Parse JSON
       const clean=raw.replace(/```json|```/g,"").trim();
       let parsed;
@@ -544,7 +561,7 @@ ${paramsList}
       onChange({...e,params:newPs,implicit_note:notes});
       setImplAiMsg(`✓ ${parsed.filter(i=>i.found).length} פרמטרים נמצאו — עברי ותקני`);
     }catch(err){
-      setImplAiMsg("שגיאה בפרסור JSON: "+err.message+". נסי שוב.");
+      setImplAiMsg("⚠️ "+err.message+(err.message.startsWith("שגיאת AI")?"":" — נסי שוב."));
     }
     setImplAiLoad(false);
   }
@@ -608,7 +625,10 @@ ${paramsList}
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:4000,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
-      const rawText=data.content?.map(b=>b.text||"").join("")||"";
+      if(!data.content||!data.content.length){
+        throw new Error("שגיאת AI: "+aiErrorText(data));
+      }
+      const rawText=data.content.map(b=>b.text||"").join("");
       const clean=rawText.replace(/```json|```/g,"").trim();
       let parsed;
       try{
@@ -629,7 +649,7 @@ ${paramsList}
       setScholarEditMode(false);
       setScholarAiMsg(`✓ ${aligned.filter(i=>i.found).length} פרמטרים נמצאו לאחר שקלול פרשנים`);
     }catch(err){
-      setScholarAiMsg("שגיאה בפרסור JSON: "+err.message+". נסי שוב.");
+      setScholarAiMsg("⚠️ "+err.message+(err.message.startsWith("שגיאת AI")?"":" — נסי שוב."));
     }
     setScholarAiLoad(false);
   }
@@ -750,12 +770,15 @@ ${paramsList}
             <div style={{fontSize:"12px",color:"#94a3b8",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{scholarship}</div>
           </div>
         )}
-        {scholarship&&(
-          <button onClick={()=>setShowScholarPage(true)}
-            style={{width:"100%",marginBottom:"10px",padding:"8px",borderRadius:"7px",border:"none",cursor:"pointer",
-              background:"#3b0764",color:"#e9d5ff",fontSize:"13px",fontWeight:"700"}}>
-            📖 בדיקה של הנרמז עם פרשנים
-          </button>
+        <button onClick={()=>scholarship&&setShowScholarPage(true)} disabled={!scholarship}
+          style={{width:"100%",marginBottom:"6px",padding:"8px",borderRadius:"7px",border:"none",cursor:scholarship?"pointer":"not-allowed",
+            background:scholarship?"#3b0764":"#1e293b",color:scholarship?"#e9d5ff":"#475569",fontSize:"13px",fontWeight:"700"}}>
+          📖 בדיקה של הנרמז עם פרשנים
+        </button>
+        {!scholarship&&(
+          <div style={{fontSize:"11px",color:"#64748b",marginBottom:"10px",padding:"0 4px"}}>
+            אין הערות פרשנים שמורות ליחידה זו — יש להעביר אותן מכלי ההשוואה כדי להפעיל את הבדיקה.
+          </div>
         )}
         <label style={{...S.label,marginTop:"6px"}}>הערות נרמז</label>
         <textarea value={e.implicit_note||""} onChange={ev=>upd("implicit_note",ev.target.value)} rows={3}
@@ -1769,9 +1792,12 @@ ${unit.scholarship?.trim()||"אין הערות פרשנים שמורות ליח�
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1200,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
-      const text=data.content?.map(b=>b.text||"").join("")||"שגיאה";
-      setDraftNote(text);
-    }catch(err){setDraftNote("שגיאת חיבור: "+err.message);}
+      if(!data.content||!data.content.length){
+        setDraftNote("⚠️ שגיאת AI: "+aiErrorText(data));
+      }else{
+        setDraftNote(data.content.map(b=>b.text||"").join(""));
+      }
+    }catch(err){setDraftNote("⚠️ שגיאת חיבור: "+err.message);}
     setAiLoading(false);
   }
 
@@ -2009,9 +2035,13 @@ ${analysisSummary}
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
-      const text=data.content&&data.content.map(b=>b.text||"").join("")||"שגיאה";
-      setAiResult(text);setEditText(text);
-    }catch(err){setAiResult("שגיאת חיבור: "+err.message);}
+      if(!data.content||!data.content.length){
+        setAiResult("⚠️ שגיאת AI: "+aiErrorText(data));setEditText("");
+      }else{
+        const text=data.content.map(b=>b.text||"").join("");
+        setAiResult(text);setEditText(text);
+      }
+    }catch(err){setAiResult("⚠️ שגיאת חיבור: "+err.message);}
     setAiLoading(false);
   }
 
@@ -2058,9 +2088,13 @@ ${statsText}
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1200,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
-      const text=data.content&&data.content.map(b=>b.text||"").join("")||"שגיאה";
-      setAiResult(text);setEditText(text);
-    }catch(err){setAiResult("שגיאת חיבור: "+err.message);}
+      if(!data.content||!data.content.length){
+        setAiResult("⚠️ שגיאת AI: "+aiErrorText(data));setEditText("");
+      }else{
+        const text=data.content.map(b=>b.text||"").join("");
+        setAiResult(text);setEditText(text);
+      }
+    }catch(err){setAiResult("⚠️ שגיאת חיבור: "+err.message);}
     setAiLoading(false);
   }
 
