@@ -296,8 +296,8 @@ const fbLoad = (cb) => {
     try{ cb(JSON.parse(v.json)); }catch{ cb(null); }
   });
 };
-const COMMENTATORS_A=['Dirksen','Braun','Myers','Knoppers','Andersen','יפת'];
-const COMMENTATORS_B=['Myers','Andersen','יפת'];
+const COMMENTATORS_A=['דירקסון','מיירס','קליין','קנופרס','קרטיס ומדיסון','יפת','בראון'];
+const COMMENTATORS_B=['דילארד','מיירס','קליין','יפת','קרטיס ומדיסון'];
 function getCommentators(unit){ return unit?.character==='solomon'?COMMENTATORS_B:COMMENTATORS_A; }
 
 // ── Prophetic Dimensions (hardcoded) ─────────────────────────────────
@@ -465,6 +465,18 @@ function App(){
       fbSave(d);
       return next;
     });
+  }
+
+  function sendSummaryToAnalysis(unit,summary){
+    const text=summary.map(row=>{
+      const coms=Array.isArray(row.commentators)
+        ? row.commentators.map(c=>typeof c==='object'?`${c.name}${c.page?` (עמ' ${c.page})`:''}`:c).join(', ')
+        : (row.commentators||'');
+      return `פסוק ${row.verse}:\nדומה: ${row.similar}\nשונה: ${row.different}\nפרשנים: ${coms}`;
+    }).join('\n\n');
+    const newUnits=units.map(u=>u.id===unit.id?{...u,scholarship:text}:u);
+    setUnits(newUnits);
+    alert('✓ הסיכום נשלח לכלי האנליטי (שדה מחקר תורת) — יופיע ביחידה זו');
   }
 
   function flash(m){ setMsg(m); setTimeout(()=>setMsg(''),2000); }
@@ -1154,15 +1166,15 @@ ${comTexts}
 השב ב-JSON בלבד, ללא הסברים נוספים, ללא backticks.
 פורמט: מערך JSON של אובייקטים, כל אחד עם:
 - "verse": פסוק (כגון "א", "ב", "כללי")
-- "similar": מה הפרשנים מסכימים, כולל ציון עמודים רלוונטיים
-- "different": היכן חולקים, כולל ציון עמודים. אם אין מחלוקת: "אין מחלוקת"
-- "commentators": מערך שמות הפרשנים שהתייחסו לפסוק זה
+- "similar": מה הפרשנים מסכימים. ציטטי לצד כל טענה את שם הפרשן ומספר העמוד בסוגריים, למשל: "הפרשנים מסכימים ש... (דירקסון, עמ' 45; יפת, עמ' 112)"
+- "different": היכן חולקים, באותו פורמט עם שם פרשן ועמוד לצד כל דעה. אם אין מחלוקת: "אין מחלוקת"
+- "commentators": מערך אובייקטים {"name":"שם הפרשן","page":"מספר עמוד"} עבור הפרשנים שהתייחסו לפסוק זה
 
-אם דעה אינה קשורה לפסוק ספציפי, השתמש ב"כללי".`;
+אם דעה אינה קשורה לפסוק ספציפי, השתמש ב"כללי". אם פרשן לא ציין מספר עמוד מפורש, כתבי page:"".`;
 
             const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
               method:'POST',headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:2500,
+              body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:3000,
                 messages:[{role:'user',content:prompt}]})
             });
             const data=await res.json();
@@ -1275,6 +1287,14 @@ ${comTexts}
               {comLoading?'⏳ יוצר סיכום השוואתי...':'📊 צור סיכום השוואתי'}
             </button>
 
+            {comSummary&&(
+              <button onClick={()=>sendSummaryToAnalysis(comUnit,comSummary)}
+                style={{width:'100%',padding:'11px',borderRadius:'10px',border:'1px solid #0891b2',marginBottom:'16px',
+                  background:'#ecfeff',color:'#0e7490',cursor:'pointer',fontWeight:'700',fontSize:'13px'}}>
+                ☁️ שלח סיכום לכלי האנליטי
+              </button>
+            )}
+
             {/* Summary table */}
             {comSummary&&(
               <div style={{background:'white',borderRadius:'10px',border:'1px solid #e2e8f0',overflow:'hidden',marginBottom:'20px'}}>
@@ -1299,7 +1319,9 @@ ${comTexts}
                           <td style={{padding:'10px 14px',lineHeight:'1.75',color:'#1e293b'}}>{row.similar}</td>
                           <td style={{padding:'10px 14px',lineHeight:'1.75',color:'#374151'}}>{row.different}</td>
                           <td style={{padding:'10px 14px',fontSize:'12px',color:'#6b7280',whiteSpace:'nowrap'}}>
-                            {Array.isArray(row.commentators)?row.commentators.join(', '):row.commentators}
+                            {Array.isArray(row.commentators)
+                              ? row.commentators.map(c=>typeof c==='object'?`${c.name}${c.page?` (עמ' ${c.page})`:''}`:c).join(', ')
+                              : row.commentators}
                           </td>
                         </tr>
                       ))}
