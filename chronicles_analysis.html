@@ -529,6 +529,102 @@ ${paramsList}
     setImplAiLoad(false);
   }
 
+  // ── Re-check with scholarship interpretation — תוצאה משנית להשוואה ──
+  const [scholarAiLoad,setScholarAiLoad]=useState(false);
+  const [scholarAiMsg,setScholarAiMsg]=useState("");
+  const [scholarResults,setScholarResults]=useState(null); // array aligned to validParams, or null
+
+  async function runImplicitWithScholarship(){
+    if(!unitText){setScholarAiMsg("אין טקסט ביחידה זו.");return;}
+    if(!scholarship){setScholarAiMsg("אין פרשנות ממחקר תורת שמור ליחידה זו.");return;}
+    const validParams=params.filter(p=>p&&(typeof p==="object"?p.q:p).trim());
+    if(!validParams.length){setScholarAiMsg("אין פרמטרים מוגדרים.");return;}
+    setScholarAiLoad(true);setScholarAiMsg("");setScholarResults(null);
+
+    const paramsList=validParams.map((p,i)=>{
+      const q=typeof p==="object"?p.q:p;
+      const ind=typeof p==="object"?p.ind:"";
+      return `${i+1}. שאלה: ${q}${ind?`\n   אינדיקטור: ${ind}`:""}`;
+    }).join("\n\n");
+
+    const semInfo=sem?`\nשדה סמנטי חיובי: ${sem.pos}\nשדה סמנטי שלילי: ${sem.neg}`:"";
+
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. בדוק מחדש האם המושג "${conceptName}" נרמז בטקסט לפי הפרמטרים, בהתחשב בפרשנות ממחקר תורת המצורפת.
+
+⚠️ הנחיה קריטית: המחקר עוסק אך ורק בדמותו של ${character==="solomon"?"שלמה המלך":"דוד המלך"}. בדוק את הפרמטרים רק ביחס ל${character==="solomon"?"שלמה":"דוד"} — לא ביחס לדמויות אחרות המופיעות ביחידה כגון שרים, זקנים, עם, לויים או כל דמות אחרת.
+
+טקסט (${modeLabel}):
+${unitText}
+${semInfo}
+${e.explicit_note?`\nממצא גלוי שכבר נמצא:\n${e.explicit_note}`:""}
+
+📝 פרשנות ממחקר תורת על יחידה זו (יש להתחשב בה ולשקלל אותה בבדיקה):
+${scholarship}
+
+פרמטרים לבדיקה:
+${paramsList}
+
+הוראות קריטיות:
+- ענה ONLY ב-JSON תקני, ללא טקסט לפני או אחרי
+- עבור כל פרמטר לפי מספרו הסדרי (1 עד ${validParams.length})
+- found: true אם יש ראיה ברורה בטקסט שמתייחסת ל${character==="solomon"?"שלמה":"דוד"} ספציפית, בהתחשב בפרשנות, false אם לא
+- verse: מספר הפסוק אם found=true (למשל "(א)" או "(ג)"), אחרת ""
+- note: הסבר קצר בעברית (מקסימום 50 מילים) — ציין כיצד הפרשנות השפיעה על המסקנה, אם בכלל
+
+פורמט JSON:
+[
+  {"param":1,"found":true,"verse":"(א)","note":"הסבר"},
+  {"param":2,"found":false,"verse":"","note":"לא נמצא"},
+  ...
+]`;
+
+    try{
+      const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:4000,messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      const rawText=data.content?.map(b=>b.text||"").join("")||"";
+      const clean=rawText.replace(/```json|```/g,"").trim();
+      let parsed;
+      try{
+        parsed=JSON.parse(clean);
+      }catch(parseErr){
+        const lastValid=clean.lastIndexOf("},");
+        if(lastValid>0){
+          const trimmed=clean.substring(0,lastValid+1)+"]";
+          parsed=JSON.parse(trimmed);
+        } else throw parseErr;
+      }
+      const aligned=validParams.map((p,i)=>{
+        const item=parsed.find(it=>it.param-1===i);
+        return item?{found:item.found,verse:item.verse||"",note:item.note||""}:{found:null,verse:"",note:""};
+      });
+      setScholarResults(aligned);
+      setScholarAiMsg(`✓ ${aligned.filter(i=>i.found).length} פרמטרים נמצאו לאחר שקלול פרשנות — השוואי ובחרי`);
+    }catch(err){
+      setScholarAiMsg("שגיאה בפרסור JSON: "+err.message+". נסי שוב.");
+    }
+    setScholarAiLoad(false);
+  }
+
+  function applyScholarResult(i){
+    if(!scholarResults||!scholarResults[i])return;
+    const newPs=[...(e.params||[])];
+    while(newPs.length<validParamsCount)newPs.push({found:null,verse:""});
+    newPs[i]={found:scholarResults[i].found,verse:scholarResults[i].verse,note:scholarResults[i].note};
+    onChange({...e,params:newPs});
+  }
+
+  function applyAllScholarResults(){
+    if(!scholarResults)return;
+    const newPs=[...(e.params||[])];
+    while(newPs.length<validParamsCount)newPs.push({found:null,verse:""});
+    scholarResults.forEach((r,i)=>{newPs[i]={found:r.found,verse:r.verse,note:r.note};});
+    const notes=scholarResults.filter(r=>r.note).map((r,i)=>`פרמטר ${i+1}: ${r.found?"✅":"❌"} ${r.note}`).join("\n");
+    onChange({...e,params:newPs,implicit_note:notes});
+  }
+
+  const validParamsCount=params.filter(p=>p&&(typeof p==="object"?p.q:p).trim()).length;
+
   return(
     <div>
       {/* ── גלוי ── */}
@@ -623,6 +719,69 @@ ${paramsList}
             <div style={{fontSize:"12px",color:"#94a3b8",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{scholarship}</div>
           </div>
         )}
+        {scholarship&&(
+          <div style={{marginBottom:"10px"}}>
+            <button onClick={runImplicitWithScholarship} disabled={scholarAiLoad}
+              style={{width:"100%",marginBottom:"8px",padding:"8px",borderRadius:"7px",border:"none",
+                cursor:scholarAiLoad?"wait":"pointer",background:scholarAiLoad?"#1e293b":"#3b0764",
+                color:scholarAiLoad?"#475569":"#e9d5ff",fontSize:"13px",fontWeight:"700"}}>
+              {scholarAiLoad?"⏳ בודק מחדש עם פרשנות...":"🔄 בדוק מחדש עם פרשנות ממחקר תורת"}
+            </button>
+            {scholarAiMsg&&(
+              <div style={{fontSize:"12px",color:scholarAiMsg.startsWith("✓")?"#34d399":"#fca5a5",marginBottom:"8px",padding:"6px 10px",background:"#1e293b",borderRadius:"6px"}}>
+                {scholarAiMsg}
+              </div>
+            )}
+            {scholarResults&&(
+              <div style={{background:"#0f172a",borderRadius:"7px",padding:"10px",border:"1px solid #6b21a866"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+                  <div style={{fontSize:"12px",fontWeight:"700",color:"#e9d5ff"}}>⚖️ השוואה: לפני / אחרי שקלול פרשנות</div>
+                  <button onClick={applyAllScholarResults}
+                    style={{padding:"4px 10px",borderRadius:"12px",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:"700",background:"#7e22ce",color:"white"}}>
+                    החל הכל
+                  </button>
+                </div>
+                {(()=>{
+                  let vi=-1;
+                  return params.map((param,i)=>{
+                    const paramQ=typeof param==="object"?(param.q||""):param;
+                    if(!paramQ.trim())return null;
+                    vi++;
+                    const sr=scholarResults[vi];
+                    if(!sr)return null;
+                    const cur=(e.params||[])[i]||{found:null,verse:""};
+                    const changed=cur.found!==sr.found;
+                    return(
+                      <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"8px",paddingBottom:"8px",borderBottom:"1px solid #1e293b"}}>
+                        <div style={{gridColumn:"1 / -1",fontSize:"11px",color:"#cbd5e1",fontWeight:"600",lineHeight:"1.5"}}>{i+1}. {paramQ}</div>
+                        <div style={{background:"#1e293b",borderRadius:"6px",padding:"8px"}}>
+                          <div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"4px"}}>לפני</div>
+                          <div style={{fontSize:"12px",color:cur.found===true?"#818cf8":cur.found===false?"#64748b":"#475569",fontWeight:"700",marginBottom:"3px"}}>
+                            {cur.found===true?"כן ✓":cur.found===false?"לא ✗":"לא נבדק"} {cur.verse&&`${cur.verse}`}
+                          </div>
+                          {cur.note&&<div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.5",fontStyle:"italic"}}>{cur.note}</div>}
+                        </div>
+                        <div style={{background:changed?"#3b076433":"#1e293b",borderRadius:"6px",padding:"8px",border:changed?"1px solid #a855f766":"none"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}>
+                            <div style={{fontSize:"10px",color:"#c084fc",fontWeight:"700"}}>אחרי פרשנות</div>
+                            <button onClick={()=>applyScholarResult(vi)}
+                              style={{padding:"2px 8px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"10px",fontWeight:"700",background:"#7e22ce",color:"white"}}>
+                              החל
+                            </button>
+                          </div>
+                          <div style={{fontSize:"12px",color:sr.found===true?"#c084fc":sr.found===false?"#64748b":"#475569",fontWeight:"700",marginBottom:"3px"}}>
+                            {sr.found===true?"כן ✓":sr.found===false?"לא ✗":"לא נבדק"} {sr.verse&&`${sr.verse}`}
+                          </div>
+                          {sr.note&&<div style={{fontSize:"11px",color:"#d8b4fe",lineHeight:"1.5",fontStyle:"italic"}}>{sr.note}</div>}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            )}
+          </div>
+        )}
         <label style={{...S.label,marginTop:"6px"}}>הערות נרמז</label>
         <textarea value={e.implicit_note||""} onChange={ev=>upd("implicit_note",ev.target.value)} rows={3}
           placeholder="נשמר אוטומטית לאחר בדיקת ה-AI — ערכי לפי הצורך..."
@@ -639,7 +798,7 @@ ${paramsList}
 }
 
 // ── Header ────────────────────────────────────────────────────────────
-function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImportConcepts,onExportAll,onImportAll,onCloudSave,analysisMode,setAnalysisMode}){
+function Header({msg,tab,setTab,analysisMode,setAnalysisMode}){
   const fileRef=React.useRef();
   const fullImportRef=React.useRef();
   const modeColor=analysisMode==="chronicles"?"#93c5fd":"#fbbf24";
@@ -649,10 +808,6 @@ function Header({msg,tab,setTab,onLoad,onSave,onSaveAs,onExportConcepts,onImport
       <div style={{fontSize:"15px",fontWeight:"bold",color:"#f1f5f9",cursor:"pointer"}} onClick={()=>setTab("home")}>📖 כלי אנליטי</div>
       <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap"}}>
         {msg&&<span style={{color:"#34d399",fontSize:"12px",fontWeight:"600"}}>{msg}</span>}
-        <button onClick={onLoad} style={{padding:"4px 10px",borderRadius:"14px",border:"1px solid #475569",cursor:"pointer",fontSize:"12px",background:"#334155",color:"#94a3b8"}}>📂 פתח</button>
-        <button onClick={onSave} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",background:"#16a34a",color:"white"}}>💾 שמור</button>
-        <button onClick={onCloudSave} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",background:"#0891b2",color:"white"}}>☁️ שמור לענן</button>
-        <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
         {/* Mode selector */}
         <div style={{display:"flex",gap:"3px",background:"#0f172a",borderRadius:"16px",padding:"2px",border:`1px solid ${modeColor}44`}}>
           {[["chronicles","📘 דה\"י","#93c5fd"],["source","📙 מקבילות","#fbbf24"]].map(([m,l,c])=>(
@@ -875,7 +1030,7 @@ function App(){
 
   return(
     <div dir="rtl" style={{minHeight:"100vh",background:"#0f172a"}}>
-      <Header msg={msg} tab={tab} setTab={setTab} onLoad={loadFile} onSave={saveFile} onSaveAs={saveAs} onExportConcepts={exportConcepts} onImportConcepts={importConcepts} onExportAll={exportAll} onImportAll={importAll} onCloudSave={cloudSave} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
+      <Header msg={msg} tab={tab} setTab={setTab} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
 
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>}
       {tab==="byunit"&&<ByUnitTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} onUnitSelect={setActiveUnit} analysisMode={analysisMode}/>}
