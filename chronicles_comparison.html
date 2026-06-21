@@ -286,8 +286,42 @@ const ALL_CH = [...CH_A,...CH_B];
 
 const STORAGE_KEY='chronicles_v7';
 const FB_PATH = "research";
+let pendingFbSaves = 0; // counts saves that haven't been confirmed by the server yet
+const FB_BASE_SHAPE = {units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[],compareNotes:{},commentary:{}};
+// fbSave — שמירה "עוורת" (כותבת בדיוק את מה שקיבלה, בלי לבדוק מה יש בשרת). נשמרת לתאימות בלבד, לא בשימוש בקוד החדש.
 const fbSave = (data) => {
-  try { db.ref(FB_PATH).set({json: JSON.stringify(data)}); } catch(e) { console.error("FB save error",e); }
+  pendingFbSaves++;
+  let p;
+  try{ p = db.ref(FB_PATH).set({json: JSON.stringify(data)}); }
+  catch(e){ console.error("FB save error",e); pendingFbSaves--; return Promise.reject(e); }
+  return p.then(()=>{ pendingFbSaves--; }).catch(err=>{ pendingFbSaves--; console.error("FB save error",err); throw err; });
+};
+// fbSaveMerge — קוראת קודם את המצב העדכני בפועל מהשרת, ומחילה את ה-patch *מעל* התמונה הטרייה הזו (לא מעל זיכרון מקומי ישן).
+// כך לשונית ישנה של כלי ההשוואה לא יכולה לדרוס נתונים שנכתבו במקביל ע"י כלי הניתוח (analysis_chronicles/analysis_source/concepts וכו').
+// כל הקריאות מסודרות בתור (fbMergeQueue) כדי שלא יתבצעו שתי קריאות-שינוי-כתיבה במקביל מתוך הלשונית הזו עצמה.
+let fbMergeQueue = Promise.resolve();
+const fbSaveMerge = (patchFn) => {
+  pendingFbSaves++;
+  const run = async () => {
+    try{
+      const snap = await db.ref(FB_PATH).once("value");
+      const v = snap.val();
+      let serverData;
+      try{ serverData = v ? JSON.parse(v.json) : {...FB_BASE_SHAPE}; }
+      catch{ serverData = {...FB_BASE_SHAPE}; }
+      const merged = patchFn({...FB_BASE_SHAPE, ...serverData});
+      await db.ref(FB_PATH).set({json: JSON.stringify(merged)});
+      return merged;
+    }catch(err){
+      console.error("FB save error",err);
+      throw err;
+    }finally{
+      pendingFbSaves--;
+    }
+  };
+  const result = fbMergeQueue.then(run);
+  fbMergeQueue = result.catch(()=>{});
+  return result;
 };
 const fbLoad = (cb) => {
   db.ref(FB_PATH).once("value").then(snap => {
@@ -296,6 +330,14 @@ const fbLoad = (cb) => {
     try{ cb(JSON.parse(v.json)); }catch{ cb(null); }
   });
 };
+// אזהרה אם מנסים לסגור/לרענן את הדף בזמן ששמירה לענן עדיין לא אושרה
+window.addEventListener("beforeunload",(e)=>{
+  if(pendingFbSaves>0){
+    e.preventDefault();
+    e.returnValue="יש שמירה לענן שעדיין לא הושלמה — אם תסגרי עכשיו, השינויים האחרונים עלולים לא להישמר.";
+    return e.returnValue;
+  }
+});
 const COMMENTATORS_A=['דירקסון','מיירס','קליין','קנופרס','קרטיס ומדיסון','יפת','בראון'];
 const COMMENTATORS_B=['דילארד','מיירס','קליין','יפת','קרטיס ומדיסון'];
 function getCommentators(unit){ return unit?.character==='solomon'?COMMENTATORS_B:COMMENTATORS_A; }
@@ -446,23 +488,47 @@ function App(){
   const [comSummary,setComSummary]    = useState(null);
   const [comLoading,setComLoading]    = useState(false);
       const subs=[];
-  // ── helpers that also cache to localStorage ──
-  function setUnits(u){ setUnitsRaw(u); const d={...extraData,units:u,overrides,commentary}; try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{} fbSave(d); }
+  // ── helpers: עדכון מקומי מיידי + שמירה בטוחה ומדוחה לענן (קוראת קודם מהשרת, מחילה רק את השינוי הספציפי) ──
+  const fbSaveTimerRef = React.useRef(null);
+  const pendingPatchFnsRef = React.useRef([]); // תור patch-ים שמצטברים בחלון ה-debounce
+  function syncFromMerged(merged){
+    const {units:_u,overrides:_o,commentary:_c,...rest}=merged;
+    setExtraData(rest);
+  }
+  function queuePatch(patchFn){
+    pendingPatchFnsRef.current.push(patchFn);
+    if(fbSaveTimerRef.current) clearTimeout(fbSaveTimerRef.current);
+    fbSaveTimerRef.current = setTimeout(flushPatches, 2000);
+  }
+  function flushPatches(){
+    const fns = pendingPatchFnsRef.current;
+    pendingPatchFnsRef.current = [];
+    if(!fns.length) return;
+    fbSaveMerge(serverData => fns.reduce((d,fn)=>fn(d), serverData))
+      .then(syncFromMerged)
+      .catch(()=>flash('⚠️ השמירה האוטומטית לענן נכשלה — בדקי חיבור ונסי לשמור שוב!'));
+  }
+  function setUnits(u){
+    setUnitsRaw(u);
+    const local={...extraData,units:u,overrides,commentary};
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(local));}catch{}
+    queuePatch(serverData=>({...serverData,units:u}));
+  }
   function setOv(ovOrFn){
     setOvRaw(prev=>{
       const ov=typeof ovOrFn==='function'?ovOrFn(prev):ovOrFn;
-      const d={...extraData,units,overrides:ov,commentary};
-      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{}
-      fbSave(d);
+      const local={...extraData,units,overrides:ov,commentary};
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(local));}catch{}
+      queuePatch(serverData=>({...serverData,overrides:ov}));
       return ov;
     });
   }
   function setCommentary(unitId,name,text){
     setCommentaryRaw(prev=>{
       const next={...prev,[unitId]:{...(prev[unitId]||{}),[name]:text}};
-      const d={...extraData,units,overrides,commentary:next};
-      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));}catch{}
-      fbSave(d);
+      const local={...extraData,units,overrides,commentary:next};
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(local));}catch{}
+      queuePatch(serverData=>({...serverData,commentary:{...(serverData.commentary||{}),[unitId]:{...((serverData.commentary||{})[unitId]||{}),[name]:text}}}));
       return next;
     });
   }
@@ -479,7 +545,7 @@ function App(){
     alert('✓ הסיכום נשלח לכלי האנליטי (שדה מחקר תורת) — יופיע ביחידה זו');
   }
 
-  function flash(m){ setMsg(m); setTimeout(()=>setMsg(''),2000); }
+  function flash(m){ setMsg(m); setTimeout(()=>setMsg(''), m&&m.startsWith('⚠️')?6000:2000); }
 
   // ── load from Firebase on start (fallback to localStorage) ──
   useEffect(()=>{
@@ -498,21 +564,47 @@ function App(){
   },[]);
 
   // ── file ops ──
+  async function fetchFreshFull(){
+    // לפני יצוא: לוודא שכל שינוי מקומי שעדיין ממתין נשלח, ואז לקרוא את המצב המלא והעדכני מהשרת
+    if(fbSaveTimerRef.current){ clearTimeout(fbSaveTimerRef.current); fbSaveTimerRef.current=null; }
+    const fns = pendingPatchFnsRef.current;
+    pendingPatchFnsRef.current = [];
+    if(fns.length){
+      try{ const merged = await fbSaveMerge(serverData => fns.reduce((d,fn)=>fn(d), serverData)); syncFromMerged(merged); }
+      catch{ /* אם השמירה האחרונה נכשלה, נמשיך ונוריד בכל זאת את מה שיש בשרת */ }
+    }
+    try{
+      const snap = await db.ref(FB_PATH).once('value');
+      const v = snap.val();
+      return v ? {...FB_BASE_SHAPE, ...JSON.parse(v.json)} : {...FB_BASE_SHAPE};
+    }catch{
+      return {...FB_BASE_SHAPE,units,overrides,commentary,...extraData}; // גיבוי אחרון: המצב המקומי, אם הקריאה מהשרת נכשלה
+    }
+  }
   async function saveToFile(){
-    downloadJson({...extraData,units,overrides,commentary});
+    const fresh = await fetchFreshFull();
+    downloadJson(fresh);
     flash('✓ הקובץ הורד — שמרי אותו ב-F:\\chronicles\\chronicles_data.json');
   }
   async function saveAs(){
-    downloadJson({...extraData,units,overrides,commentary});
+    const fresh = await fetchFreshFull();
+    downloadJson(fresh);
     flash('✓ הקובץ הורד');
   }
   async function loadFromFile(){
     const data=await fsPickOpen();
     if(!data){alert('לא ניתן לקרוא את הקובץ');return;}
+    if(!confirm('פעולה זו תחליף את כל הנתונים בענן בתוכן הקובץ שנבחר. להמשיך?'))return;
     setUnitsRaw(data.units||[]);
     setOvRaw(data.overrides||{});
+    setCommentaryRaw(data.commentary||{});
+    const {units:_u,overrides:_o,commentary:_c,...rest}=data;
+    setExtraData(rest);
     try{localStorage.setItem(STORAGE_KEY,JSON.stringify(data));}catch{}
-    flash('✓ נטען בהצלחה');
+    pendingFbSaves++;
+    db.ref(FB_PATH).set({json: JSON.stringify({...FB_BASE_SHAPE,...data})})
+      .then(()=>{ pendingFbSaves--; flash('✓ נטען ונשמר לענן'); })
+      .catch(err=>{ pendingFbSaves--; console.error('FB save error',err); flash('⚠️ הטעינה המקומית הצליחה אך השמירה לענן נכשלה — נסי שוב!'); });
   }
 
   // ── unit ops ──
@@ -522,8 +614,7 @@ function App(){
   function addUnit(){
     const u={id:Date.now(),name:'',chapter:'',character:'',chroniclesText:'',sourceText:'',scholarship:''};
     const newUnits=[...units,u];
-    setUnitsRaw(newUnits);
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({units:newUnits,overrides}));}catch{}
+    setUnits(newUnits);
     setActiveId(u.id);
     setScreen('edit');
     setSaveErr('');
@@ -545,8 +636,13 @@ function App(){
     if(!active.name.trim()){setSaveErr('יש להזין כותרת ליחידה');return;}
     if(!active.chapter){setSaveErr('יש לבחור יחידה ספרותית');return;}
     setSaveErr('');
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({units,overrides}));}catch{}
-    flash('✓ נשמר');
+    if(fbSaveTimerRef.current){ clearTimeout(fbSaveTimerRef.current); fbSaveTimerRef.current=null; }
+    const fns = pendingPatchFnsRef.current;
+    pendingPatchFnsRef.current = [];
+    if(!fns.length){ flash('✓ נשמר (כל השינויים היו כבר בענן)'); return; }
+    fbSaveMerge(serverData => fns.reduce((d,fn)=>fn(d), serverData))
+      .then(merged=>{ syncFromMerged(merged); flash('✓ נשמר בענן'); })
+      .catch(()=>setSaveErr('⚠️ השמירה לענן נכשלה — בדקי חיבור ונסי שוב!'));
   }
 
   // ── quick popup ──
@@ -768,7 +864,7 @@ function App(){
           <div style={{fontSize:'12px',color:'#93c5fd'}}>דברי הימים מול שמואל / מלכים</div>
         </div>
         <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
-          {msg&&<span style={{color:'#86efac',fontSize:'13px',fontWeight:'600'}}>{msg}</span>}
+          {msg&&<span style={{color:msg.startsWith('⚠️')?'#fca5a5':'#86efac',fontSize:'13px',fontWeight:'600'}}>{msg}</span>}
           <button onClick={loadFromFile} style={{padding:'6px 14px',borderRadius:'20px',border:'1px solid rgba(255,255,255,0.4)',cursor:'pointer',fontSize:'13px',fontWeight:'600',background:'rgba(255,255,255,0.15)',color:'white'}}>📂 טען קובץ</button>
           <button onClick={saveToFile}   style={{padding:'6px 14px',borderRadius:'20px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'600',background:'#16a34a',color:'white'}}>⬇️ הורד JSON</button>
           <span style={{width:'1px',background:'rgba(255,255,255,0.3)',height:'22px',display:'inline-block'}}></span>
