@@ -694,11 +694,10 @@ ${paramsList}
 
   function saveScholarPage(){
     if(!draftResults)return;
-    const newPs=[...(e.params||[])];
+    const newPs=[...(e.params_scholar||[])];
     while(newPs.length<validParamsCount)newPs.push({found:null,verse:""});
     draftResults.forEach((r,i)=>{newPs[i]={found:r.found,verse:r.verse,note:r.note};});
-    const notes=draftResults.filter(r=>r.note).map((r,i)=>`פרמטר ${i+1}: ${r.found?"✅":"❌"} ${r.note}`).join("\n");
-    onChange({...e,params:newPs,implicit_note:notes});
+    onChange({...e,params_scholar:newPs});
     setScholarResults(draftResults.map(r=>({...r}))); // עכשיו זה הבסיס המוצג בעמודה ב'
     setScholarEditMode(false);
     setScholarSavedMsg("✓ נשמר!");
@@ -964,7 +963,7 @@ function Header({msg,tab,setTab,analysisMode,setAnalysisMode}){
           ))}
         </div>
         <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
-        {[["home","🏠"],["byunit","יחידה"],["byconcept","מושג"],["matrix","מטריצה"],["charts","גרפים"],["compare","🔍 סינתזה השוואתית"],["synthesis","✍️ כתיבה"]].map(([t,l])=>(
+        {[["home","🏠"],["stagea","🔬 שלב א׳"],["byunit","יחידה"],["byconcept","מושג"],["matrix","מטריצה"],["charts","גרפים"],["compare","🔍 סינתזה השוואתית"],["synthesis","✍️ כתיבה"]].map(([t,l])=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600",background:tab===t?"#818cf8":"transparent",color:tab===t?"white":"#64748b"}}>{l}</button>
         ))}
       </div>
@@ -973,6 +972,506 @@ function Header({msg,tab,setTab,analysisMode,setAnalysisMode}){
 }
 
 // ── App ───────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════
+// ── שלב א' — ניתוח עצמאי של יחידה  (מסך 1 → מסך 2 רכזת → תחנות 3/4/5) ──
+// כל הקוד כאן הוא שכבת תצוגה מעל אותם getE/setE/getParams — אינו נוגע בשמירה.
+// ════════════════════════════════════════════════════════════════════════
+const AI_URL="https://anthropic-proxy.anna-sho-ea8.workers.dev";
+async function aiCall(prompt,maxTokens){
+  const res=await fetch(AI_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:maxTokens,messages:[{role:"user",content:prompt}]})});
+  const data=await res.json();
+  if(!data.content||!data.content.length) throw new Error("שגיאת AI: "+aiErrorText(data));
+  return data.content.map(b=>b.text||"").join("");
+}
+function parseParamJSON(rawText){
+  const clean=rawText.replace(/```json|```/g,"").trim();
+  try{ return JSON.parse(clean); }
+  catch(e){ const last=clean.lastIndexOf("},"); if(last>0) return JSON.parse(clean.substring(0,last+1)+"]"); throw e; }
+}
+function validParamDefs(params){ return (params||[]).filter(p=>p&&(typeof p==="object"?p.q:p).toString().trim()); }
+function alignParams(existing,n){
+  const a=Array.isArray(existing)?existing.map(p=>({found:(p&&p.found!==undefined)?p.found:null,verse:(p&&p.verse)||"",note:(p&&p.note)||""})):[];
+  while(a.length<n)a.push({found:null,verse:"",note:""});
+  return a.slice(0,n);
+}
+function paramText(p){ return typeof p==="object"?(p.q||""):String(p||""); }
+function paramInd(p){ return typeof p==="object"?(p.ind||""):""; }
+
+async function aiExplicit({conceptName,sem,unitText,modeLabel}){
+  const prompt=`אתה עוזר מחקר לתזה בתנ"ך. בדוק האם מילים מהשדה הסמנטי של המושג "${conceptName}" מופיעות בטקסט.
+
+שדה סמנטי חיובי: ${sem.pos}
+שדה סמנטי שלילי (הפוך): ${sem.neg}
+
+טקסט (${modeLabel}):
+${unitText}
+
+ענה בעברית בתמציתיות:
+1. **מילים שנמצאו מהשדה החיובי** — כל מילה + מספר פסוק מדויק.
+2. **מילים שנמצאו מהשדה ההפוך** — אותו פורמט.
+3. **מסקנה** — האם המושג "${conceptName}" מופיע ישירות בטקסט?`;
+  return await aiCall(prompt,500);
+}
+function buildParamPrompt({conceptName,validParams,sem,unitText,modeLabel,character,explicitNote,scholarship}){
+  const paramsList=validParams.map((p,i)=>{const q=paramText(p),ind=paramInd(p);return `${i+1}. שאלה: ${q}${ind?`\n   אינדיקטור: ${ind}`:""}`;}).join("\n\n");
+  const semInfo=sem?`\nשדה סמנטי חיובי: ${sem.pos}\nשדה סמנטי שלילי: ${sem.neg}`:"";
+  const who=character==="solomon"?"שלמה":"דוד";
+  const scholarBlock=scholarship?`\n📝 השוואת פרשנים על יחידה זו (יש להתחשב בה ולשקלל אותה בבדיקה):\n${scholarship}\n`:"";
+  return `אתה עוזר מחקר לתזה בתנ"ך. בדוק${scholarship?" מחדש":""} האם המושג "${conceptName}" נרמז בטקסט לפי הפרמטרים${scholarship?", בהתחשב בהשוואת הפרשנים המצורפת":""}.
+
+⚠️ הנחיה קריטית: המחקר עוסק אך ורק בדמותו של ${who} המלך. בדוק את הפרמטרים רק ביחס ל${who} — לא ביחס לדמויות אחרות המופיעות ביחידה כגון שרים, זקנים, עם, לויים או כל דמות אחרת.
+
+טקסט (${modeLabel}):
+${unitText}
+${semInfo}
+${explicitNote?`\nממצא גלוי שכבר נמצא:\n${explicitNote}`:""}${scholarBlock}
+
+פרמטרים לבדיקה:
+${paramsList}
+
+הוראות קריטיות:
+- ענה ONLY ב-JSON תקני, ללא טקסט לפני או אחרי
+- עבור כל פרמטר לפי מספרו הסדרי (1 עד ${validParams.length})
+- found: true אם יש ראיה ברורה בטקסט שמתייחסת ל${who} ספציפית${scholarship?", בהתחשב בפרשנים":""}, false אם לא
+- verse: מספר הפסוק אם found=true (למשל "(א)" או "(ג)"), אחרת ""
+- note: הסבר קצר בעברית (מקסימום 50 מילים)${scholarship?" — ציין כיצד הפרשנים השפיעו על המסקנה, אם בכלל":` — ציין את הקשר ל${who}`}
+
+פורמט JSON:
+[
+  {"param":1,"found":true,"verse":"(א)","note":"הסבר"},
+  {"param":2,"found":false,"verse":"","note":"לא נמצא"}
+]`;
+}
+async function aiParams(opts){
+  const raw=await aiCall(buildParamPrompt(opts),4000);
+  const parsed=parseParamJSON(raw);
+  return opts.validParams.map((p,i)=>{const it=parsed.find(x=>x.param-1===i);return it?{found:it.found,verse:it.verse||"",note:it.note||""}:{found:null,verse:"",note:""};});
+}
+
+// ── סטטוס בן-4-מצבים — מוסק מהנתונים בלבד ──
+function conceptStatusA(entry,mode,hasParams){
+  const hasExplicit=!!(entry&&entry.explicit_note&&entry.explicit_note.trim());
+  const hasImplicit=!!(entry&&(entry.params||[]).some(p=>p&&p.found!==null));
+  const hasScholar=!!(entry&&(entry.params_scholar||[]).some(p=>p&&p.found!==null));
+  if(!hasExplicit&&!hasImplicit&&!hasScholar) return "none";
+  if(!hasParams) return hasExplicit?"done":"progress";          // מושג עם שדה סמנטי בלבד — הושלם אחרי גלוי
+  if(mode==="source") return (hasExplicit&&hasImplicit)?"done":"progress";  // מקבילה — שני שלבים
+  if(hasExplicit&&hasImplicit&&hasScholar) return "done";        // דה"י — שלושה שלבים
+  if(hasImplicit&&!hasScholar) return "await_scholar";           // ממתין לפרשנים
+  return "progress";
+}
+const STATUS_META={
+  none:{c:"#475569",ic:"○",t:"טרם התחיל"},
+  progress:{c:"#818cf8",ic:"◐",t:"בתהליך"},
+  await_scholar:{c:"#c084fc",ic:"◑",t:"ממתין לאימות בפרשנים"},
+  done:{c:"#34d399",ic:"●",t:"הושלם"},
+};
+function StatusDot({status}){
+  const m=STATUS_META[status]||STATUS_META.none;
+  return <span title={m.t} style={{color:m.c,fontSize:"12px",marginLeft:"5px",fontWeight:"700"}}>{m.ic}</span>;
+}
+
+// ── תחנה: גלוי (מסך 3) ──
+function ExplicitStation({conceptName,sem,unitText,modeLabel,entry,onSave,onClose}){
+  const [note,setNote]=useState((entry&&entry.explicit_note)||"");
+  const [load,setLoad]=useState(false);
+  const [err,setErr]=useState("");
+  async function run(){
+    if(!unitText){setErr("אין טקסט ביחידה זו.");return;}
+    if(!sem){setErr("אין שדה סמנטי מוגדר — הגדירי במאגר המושגים.");return;}
+    setLoad(true);setErr("");
+    try{ setNote(await aiExplicit({conceptName,sem,unitText,modeLabel})); }
+    catch(e){ setErr("⚠️ "+e.message); }
+    setLoad(false);
+  }
+  return(
+    <div style={{background:"#0f172a",borderRadius:"10px",padding:"16px",border:"1px solid #34d39944"}}>
+      <div style={{fontSize:"14px",fontWeight:"700",color:"#34d399",marginBottom:"12px"}}>📗 מבנה גלוי — מופיע ישירות בטקסט {modeLabel}</div>
+      {sem&&(
+        <div style={{marginBottom:"12px"}}>
+          <div style={{fontSize:"11px",color:"#64748b",marginBottom:"3px"}}>שדה סמנטי חיובי:</div>
+          <div style={{fontSize:"12px",color:"#86efac",lineHeight:"1.7",background:"#0a1628",borderRadius:"5px",padding:"6px 10px"}}>{sem.pos}</div>
+          <div style={{fontSize:"11px",color:"#64748b",margin:"6px 0 3px"}}>שדה סמנטי הפוך:</div>
+          <div style={{fontSize:"12px",color:"#fca5a5",lineHeight:"1.7",background:"#1a0a0a",borderRadius:"5px",padding:"6px 10px"}}>{sem.neg}</div>
+        </div>
+      )}
+      <button onClick={run} disabled={load}
+        style={{width:"100%",marginBottom:"10px",padding:"9px",borderRadius:"7px",border:"none",cursor:load?"wait":"pointer",
+          background:load?"#1e293b":"#064e3b",color:load?"#475569":"#34d399",fontSize:"13px",fontWeight:"700"}}>
+        {load?"⏳ מחפש...":"🔍 בדיקת ה-AI לגלוי"}
+      </button>
+      {err&&<div style={{fontSize:"12px",color:"#fca5a5",marginBottom:"10px",padding:"6px 10px",background:"#1e293b",borderRadius:"6px"}}>{err}</div>}
+      <label style={{...S.label,marginTop:"4px"}}>ממצאי הגלוי (ערכי ותקני לפני שמירה)</label>
+      <textarea value={note} onChange={e=>setNote(e.target.value)} rows={8}
+        placeholder="ה-AI ימלא כאן — את עוברת, מתקנת, ושומרת..."
+        style={{...S.input,resize:"vertical",lineHeight:"1.8"}}/>
+      <div style={{display:"flex",gap:"10px",marginTop:"12px"}}>
+        <button onClick={()=>onSave({explicit_note:note})}
+          style={{flex:1,padding:"10px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#16a34a",color:"white",fontSize:"14px",fontWeight:"700"}}>💾 שמור</button>
+        <button onClick={onClose}
+          style={{padding:"10px 18px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#334155",color:"#cbd5e1",fontSize:"13px",fontWeight:"600"}}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
+// ── תחנה: נרמז (מסך 4) ──
+function ImplicitStation({conceptName,params,sem,unitText,modeLabel,character,entry,onSave,onClose}){
+  const validParams=validParamDefs(params);
+  const [ps,setPs]=useState(()=>alignParams(entry&&entry.params,validParams.length));
+  const [note,setNote]=useState((entry&&entry.implicit_note)||"");
+  const [load,setLoad]=useState(false);
+  const [msg,setMsg]=useState("");
+  function updP(i,k,v){ setPs(prev=>{const a=[...prev];a[i]={...a[i],[k]:v};return a;}); }
+  async function run(){
+    if(!unitText){setMsg("אין טקסט ביחידה זו.");return;}
+    if(!validParams.length){setMsg("אין פרמטרים מוגדרים.");return;}
+    setLoad(true);setMsg("");
+    try{
+      const filled=await aiParams({conceptName,validParams,sem,unitText,modeLabel,character,explicitNote:entry&&entry.explicit_note});
+      setPs(filled);
+      setNote(filled.map((r,i)=>r.note?`פרמטר ${i+1}: ${r.found?"✅":"❌"} ${r.note}`:"").filter(Boolean).join("\n"));
+      setMsg(`✓ ${filled.filter(r=>r.found).length} פרמטרים נמצאו — עברי ותקני`);
+    }catch(e){ setMsg("⚠️ "+e.message); }
+    setLoad(false);
+  }
+  return(
+    <div style={{background:"#0f172a",borderRadius:"10px",padding:"16px",border:"1px solid #818cf844"}}>
+      <div style={{fontSize:"14px",fontWeight:"700",color:"#818cf8",marginBottom:"12px"}}>
+        📘 מבנה נרמז — {ps.filter(p=>p.found===true).length}/{validParams.length} פרמטרים נמצאו
+      </div>
+      <button onClick={run} disabled={load}
+        style={{width:"100%",marginBottom:"10px",padding:"9px",borderRadius:"7px",border:"none",cursor:load?"wait":"pointer",
+          background:load?"#1e293b":"#312e81",color:load?"#475569":"#a5b4fc",fontSize:"13px",fontWeight:"700"}}>
+        {load?"⏳ בודק פרמטרים...":"🤖 בדיקת ה-AI לנרמז"}
+      </button>
+      {msg&&<div style={{fontSize:"12px",color:msg.startsWith("✓")?"#34d399":"#fca5a5",marginBottom:"10px",padding:"6px 10px",background:"#1e293b",borderRadius:"6px"}}>{msg}</div>}
+      {!validParams.length?(
+        <div style={{fontSize:"12px",color:"#475569",padding:"10px"}}>אין פרמטרים למושג זה (שדה סמנטי בלבד).</div>
+      ):(
+        <div style={{marginBottom:"10px"}}>
+          {validParams.map((param,i)=>{
+            const p=ps[i]||{found:null,verse:"",note:""};
+            return(
+              <div key={i} style={{background:"#1e293b",borderRadius:"7px",padding:"10px",marginBottom:"7px",border:`1px solid ${p.found===true?"#818cf866":p.found===false?"#47456633":"#334155"}`}}>
+                <div style={{fontSize:"12px",color:"#cbd5e1",marginBottom:"5px",lineHeight:"1.6",fontWeight:"600"}}>{i+1}. {paramText(param)}</div>
+                {paramInd(param)&&<div style={{fontSize:"11px",color:"#64748b",background:"#0a1628",borderRadius:"5px",padding:"6px 10px",marginBottom:"7px",lineHeight:"1.6",borderRight:"2px solid #334155"}}><span style={{color:"#475569",fontSize:"10px",fontWeight:"700"}}>אינדיקטור: </span>{paramInd(param)}</div>}
+                {p.note&&<div style={{fontSize:"11px",color:"#94a3b8",background:"#0f172a",borderRadius:"5px",padding:"5px 8px",marginBottom:"6px",lineHeight:"1.6",fontStyle:"italic"}}>💬 {p.note}</div>}
+                <div style={{display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap"}}>
+                  {[["true","כן ✓","#818cf8"],["false","לא ✗","#475569"],["null","לא נבדק","#334155"]].map(([v,l,bg])=>(
+                    <button key={v} onClick={()=>updP(i,"found",v==="null"?null:v==="true")}
+                      style={{padding:"4px 12px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600",
+                        background:String(p.found)===v?bg:"#0f172a",color:String(p.found)===v?"white":"#475569"}}>{l}</button>
+                  ))}
+                  {p.found===true&&<input value={p.verse||""} onChange={e=>updP(i,"verse",e.target.value)} placeholder="פסוק..." style={{...S.input,flex:1,minWidth:"100px",padding:"4px 8px",fontSize:"12px"}}/>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{display:"flex",gap:"10px",marginTop:"6px"}}>
+        <button onClick={()=>onSave({params:ps,implicit_note:note})}
+          style={{flex:1,padding:"10px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#16a34a",color:"white",fontSize:"14px",fontWeight:"700"}}>💾 שמור</button>
+        <button onClick={onClose}
+          style={{padding:"10px 18px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#334155",color:"#cbd5e1",fontSize:"13px",fontWeight:"600"}}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
+// ── תחנה: פרשנים (מסך 5) — רק לדה"י. שומר ל-params_scholar בנפרד מהנרמז ──
+function ScholarStation({conceptName,params,sem,unitText,modeLabel,character,scholarship,entry,onSave,onClose}){
+  const validParams=validParamDefs(params);
+  const [draft,setDraft]=useState(()=> (entry&&entry.params_scholar)?alignParams(entry.params_scholar,validParams.length):null);
+  const [load,setLoad]=useState(false);
+  const [msg,setMsg]=useState("");
+  const [edit,setEdit]=useState(false);
+  const baseline=alignParams(entry&&entry.params,validParams.length); // בדיקת הנרמז ללא פרשנים — לקריאה בלבד
+  function updD(i,k,v){ setDraft(prev=>{const a=[...(prev||[])];a[i]={...a[i],[k]:v};return a;}); }
+  async function run(){
+    if(!scholarship){setMsg("אין הערות פרשנים שמורות ליחידה זו — יש להזין אותן בכלי ההשוואה.");return;}
+    if(!validParams.length){setMsg("אין פרמטרים מוגדרים.");return;}
+    setLoad(true);setMsg("");
+    try{
+      const filled=await aiParams({conceptName,validParams,sem,unitText,modeLabel,character,explicitNote:entry&&entry.explicit_note,scholarship});
+      setDraft(filled); setEdit(false);
+      setMsg(`✓ ${filled.filter(r=>r.found).length} פרמטרים נמצאו לאחר שקלול פרשנים`);
+    }catch(e){ setMsg("⚠️ "+e.message); }
+    setLoad(false);
+  }
+  return(
+    <div style={{background:"#0f172a",borderRadius:"10px",padding:"16px",border:"1px solid #c084fc44"}}>
+      <div style={{fontSize:"14px",fontWeight:"700",color:"#c084fc",marginBottom:"12px"}}>📖 בדיקה מול פרשנים — {conceptName}</div>
+      <div style={{background:"#1e293b",borderRadius:"8px",padding:"12px",marginBottom:"12px",border:"1px solid #334155"}}>
+        <div style={{fontSize:"12px",fontWeight:"700",color:"#fbbf24",marginBottom:"6px"}}>📝 השוואת פרשנים על היחידה (מכלי ההשוואה)</div>
+        {scholarship?(
+          <div style={{fontSize:"12px",color:"#e2e8f0",lineHeight:"1.8",whiteSpace:"pre-wrap",maxHeight:"160px",overflowY:"auto"}}>{scholarship}</div>
+        ):(
+          <div style={{fontSize:"12px",color:"#64748b"}}>אין הערות פרשנים שמורות ליחידה זו — יש להזין אותן בכלי ההשוואה.</div>
+        )}
+      </div>
+      <button onClick={run} disabled={load||!scholarship}
+        style={{width:"100%",marginBottom:"12px",padding:"9px",borderRadius:"7px",border:"none",cursor:(load||!scholarship)?"not-allowed":"pointer",
+          background:(load||!scholarship)?"#1e293b":"#3b0764",color:(load||!scholarship)?"#475569":"#e9d5ff",fontSize:"13px",fontWeight:"700"}}>
+        {load?"⏳ בודק מחדש עם פרשנים...":draft?"🔄 הרץ בדיקה מחדש":"🤖 הרץ בדיקה עם פרשנים"}
+      </button>
+      {msg&&<div style={{fontSize:"12px",color:msg.startsWith("✓")?"#34d399":"#fca5a5",marginBottom:"12px",padding:"6px 10px",background:"#1e293b",borderRadius:"6px"}}>{msg}</div>}
+      {draft&&(
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"14px",marginBottom:"14px"}}>
+            {/* ימין — ללא פרשנים (קריאה בלבד) */}
+            <div>
+              <div style={{fontSize:"13px",fontWeight:"700",color:"#818cf8",marginBottom:"10px"}}>📘 בדיקת הנרמז ללא הפרשנים</div>
+              {validParams.map((param,i)=>{
+                const c=baseline[i]||{found:null,verse:"",note:""};
+                return(
+                  <div key={i} style={{background:"#1e293b",borderRadius:"7px",padding:"10px",marginBottom:"8px",border:"1px solid #334155"}}>
+                    <div style={{fontSize:"11px",color:"#cbd5e1",fontWeight:"600",marginBottom:"5px",lineHeight:"1.5"}}>{i+1}. {paramText(param)}</div>
+                    <div style={{fontSize:"12px",color:c.found===true?"#818cf8":c.found===false?"#64748b":"#475569",fontWeight:"700",marginBottom:"4px"}}>{c.found===true?"כן ✓":c.found===false?"לא ✗":"לא נבדק"} {c.verse&&c.verse}</div>
+                    {c.note&&<div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.5",fontStyle:"italic"}}>{c.note}</div>}
+                  </div>
+                );
+              })}
+            </div>
+            {/* שמאל — עם פרשנים (ניתן לעריכה) */}
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:"#c084fc"}}>🔮 בדיקה עם הפרשנים{edit?" (עריכה)":""}</div>
+                <button onClick={()=>setEdit(m=>!m)} style={{padding:"3px 10px",borderRadius:"10px",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:"700",background:edit?"#475569":"#334155",color:edit?"white":"#cbd5e1"}}>{edit?"✓ סיום":"✏️ ערוך"}</button>
+              </div>
+              {draft.map((dr,i)=>(
+                <div key={i} style={{background:edit?"#3b076433":"#1e293b",borderRadius:"7px",padding:"10px",marginBottom:"8px",border:edit?"1px solid #a855f766":"1px solid #334155"}}>
+                  <div style={{fontSize:"11px",color:"#cbd5e1",fontWeight:"600",marginBottom:"5px",lineHeight:"1.5"}}>{i+1}. {paramText(validParams[i])}</div>
+                  {edit?(
+                    <div>
+                      <div style={{display:"flex",gap:"6px",alignItems:"center",flexWrap:"wrap",marginBottom:"7px"}}>
+                        {[["true","כן ✓","#c084fc"],["false","לא ✗","#475569"],["null","לא נבדק","#334155"]].map(([v,l,bg])=>(
+                          <button key={v} onClick={()=>updD(i,"found",v==="null"?null:v==="true")}
+                            style={{padding:"4px 10px",borderRadius:"12px",border:"none",cursor:"pointer",fontSize:"11px",fontWeight:"600",background:String(dr.found)===v?bg:"#0f172a",color:String(dr.found)===v?"white":"#475569"}}>{l}</button>
+                        ))}
+                        <input value={dr.verse||""} onChange={e=>updD(i,"verse",e.target.value)} placeholder="פסוק..." style={{...S.input,flex:1,minWidth:"80px",padding:"4px 8px",fontSize:"12px"}}/>
+                      </div>
+                      <textarea value={dr.note||""} onChange={e=>updD(i,"note",e.target.value)} rows={2} placeholder="הערה / הסבר..." style={{...S.input,resize:"vertical",fontSize:"12px",lineHeight:"1.6"}}/>
+                    </div>
+                  ):(
+                    <div>
+                      <div style={{fontSize:"12px",color:dr.found===true?"#c084fc":dr.found===false?"#64748b":"#475569",fontWeight:"700",marginBottom:"4px"}}>{dr.found===true?"כן ✓":dr.found===false?"לא ✗":"לא נבדק"} {dr.verse&&dr.verse}</div>
+                      {dr.note&&<div style={{fontSize:"11px",color:"#d8b4fe",lineHeight:"1.5",fontStyle:"italic"}}>{dr.note}</div>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+      <div style={{display:"flex",gap:"10px"}}>
+        <button onClick={()=>{ if(!draft){setMsg("הריצי קודם את הבדיקה עם הפרשנים.");return;} onSave({params_scholar:draft}); }}
+          style={{flex:1,padding:"10px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#16a34a",color:"white",fontSize:"14px",fontWeight:"700"}}>💾 שמור</button>
+        <button onClick={onClose}
+          style={{padding:"10px 18px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#334155",color:"#cbd5e1",fontSize:"13px",fontWeight:"600"}}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
+// ── מסך 1 — בחירת יחידה ספרותית ──
+function Screen1Picker({allUnits,onStart}){
+  const [character,setCharacter]=useState(null);
+  const [sel,setSel]=useState(null); // {unitId, mode}
+  const units=allUnits.filter(u=>u.character===character||(character==="david"&&!u.character));
+  const selUnit=sel?allUnits.find(u=>u.id===sel.unitId):null;
+  return(
+    <div style={{maxWidth:"880px",margin:"0 auto",padding:"32px 16px"}}>
+      <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>שלב א׳ — ניתוח עצמאי של יחידה</div>
+      <div style={{fontSize:"13px",color:"#64748b",marginBottom:"24px"}}>מסך 1 · בחירת יחידה ספרותית</div>
+
+      <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>בחירת דמות</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"28px"}}>
+        {[["david","👑 דוד","#93c5fd"],["solomon","👑 שלמה","#d8b4fe"]].map(([ch,l,c])=>(
+          <button key={ch} onClick={()=>{setCharacter(ch);setSel(null);}}
+            style={{padding:"18px",borderRadius:"12px",cursor:"pointer",fontSize:"16px",fontWeight:"700",
+              border:character===ch?`2px solid ${c}`:"1px solid #334155",
+              background:character===ch?c+"22":"#1e293b",color:character===ch?c:"#94a3b8"}}>{l}</button>
+        ))}
+      </div>
+
+      {character&&(
+        <>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>בחירת יחידה — מתוך שתי רשימות</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px"}}>
+            {[["chronicles",'📘 דברי הימים',"#93c5fd"],["source",'📙 מקבילה',"#fbbf24"]].map(([mode,title,c])=>(
+              <div key={mode} style={{background:"#1e293b",borderRadius:"10px",padding:"12px",border:"1px solid #334155"}}>
+                <div style={{fontSize:"12px",fontWeight:"700",color:c,marginBottom:"8px"}}>{title}</div>
+                {units.length===0&&<div style={{fontSize:"12px",color:"#475569",padding:"8px"}}>אין יחידות</div>}
+                {units.map(u=>{
+                  const isSel=sel&&sel.unitId===u.id&&sel.mode===mode;
+                  const noText=mode==="source"?!u.sourceText:!u.chroniclesText;
+                  return(
+                    <button key={u.id} disabled={noText} onClick={()=>setSel({unitId:u.id,mode})}
+                      style={{display:"block",width:"100%",textAlign:"right",padding:"8px 10px",borderRadius:"7px",border:"none",marginBottom:"4px",fontSize:"12px",
+                        cursor:noText?"not-allowed":"pointer",
+                        background:isSel?c+"33":"#0f172a",color:noText?"#475569":isSel?c:"#cbd5e1",
+                        borderRight:isSel?`3px solid ${c}`:"3px solid transparent"}}>
+                      {u.label}{noText&&<span style={{fontSize:"10px",color:"#475569"}}> (אין טקסט)</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          <button onClick={()=>selUnit&&onStart(selUnit,sel.mode)} disabled={!sel}
+            style={{width:"100%",marginTop:"24px",padding:"16px",borderRadius:"12px",border:"none",cursor:sel?"pointer":"not-allowed",
+              background:sel?"#818cf8":"#1e293b",color:sel?"white":"#475569",fontSize:"16px",fontWeight:"700"}}>
+            {sel?`התחל ניתוח — ${selUnit.label} (${sel.mode==="source"?"מקבילה":'דה"י'})`:"בחרי יחידה כדי להתחיל"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── מסך 2 — רכזת הניתוח ──
+function Screen2Hub({unit,mode,allConcepts,getParams,getE,setE,dim4concept,raw,onBack}){
+  const [activeConcept,setActiveConcept]=useState(null);
+  const [station,setStation]=useState(null); // null | explicit | implicit | scholar
+  const isChr=mode==="chronicles";
+  const modeColor=isChr?"#93c5fd":"#fbbf24";
+  const modeLabel=isChr?'📘 דה"י':'📙 מקבילה';
+  const unitText=isChr?unit.chroniclesText:unit.sourceText;
+  const character=unit.character||"david";
+  const entry=activeConcept?getE(unit.id,activeConcept,mode):null;
+  const params=activeConcept?getParams(activeConcept):[];
+  const validCount=validParamDefs(params).length;
+  const hasParams=validCount>0;
+  const sem=activeConcept?((raw.customSemantic||{})[activeConcept]||SEMANTIC[activeConcept]||null):null;
+
+  const orderedConcepts=[];
+  DIMS.forEach(d=>d.concepts.forEach(name=>{ if(allConcepts.find(c=>c.name===name)) orderedConcepts.push(name); }));
+  allConcepts.forEach(c=>{ if(!orderedConcepts.includes(c.name)) orderedConcepts.push(c.name); });
+
+  function pickConcept(name){ setActiveConcept(name); setStation(null); }
+  function commit(patch){ setE(unit.id,activeConcept,{...(entry||{}),...patch},mode); setStation(null); }
+  function nextConcept(){
+    const idx=orderedConcepts.indexOf(activeConcept);
+    const nxt=orderedConcepts[idx+1];
+    if(nxt){ setActiveConcept(nxt); setStation(null); }
+    else { setActiveConcept(null); setStation(null); }
+  }
+
+  const stationProps={conceptName:activeConcept,params,sem,unitText,modeLabel,character,
+    scholarship:unit.scholarship,entry,onSave:commit,onClose:()=>setStation(null)};
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 46px)"}}>
+      {/* ── אזור עליון קבוע: טקסט + שם היחידה ── */}
+      <div style={{flexShrink:0,padding:"10px 16px",borderBottom:"1px solid #334155",background:"#0f172a"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}>
+          <button onClick={onBack} style={{padding:"5px 12px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#334155",color:"#cbd5e1",fontSize:"12px",fontWeight:"600"}}>↩ בחירת יחידה</button>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:"15px",fontWeight:"bold",color:"#f1f5f9"}}>{unit.label} <span style={{fontSize:"12px",color:modeColor}}>· {modeLabel}</span></div>
+            {unit.sourceRef&&<div style={{fontSize:"11px",color:"#64748b"}}>מקביל: {unit.sourceRef}</div>}
+          </div>
+          <div style={{width:"90px"}}/>
+        </div>
+        <div style={{background:"#1e293b",border:`1px solid ${modeColor}44`,borderRadius:"8px",padding:"10px 14px",fontSize:"13px",lineHeight:"2",color:"#e2e8f0",maxHeight:"170px",overflowY:"auto"}}>
+          {unitText||<span style={{color:"#475569"}}>אין טקסט ליחידה זו</span>}
+        </div>
+      </div>
+
+      {/* ── מתחת לטקסט: מרכז עבודה (ימין) + רשימת מושגים (שמאל) ── */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 240px",flex:1,overflow:"hidden"}}>
+        {/* מרכז */}
+        <div style={{overflowY:"auto",padding:"16px"}}>
+          {!activeConcept?(
+            <div style={{padding:"50px",textAlign:"center",color:"#475569",fontSize:"14px"}}>בחרי מושג מהרשימה משמאל</div>
+          ):station==="explicit"?(
+            <ExplicitStation {...stationProps}/>
+          ):station==="implicit"?(
+            <ImplicitStation {...stationProps}/>
+          ):station==="scholar"?(
+            <ScholarStation {...stationProps}/>
+          ):(
+            // ── רכזת: שלושת הכפתורים ──
+            <div style={{maxWidth:"560px",margin:"0 auto"}}>
+              <div style={{fontSize:"17px",fontWeight:"700",color:"#f1f5f9",marginBottom:"4px"}}>{activeConcept}</div>
+              <div style={{fontSize:"12px",color:"#64748b",marginBottom:"20px"}}>בחרי חלק לעבודה. אחרי שמירה החלק נסגר וחוזרים לכאן.</div>
+              {[
+                {key:"explicit",label:"📗 מבנה גלוי",desc:"שדה סמנטי — בדיקת ה-AI ואישור",color:"#34d399",done:!!(entry&&entry.explicit_note&&entry.explicit_note.trim()),active:true},
+                {key:"implicit",label:"📘 מבנה נרמז",desc:hasParams?"פרמטרים ואינדיקטורים":"אין פרמטרים (שדה סמנטי בלבד)",color:"#818cf8",done:!!(entry&&(entry.params||[]).some(p=>p&&p.found!==null)),active:hasParams},
+                ...(isChr?[{key:"scholar",label:"📖 בדיקה מול פרשנים",desc:unit.scholarship?"בדיקה חוזרת מול הפרשנים":"אין פרשנים שמורים ליחידה",color:"#c084fc",done:!!(entry&&(entry.params_scholar||[]).some(p=>p&&p.found!==null)),active:hasParams&&!!unit.scholarship}]:[])
+              ].map(b=>(
+                <button key={b.key} onClick={()=>b.active&&setStation(b.key)} disabled={!b.active}
+                  style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%",textAlign:"right",padding:"16px 18px",borderRadius:"12px",marginBottom:"12px",
+                    cursor:b.active?"pointer":"not-allowed",border:`1px solid ${b.active?b.color+"55":"#334155"}`,
+                    background:b.active?b.color+"14":"#1e293b",color:b.active?b.color:"#475569"}}>
+                  <div>
+                    <div style={{fontSize:"15px",fontWeight:"700"}}>{b.label} {b.done&&<span style={{color:"#34d399",fontSize:"13px"}}>✓ נשמר</span>}</div>
+                    <div style={{fontSize:"12px",color:"#64748b",marginTop:"3px",fontWeight:"400"}}>{b.desc}</div>
+                  </div>
+                  <span style={{fontSize:"18px"}}>{b.active?"›":"🔒"}</span>
+                </button>
+              ))}
+              <button onClick={nextConcept}
+                style={{width:"100%",marginTop:"10px",padding:"12px",borderRadius:"10px",border:"1px dashed #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"13px",fontWeight:"700"}}>
+                המשך למושג הבא ↩
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* רשימת מושגים — משמאל */}
+        <div style={{background:"#1e293b",borderRight:"1px solid #334155",overflowY:"auto",padding:"10px"}}>
+          <div style={{fontSize:"11px",fontWeight:"700",color:"#64748b",marginBottom:"8px"}}>מושגים ({orderedConcepts.length})</div>
+          {DIMS.map(dim=>{
+            const cs=allConcepts.filter(c=>c.dimId===dim.id);
+            if(!cs.length)return null;
+            return(
+              <div key={dim.id} style={{marginBottom:"10px"}}>
+                <div style={{fontSize:"10px",color:dim.color,fontWeight:"700",marginBottom:"4px"}}>{dim.label.split(":")[1]?dim.label.split(":")[1].trim():dim.label}</div>
+                {cs.map(c=>{
+                  const e=getE(unit.id,c.name,mode);
+                  const hp=validParamDefs(getParams(c.name)).length>0;
+                  const st=conceptStatusA(e,mode,hp);
+                  const isActive=activeConcept===c.name;
+                  return(
+                    <button key={c.name} onClick={()=>pickConcept(c.name)}
+                      style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",textAlign:"right",padding:"6px 8px",borderRadius:"6px",border:"none",cursor:"pointer",marginBottom:"2px",fontSize:"12px",
+                        background:isActive?dim.color+"33":"transparent",color:isActive?dim.color:st==="done"?"#34d399":"#94a3b8",
+                        borderRight:isActive?`3px solid ${dim.color}`:"3px solid transparent",fontWeight:isActive?"700":"400"}}>
+                      <span>{c.name}</span>
+                      <StatusDot status={st}/>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+          <div style={{marginTop:"12px",paddingTop:"10px",borderTop:"1px solid #334155",fontSize:"10px",color:"#64748b",lineHeight:"1.9"}}>
+            <div><span style={{color:STATUS_META.done.c}}>●</span> הושלם</div>
+            <div><span style={{color:STATUS_META.await_scholar.c}}>◑</span> ממתין לפרשנים</div>
+            <div><span style={{color:STATUS_META.progress.c}}>◐</span> בתהליך</div>
+            <div><span style={{color:STATUS_META.none.c}}>○</span> טרם התחיל</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── עוטף שלב א' ──
+function StageA({allUnits,allConcepts,getE,setE,getParams,dim4concept,raw}){
+  const [phase,setPhase]=useState("pick");
+  const [sel,setSel]=useState(null); // {unit, mode}
+  if(phase==="pick"||!sel)
+    return <Screen1Picker allUnits={allUnits} onStart={(unit,mode)=>{setSel({unit,mode});setPhase("hub");}}/>;
+  return <Screen2Hub unit={sel.unit} mode={sel.mode} allConcepts={allConcepts} getParams={getParams} getE={getE} setE={setE} dim4concept={dim4concept} raw={raw} onBack={()=>{setPhase("pick");setSel(null);}}/>;
+}
+
+
 function App(){
   const [raw,setRaw]=useState({units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[],compareNotes:{}});
   const [tab,setTab]=useState("home");
@@ -1218,6 +1717,7 @@ function App(){
       <Header msg={msg} tab={tab} setTab={setTab} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
 
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>}
+      {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw}/>}
       {tab==="byunit"&&<ByUnitTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} onUnitSelect={setActiveUnit} analysisMode={analysisMode}/>}
       {tab==="byconcept"&&<ByConceptTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} initConcept={initConcept} setInitConcept={setInitConcept} setEditConcept={setEditConcept} analysisMode={analysisMode}/>}
       {tab==="matrix"&&<MatrixTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} dim4concept={dim4concept} analysisMode={analysisMode}/>}
@@ -1299,7 +1799,7 @@ function HomeTab({allUnits,allConcepts,prog,raw,setTab,setEditConcept,setShowAdd
       {/* Progress cards */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"20px"}}>
         <div style={{...S.card,background:analysisMode==="chronicles"?"linear-gradient(135deg,#1e3a5f,#0f172a)":"linear-gradient(135deg,#1e293b,#0f172a)",border:analysisMode==="chronicles"?"1px solid #93c5fd44":"1px solid #334155",cursor:"pointer"}}
-          onClick={()=>{setAnalysisMode("chronicles");setTab("byunit");}}>
+          onClick={()=>{setAnalysisMode("chronicles");setTab("stagea");}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
             <div>
               <div style={{fontSize:"14px",fontWeight:"bold",color:"#93c5fd"}}>📘 ניתוח דברי הימים</div>
@@ -1313,7 +1813,7 @@ function HomeTab({allUnits,allConcepts,prog,raw,setTab,setEditConcept,setShowAdd
           <div style={{fontSize:"11px",color:"#475569",marginTop:"6px"}}>לחצי להתחיל ניתוח דה"י</div>
         </div>
         <div style={{...S.card,background:analysisMode==="source"?"linear-gradient(135deg,#3f2a00,#0f172a)":"linear-gradient(135deg,#1e293b,#0f172a)",border:analysisMode==="source"?"1px solid #fbbf2444":"1px solid #334155",cursor:"pointer"}}
-          onClick={()=>{setAnalysisMode("source");setTab("byunit");}}>
+          onClick={()=>{setAnalysisMode("source");setTab("stagea");}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
             <div>
               <div style={{fontSize:"14px",fontWeight:"bold",color:"#fbbf24"}}>📙 ניתוח מקבילות (שמ"ב / מל"א)</div>
