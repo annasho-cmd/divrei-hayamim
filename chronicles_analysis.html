@@ -963,7 +963,7 @@ function Header({msg,tab,setTab,analysisMode,setAnalysisMode}){
           ))}
         </div>
         <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
-        {[["home","🏠"],["stagea","🔬 שלב א׳"],["stageb","✨ שלב ב׳"],["byunit","יחידה"],["byconcept","מושג"],["matrix","מטריצה"],["charts","גרפים"]].map(([t,l])=>(
+        {[["home","🏠"],["stagea","🔬 שלב א׳"],["stageb","✨ שלב ב׳"],["rmatrix","🗂️ מטריצת מחקר"],["reports","📄 דו״חות"],["byconcept","מאגר מושגים"]].map(([t,l])=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600",background:tab===t?"#818cf8":"transparent",color:tab===t?"white":"#64748b"}}>{l}</button>
         ))}
       </div>
@@ -1944,6 +1944,253 @@ function StageB({allUnits,allConcepts,getE,getParams,getCompareNote,setCompareNo
 }
 
 
+// ════════════════════════════════════════════════════════════════════════
+// ── מטריצת המחקר — תצוגת ממצאים (read-only) ──
+// אוספת אוטומטית מכל היחידות שיש בהן נתונים, משלב א' וב'. אין הזנה.
+// ════════════════════════════════════════════════════════════════════════
+function ResearchMatrix({allUnits,allConcepts,getE,getParams,getCompareNote,getUnitSummary}){
+  const [fChar,setFChar]=useState("all");
+  const [fDim,setFDim]=useState("all");
+  const [fConcept,setFConcept]=useState("all");
+  const [fUnit,setFUnit]=useState("all");
+
+  const rows=useMemo(()=>{
+    const out=[];
+    allUnits.forEach(u=>{
+      const ch=u.character||"david";
+      allConcepts.forEach(c=>{
+        const vp=validParamDefs(getParams(c.name));
+        const hasParams=vp.length>0;
+        const ec=getE(u.id,c.name,"chronicles")||{};
+        const es=getE(u.id,c.name,"source")||{};
+        const concl=(getCompareNote(u.id,c.name)||"").trim();
+        const change=((getUnitSummary(u.id).changes)||{})[c.name]||"";
+        const chrData=(ec.explicit_note&&ec.explicit_note.trim())||(ec.params||[]).some(p=>p&&p.found!==null);
+        const srcData=(es.explicit_note&&es.explicit_note.trim())||(es.params||[]).some(p=>p&&p.found!==null);
+        if(!chrData&&!srcData&&!concl) return;
+        out.push({
+          u,c,dimId:c.dimId,ch,
+          chrExp:!!(ec.explicit_note&&ec.explicit_note.trim()),
+          chrImp:(ec.params||[]).filter(p=>p&&p.found===true).length,
+          chrSch:(ec.params_scholar||[]).some(p=>p&&p.found!==null),
+          srcExp:!!(es.explicit_note&&es.explicit_note.trim()),
+          srcImp:(es.params||[]).filter(p=>p&&p.found===true).length,
+          vpCount:vp.length, hasParams, concl:!!concl, change,
+          stChr:conceptStatusA(ec,"chronicles",hasParams),
+          stSrc:conceptStatusA(es,"source",hasParams),
+        });
+      });
+    });
+    return out;
+  },[allUnits,allConcepts]);
+
+  const filtered=rows.filter(r=>(fChar==="all"||r.ch===fChar)&&(fDim==="all"||r.dimId===fDim)&&(fConcept==="all"||r.c.name===fConcept)&&(fUnit==="all"||String(r.u.id)===fUnit));
+  const dimOf=id=>DIMS.find(d=>d.id===id);
+  const conceptsForFilter=fDim==="all"?allConcepts:allConcepts.filter(c=>c.dimId===fDim);
+
+  function exportCsv(){
+    const head=["יחידה","דמות","ממד","מושג",'גלוי דה"י','נרמז דה"י',"פרשנים",'גלוי מקבילה','נרמז מקבילה',"השוואה","שינוי"];
+    const lines=[head.join(",")];
+    filtered.forEach(r=>{
+      lines.push([r.u.label,r.ch==="solomon"?"שלמה":"דוד",(dimOf(r.dimId)||{}).label||"",r.c.name,
+        r.chrExp?"כן":"לא",`${r.chrImp}/${r.vpCount}`,r.chrSch?"כן":"לא",
+        r.srcExp?"כן":"לא",`${r.srcImp}/${r.vpCount}`,r.concl?"כן":"לא",r.change||""].map(x=>`"${String(x).replace(/"/g,'""')}"`).join(","));
+    });
+    const blob=new Blob(["\ufeff"+lines.join("\n")],{type:"text/csv"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="מטריצת_מחקר.csv";a.click();
+  }
+
+  const Sel=({value,onChange,children})=>(<select value={value} onChange={e=>onChange(e.target.value)} style={{...S.input,width:"auto",padding:"6px 10px",fontSize:"12px"}}>{children}</select>);
+  const cellNum=(n,tot,col)=> <span style={{color:n>0?col:"#475569",fontWeight:n>0?"700":"400"}}>{n}/{tot}</span>;
+  const yn=(b,col)=> <span style={{color:b?col:"#475569",fontWeight:"700"}}>{b?"✓":"—"}</span>;
+
+  return(
+    <div style={{maxWidth:"1200px",margin:"0 auto",padding:"22px 16px"}}>
+      <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"2px"}}>מטריצת המחקר</div>
+      <div style={{fontSize:"13px",color:"#64748b",marginBottom:"18px"}}>תצוגת ממצאים — נטענת אוטומטית משלב א׳ וב׳ · {filtered.length} ממצאים</div>
+
+      <div style={{display:"flex",gap:"10px",flexWrap:"wrap",alignItems:"center",marginBottom:"16px",background:"#1e293b",borderRadius:"10px",padding:"12px",border:"1px solid #334155"}}>
+        <span style={{fontSize:"11px",color:"#64748b",fontWeight:"700"}}>סינון:</span>
+        <Sel value={fChar} onChange={setFChar}><option value="all">כל הדמויות</option><option value="david">דוד</option><option value="solomon">שלמה</option></Sel>
+        <Sel value={fDim} onChange={v=>{setFDim(v);setFConcept("all");}}><option value="all">כל הממדים</option>{DIMS.map(d=><option key={d.id} value={d.id}>{d.label}</option>)}</Sel>
+        <Sel value={fConcept} onChange={setFConcept}><option value="all">כל המושגים</option>{conceptsForFilter.map(c=><option key={c.name} value={c.name}>{c.name}</option>)}</Sel>
+        <Sel value={fUnit} onChange={setFUnit}><option value="all">כל היחידות</option>{allUnits.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</Sel>
+        <div style={{flex:1}}/>
+        <button onClick={()=>{setFChar("all");setFDim("all");setFConcept("all");setFUnit("all");}} style={{padding:"6px 12px",borderRadius:"8px",border:"1px solid #334155",background:"transparent",color:"#94a3b8",cursor:"pointer",fontSize:"12px"}}>נקה</button>
+        <button onClick={exportCsv} style={{padding:"6px 12px",borderRadius:"8px",border:"none",background:"#334155",color:"#cbd5e1",cursor:"pointer",fontSize:"12px",fontWeight:"700"}}>⬇ ייצא CSV</button>
+      </div>
+
+      {filtered.length===0?(
+        <div style={{padding:"50px",textAlign:"center",color:"#475569"}}>אין ממצאים התואמים את הסינון. השלימי ניתוחים בשלב א׳/ב׳ כדי שיופיעו כאן.</div>
+      ):(
+        <div style={{overflowX:"auto",background:"#1e293b",borderRadius:"10px",border:"1px solid #334155"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px"}}>
+            <thead>
+              <tr style={{color:"#64748b",fontSize:"11px",fontWeight:"700",background:"#0f172a"}}>
+                {["יחידה","דמות","ממד","מושג",'גלוי דה"י','נרמז דה"י',"פרשנים",'גלוי מקבילה','נרמז מקבילה',"השוואה","שינוי"].map((h,i)=>(
+                  <th key={i} style={{padding:"8px 10px",textAlign:i<4?"right":"center",borderBottom:"1px solid #334155",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r,i)=>{
+                const dim=dimOf(r.dimId)||{};
+                return(
+                  <tr key={i} style={{borderBottom:"1px solid #0f172a"}}>
+                    <td style={{padding:"7px 10px",color:"#e2e8f0"}}>{r.u.label}</td>
+                    <td style={{padding:"7px 10px",color:r.ch==="solomon"?"#d8b4fe":"#93c5fd"}}>{r.ch==="solomon"?"שלמה":"דוד"}</td>
+                    <td style={{padding:"7px 10px",color:dim.color||"#94a3b8",whiteSpace:"nowrap"}}>{dim.label?dim.label.split(":")[1].trim():""}</td>
+                    <td style={{padding:"7px 10px",color:"#cbd5e1",fontWeight:"600"}}>{r.c.name}</td>
+                    <td style={{padding:"7px 10px",textAlign:"center"}}>{yn(r.chrExp,"#34d399")}</td>
+                    <td style={{padding:"7px 10px",textAlign:"center"}}>{r.hasParams?cellNum(r.chrImp,r.vpCount,"#93c5fd"):"—"}</td>
+                    <td style={{padding:"7px 10px",textAlign:"center"}}>{r.hasParams?yn(r.chrSch,"#c084fc"):"—"}</td>
+                    <td style={{padding:"7px 10px",textAlign:"center"}}>{yn(r.srcExp,"#34d399")}</td>
+                    <td style={{padding:"7px 10px",textAlign:"center"}}>{r.hasParams?cellNum(r.srcImp,r.vpCount,"#fbbf24"):"—"}</td>
+                    <td style={{padding:"7px 10px",textAlign:"center"}}>{yn(r.concl,"#34d399")}</td>
+                    <td style={{padding:"7px 10px",textAlign:"center",color:r.change&&r.change!=="—"?"#fde047":"#475569"}}>{r.change&&r.change!=="—"?r.change:"—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// ── מחולל הדו"חות ──
+// חמישה סוגים: יחידה / מושג / דמות / ממד / השוואתי. אוסף מנתוני שלב א'+ב', AI כותב טיוטה.
+// ════════════════════════════════════════════════════════════════════════
+function ReportGenerator({allUnits,allConcepts,getE,getParams,getCompareNote,getFactual,getUnitSummary}){
+  const [type,setType]=useState("unit");      // unit|concept|character|dimension|comparative
+  const [target,setTarget]=useState("");      // unit id / concept name / character / dim id / concept (for comparative)
+  const [changeFilter,setChangeFilter]=useState("התחזק"); // for comparative
+  const [draft,setDraft]=useState("");
+  const [load,setLoad]=useState(false);
+  const [flash,setFlash]=useState("");
+  const CHANGE_OPTS=["התחזק","נחלש","נוסף","ללא שינוי",'רק בדה"י'];
+
+  // ── איסוף חומר גלם ──
+  function unitConceptBlock(u,cname){
+    const concl=(getCompareNote(u.id,cname)||"").trim();
+    const fact=(getFactual(u.id,cname)||"").trim();
+    if(!concl&&!fact) return "";
+    return `#### ${cname} — ${u.label}\n${fact?`ניתוח עובדתי: ${fact}\n`:""}${concl?`מסקנה: ${concl}`:""}`;
+  }
+  function assemble(){
+    const parts=[];
+    if(type==="unit"){
+      const u=allUnits.find(x=>x.id==target); if(!u) return {title:"",text:""};
+      allConcepts.forEach(c=>{const b=unitConceptBlock(u,c.name); if(b)parts.push(b);});
+      const s=getUnitSummary(u.id);
+      if(s.patterns)parts.push(`### דפוסים מרכזיים\n${s.patterns}`);
+      if(s.conclusion)parts.push(`### מסקנת היחידה\n${s.conclusion}`);
+      return {title:`דוח יחידה — ${u.label}`,text:parts.join("\n\n")};
+    }
+    if(type==="concept"){
+      allUnits.forEach(u=>{const b=unitConceptBlock(u,target); if(b)parts.push(b);});
+      return {title:`דוח מושג — ${target}`,text:parts.join("\n\n")};
+    }
+    if(type==="character"){
+      const us=allUnits.filter(u=>(u.character||"david")===target);
+      us.forEach(u=>{const s=getUnitSummary(u.id); if(s.conclusion)parts.push(`### ${u.label}\n${s.conclusion}`); else { allConcepts.forEach(c=>{const b=unitConceptBlock(u,c.name);if(b)parts.push(b);}); }});
+      return {title:`דוח דמות — ${target==="solomon"?"שלמה":"דוד"}`,text:parts.join("\n\n")};
+    }
+    if(type==="dimension"){
+      const dim=DIMS.find(d=>d.id===target); if(!dim) return {title:"",text:""};
+      dim.concepts.forEach(cn=>{ allUnits.forEach(u=>{const b=unitConceptBlock(u,cn);if(b)parts.push(b);}); });
+      return {title:`דוח ממד — ${dim.label}`,text:parts.join("\n\n")};
+    }
+    if(type==="comparative"){
+      allUnits.forEach(u=>{
+        const ch=((getUnitSummary(u.id).changes)||{})[target];
+        if(ch===changeFilter){const b=unitConceptBlock(u,target); parts.push(b||`#### ${target} — ${u.label}\n(סומן "${changeFilter}", טרם נכתבה מסקנה)`);}
+      });
+      return {title:`דוח השוואתי — ${target} (${changeFilter})`,text:parts.join("\n\n")};
+    }
+    return {title:"",text:""};
+  }
+
+  const INSTRUCTION={
+    unit:"כתבי דוח מחקר רציף על היחידה, המשלב את ממצאי המושגים השונים למסקנה כוללת על עיצוב הדמות ביחידה.",
+    concept:"כתבי דוח מחקר על המושג לאורך כל היחידות — כיצד הכרוניסט מעצב אותו, מגמות חוזרות, ושינויים בולטים. מתאים כבסיס לפרק במחקר.",
+    character:"כתבי דוח מסכם על הדמות — אופי העיצוב של הכרוניסט לאורך כל יחידותיה, כשלד לפרק במחקר.",
+    dimension:"כתבי דוח על הממד הנבואי — כיצד מתבטאים מושגיו לאורך היחידות, ומה המגמה המשותפת.",
+    comparative:"כתבי דוח השוואתי הממוקד ביחידות שבהן המושג סומן בשינוי הנבחר — מה משותף להן וכיצד פעל הכרוניסט.",
+  };
+
+  async function generate(){
+    const {title,text}=assemble();
+    if(!text.trim()){ setDraft("אין חומר מספיק להפקת דוח זה — השלימי מסקנות בשלב ב'."); return; }
+    setLoad(true);
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דמויות דוד ושלמה בדברי הימים לאור החזון הנבואי.
+${INSTRUCTION[type]}
+
+להלן החומר שנאסף מן המחקר (מסקנות וניתוחים שאושרו):
+
+${text}
+
+כתבי בעברית אקדמית, מובנה (עם כותרות משנה במידת הצורך), נאמן לחומר שנמסר בלבד — אל תמציאי ממצאים שלא הופיעו. סיימי בפסקת סיכום.`;
+    try{ setDraft(await aiCall(prompt,3000)); }catch(e){ setDraft("⚠️ "+e.message); }
+    setLoad(false);
+  }
+  function showSource(){ const {text}=assemble(); setDraft(text||"אין חומר."); }
+  function exportMd(){
+    const {title}=assemble();
+    const blob=new Blob([`# ${title}\n\n${draft}`],{type:"text/markdown"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`${title||"דוח"}.md`;a.click();
+    setFlash("✓ הדוח יוצא");setTimeout(()=>setFlash(""),2000);
+  }
+
+  // אתחול ברירת מחדל ל-target כשמשנים סוג
+  React.useEffect(()=>{
+    if(type==="unit")setTarget(allUnits[0]?allUnits[0].id:"");
+    else if(type==="concept"||type==="comparative")setTarget(allConcepts[0]?allConcepts[0].name:"");
+    else if(type==="character")setTarget("david");
+    else if(type==="dimension")setTarget(DIMS[0].id);
+    setDraft("");
+  },[type]);
+
+  const TYPES=[["unit","דוח יחידה"],["concept","דוח מושג"],["character","דוח דמות"],["dimension","דוח ממד"],["comparative","דוח השוואתי"]];
+
+  return(
+    <div style={{maxWidth:"980px",margin:"0 auto",padding:"22px 16px 60px"}}>
+      <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"2px"}}>מחולל הדו"חות</div>
+      <div style={{fontSize:"13px",color:"#64748b",marginBottom:"18px"}}>אוסף את החומר מהמחקר, וה-AI כותב טיוטה לעריכה ולייצוא</div>
+
+      <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"14px"}}>
+        {TYPES.map(([t,l])=>(
+          <button key={t} onClick={()=>setType(t)}
+            style={{padding:"10px 16px",borderRadius:"10px",border:type===t?"1px solid #818cf8":"1px solid #334155",cursor:"pointer",
+              background:type===t?"#818cf822":"#1e293b",color:type===t?"#a5b4fc":"#94a3b8",fontSize:"13px",fontWeight:"700"}}>{l}</button>
+        ))}
+      </div>
+
+      <div style={{display:"flex",gap:"10px",flexWrap:"wrap",alignItems:"center",marginBottom:"16px",background:"#1e293b",borderRadius:"10px",padding:"12px",border:"1px solid #334155"}}>
+        <span style={{fontSize:"12px",color:"#94a3b8",fontWeight:"700"}}>נושא הדוח:</span>
+        {type==="unit"&&<select value={target} onChange={e=>setTarget(e.target.value)} style={{...S.input,width:"auto"}}>{allUnits.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}</select>}
+        {(type==="concept"||type==="comparative")&&<select value={target} onChange={e=>setTarget(e.target.value)} style={{...S.input,width:"auto"}}>{allConcepts.map(c=><option key={c.name} value={c.name}>{c.name}</option>)}</select>}
+        {type==="character"&&<select value={target} onChange={e=>setTarget(e.target.value)} style={{...S.input,width:"auto"}}><option value="david">דוד</option><option value="solomon">שלמה</option></select>}
+        {type==="dimension"&&<select value={target} onChange={e=>setTarget(e.target.value)} style={{...S.input,width:"auto"}}>{DIMS.map(d=><option key={d.id} value={d.id}>{d.label}</option>)}</select>}
+        {type==="comparative"&&<><span style={{fontSize:"12px",color:"#94a3b8"}}>שסומן:</span><select value={changeFilter} onChange={e=>setChangeFilter(e.target.value)} style={{...S.input,width:"auto"}}>{CHANGE_OPTS.map(o=><option key={o} value={o}>{o}</option>)}</select></>}
+      </div>
+
+      <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"14px"}}>
+        <button onClick={generate} disabled={load} style={{flex:1,minWidth:"180px",padding:"12px",borderRadius:"10px",border:"none",cursor:load?"wait":"pointer",background:load?"#1e293b":"#818cf8",color:load?"#475569":"white",fontSize:"14px",fontWeight:"700"}}>{load?"⏳ כותב דוח...":"🤖 צור טיוטת דוח"}</button>
+        <button onClick={showSource} style={{padding:"12px 16px",borderRadius:"10px",border:"1px solid #334155",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"13px",fontWeight:"700"}}>📋 הצג חומר גלם</button>
+        <button onClick={exportMd} disabled={!draft} style={{padding:"12px 16px",borderRadius:"10px",border:"1px solid #475569",cursor:draft?"pointer":"not-allowed",background:"transparent",color:draft?"#cbd5e1":"#475569",fontSize:"13px",fontWeight:"700"}}>📄 ייצא Markdown</button>
+        {flash&&<span style={{color:"#34d399",fontSize:"12px",fontWeight:"700",alignSelf:"center"}}>{flash}</span>}
+      </div>
+
+      <textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={22}
+        placeholder="הטיוטה תופיע כאן לאחר הפקה — ניתן לערוך לפני הייצוא..." style={{...S.input,resize:"vertical",lineHeight:"1.9",fontSize:"14px"}}/>
+    </div>
+  );
+}
+
+
 function App(){
   const [raw,setRaw]=useState({units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[],compareNotes:{},compareFactual:{},unitSummary:{}});
   const [tab,setTab]=useState("home");
@@ -2210,6 +2457,8 @@ function App(){
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>}
       {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
+      {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
+      {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
       {tab==="byunit"&&<ByUnitTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} onUnitSelect={setActiveUnit} analysisMode={analysisMode}/>}
       {tab==="byconcept"&&<ByConceptTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} initConcept={initConcept} setInitConcept={setInitConcept} setEditConcept={setEditConcept} analysisMode={analysisMode}/>}
       {tab==="matrix"&&<MatrixTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} dim4concept={dim4concept} analysisMode={analysisMode}/>}
@@ -2321,7 +2570,7 @@ function HomeTab({allUnits,allConcepts,prog,raw,setTab,setEditConcept,setShowAdd
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"20px"}}>
-        {[["stageb","✨ שלב ב׳ — סינתזה והשוואה","#34d399","השוואה בין דה\"י למקבילה לפי מושג"],["byconcept","🔍 לפי מושג","#818cf8",""],["matrix","📊 מטריצה","#fbbf24",""],["charts","📈 גרפים","#f87171",""]].map(([t,l,c,desc])=>(
+        {[["stageb","✨ שלב ב׳ — סינתזה והשוואה","#34d399","השוואה בין דה\"י למקבילה לפי מושג"],["rmatrix","🗂️ מטריצת המחקר","#818cf8","תצוגת כל הממצאים עם סינון"],["reports","📄 מחולל דו״חות","#fbbf24","דוחות יחידה / מושג / דמות / ממד"],["byconcept","🔍 מאגר המושגים","#f87171","ניתוח ועריכה לפי מושג"]].map(([t,l,c,desc])=>(
           <button key={t} onClick={()=>setTab(t)} style={{background:"#1e293b",border:`1px solid ${c}33`,borderRadius:"10px",padding:"16px",textAlign:"right",cursor:"pointer",color:c,fontSize:"14px",fontWeight:"600"}}>
             {l}{desc&&<div style={{fontSize:"11px",color:"#64748b",marginTop:"4px",fontWeight:"400"}}>{desc}</div>}
           </button>
