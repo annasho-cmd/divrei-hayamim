@@ -1337,60 +1337,51 @@ ${scholarship}
 }
 
 // ── מסך 1 — בחירת יחידה ספרותית ──
-function Screen1Picker({allUnits,allConcepts,getE,getParams,onStart}){
-  const [character,setCharacter]=useState(null);
-  const [sel,setSel]=useState(null); // {unitId, mode}
-  const units=allUnits.filter(u=>u.character===character||(character==="david"&&!u.character));
+// mode מגיע מבחוץ (מהכרטיס שנלחץ בדף הבית) וקבוע לאורך המסך הזה — לא נבחר כאן.
+// שתי העמודות במסך הזה הן הדמויות (דוד / שלמה), כמו בתרשים הזרימה.
+function Screen1Picker({allUnits,allConcepts,getE,getParams,mode,onStart}){
+  const [sel,setSel]=useState(null); // {unitId, character}
+  const modeLabel=mode==="source"?'📙 ניתוח מקבילות (שמ"ב / מל"א)':'📘 ניתוח דברי הימים';
+  const modeColor=mode==="source"?"#fbbf24":"#93c5fd";
   const selUnit=sel?allUnits.find(u=>u.id===sel.unitId):null;
   return(
     <div style={{maxWidth:"880px",margin:"0 auto",padding:"32px 16px"}}>
       <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>שלב א׳ — ניתוח עצמאי של יחידה</div>
-      <div style={{fontSize:"13px",color:"#64748b",marginBottom:"24px"}}>מסך 1 · בחירת יחידה ספרותית</div>
+      <div style={{fontSize:"13px",color:modeColor,fontWeight:"700",marginBottom:"24px"}}>מסך 1 · בחירת יחידה ספרותית — {modeLabel}</div>
 
-      <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>בחירת דמות</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"28px"}}>
-        {[["david","👑 דוד","#93c5fd"],["solomon","👑 שלמה","#d8b4fe"]].map(([ch,l,c])=>(
-          <button key={ch} onClick={()=>{setCharacter(ch);setSel(null);}}
-            style={{padding:"18px",borderRadius:"12px",cursor:"pointer",fontSize:"16px",fontWeight:"700",
-              border:character===ch?`2px solid ${c}`:"1px solid #334155",
-              background:character===ch?c+"22":"#1e293b",color:character===ch?c:"#94a3b8"}}>{l}</button>
-        ))}
+      <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>בחירת יחידה — מתוך שתי הדמויות</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px"}}>
+        {[["david","👑 דוד","#93c5fd"],["solomon","👑 שלמה","#d8b4fe"]].map(([ch,title,c])=>{
+          const units=allUnits.filter(u=>u.character===ch||(ch==="david"&&!u.character));
+          return(
+            <div key={ch} style={{background:"#1e293b",borderRadius:"10px",padding:"12px",border:"1px solid #334155"}}>
+              <div style={{fontSize:"12px",fontWeight:"700",color:c,marginBottom:"8px"}}>{title}</div>
+              {units.length===0&&<div style={{fontSize:"12px",color:"#475569",padding:"8px"}}>אין יחידות</div>}
+              {units.map(u=>{
+                const isSel=sel&&sel.unitId===u.id;
+                const noText=mode==="source"?!u.sourceText:!u.chroniclesText;
+                const pr=noText?null:unitProgress(u.id,mode,allConcepts,getE,getParams);
+                return(
+                  <button key={u.id} disabled={noText} onClick={()=>setSel({unitId:u.id,character:ch})}
+                    style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",textAlign:"right",padding:"8px 10px",borderRadius:"7px",border:"none",marginBottom:"4px",fontSize:"12px",
+                      cursor:noText?"not-allowed":"pointer",
+                      background:isSel?c+"33":"#0f172a",color:noText?"#475569":isSel?c:"#cbd5e1",
+                      borderRight:isSel?`3px solid ${c}`:"3px solid transparent"}}>
+                    <span>{u.label}{noText&&<span style={{fontSize:"10px",color:"#475569"}}> (אין טקסט)</span>}</span>
+                    {pr&&<ProgressBadge done={pr.done} total={pr.total}/>}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
       </div>
 
-      {character&&(
-        <>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>בחירת יחידה — מתוך שתי רשימות</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px"}}>
-            {[["chronicles",'📘 דברי הימים',"#93c5fd"],["source",'📙 מקבילה',"#fbbf24"]].map(([mode,title,c])=>(
-              <div key={mode} style={{background:"#1e293b",borderRadius:"10px",padding:"12px",border:"1px solid #334155"}}>
-                <div style={{fontSize:"12px",fontWeight:"700",color:c,marginBottom:"8px"}}>{title}</div>
-                {units.length===0&&<div style={{fontSize:"12px",color:"#475569",padding:"8px"}}>אין יחידות</div>}
-                {units.map(u=>{
-                  const isSel=sel&&sel.unitId===u.id&&sel.mode===mode;
-                  const noText=mode==="source"?!u.sourceText:!u.chroniclesText;
-                  const pr=noText?null:unitProgress(u.id,mode,allConcepts,getE,getParams);
-                  return(
-                    <button key={u.id} disabled={noText} onClick={()=>setSel({unitId:u.id,mode})}
-                      style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",textAlign:"right",padding:"8px 10px",borderRadius:"7px",border:"none",marginBottom:"4px",fontSize:"12px",
-                        cursor:noText?"not-allowed":"pointer",
-                        background:isSel?c+"33":"#0f172a",color:noText?"#475569":isSel?c:"#cbd5e1",
-                        borderRight:isSel?`3px solid ${c}`:"3px solid transparent"}}>
-                      <span>{u.label}{noText&&<span style={{fontSize:"10px",color:"#475569"}}> (אין טקסט)</span>}</span>
-                      {pr&&<ProgressBadge done={pr.done} total={pr.total}/>}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-
-          <button onClick={()=>selUnit&&onStart(selUnit,sel.mode)} disabled={!sel}
-            style={{width:"100%",marginTop:"24px",padding:"16px",borderRadius:"12px",border:"none",cursor:sel?"pointer":"not-allowed",
-              background:sel?"#818cf8":"#1e293b",color:sel?"white":"#475569",fontSize:"16px",fontWeight:"700"}}>
-            {sel?`התחל ניתוח — ${selUnit.label} (${sel.mode==="source"?"מקבילה":'דה"י'})`:"בחרי יחידה כדי להתחיל"}
-          </button>
-        </>
-      )}
+      <button onClick={()=>selUnit&&onStart(selUnit)} disabled={!selUnit}
+        style={{width:"100%",marginTop:"24px",padding:"16px",borderRadius:"12px",border:"none",cursor:selUnit?"pointer":"not-allowed",
+          background:selUnit?"#818cf8":"#1e293b",color:selUnit?"white":"#475569",fontSize:"16px",fontWeight:"700"}}>
+        {selUnit?`התחל ניתוח — ${selUnit.label}`:"בחרי יחידה כדי להתחיל"}
+      </button>
     </div>
   );
 }
@@ -1524,12 +1515,13 @@ function Screen2Hub({unit,mode,allConcepts,getParams,getE,setE,dim4concept,raw,o
 }
 
 // ── עוטף שלב א' ──
-function StageA({allUnits,allConcepts,getE,setE,getParams,dim4concept,raw}){
+function StageA({allUnits,allConcepts,getE,setE,getParams,dim4concept,raw,analysisMode}){
   const [phase,setPhase]=useState("pick");
-  const [sel,setSel]=useState(null); // {unit, mode}
+  const [sel,setSel]=useState(null); // {unit} — המצב (דה"י/מקבילות) מגיע כעת מ-analysisMode ולא נשמר כאן
+  React.useEffect(()=>{ setPhase("pick"); setSel(null); },[analysisMode]); // מעבר מצב תמיד מתחיל מבחירת יחידה מחדש
   if(phase==="pick"||!sel)
-    return <Screen1Picker allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} onStart={(unit,mode)=>{setSel({unit,mode});setPhase("hub");}}/>;
-  return <Screen2Hub unit={sel.unit} mode={sel.mode} allConcepts={allConcepts} getParams={getParams} getE={getE} setE={setE} dim4concept={dim4concept} raw={raw} onBack={()=>{setPhase("pick");setSel(null);}}/>;
+    return <Screen1Picker allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} mode={analysisMode} onStart={(unit)=>{setSel({unit});setPhase("hub");}}/>;
+  return <Screen2Hub unit={sel.unit} mode={analysisMode} allConcepts={allConcepts} getParams={getParams} getE={getE} setE={setE} dim4concept={dim4concept} raw={raw} onBack={()=>{setPhase("pick");setSel(null);}}/>;
 }
 
 
@@ -2559,7 +2551,7 @@ function App(){
       <Header msg={msg} tab={tab} setTab={setTab} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
 
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode} backupData={backupData} resetNirmaz={resetNirmaz}/>}
-      {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw}/>}
+      {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw} analysisMode={analysisMode}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
       {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
