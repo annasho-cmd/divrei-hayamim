@@ -1429,24 +1429,27 @@ function ScholarStation({conceptName,params,sem,unitText,modeLabel,character,sch
   async function run(){
     if(!scholarship||!scholarship.trim()){setMsg("אין הערות פרשנים שמורות ליחידה זו — יש להזין אותן בכלי ההשוואה.");return;}
     if(!validParams.length){setMsg("אין פרמטרים מוגדרים.");return;}
+    // אם כבר יש המלצות, זו הרצה משלימה: מבקשים רק את האינדיקטורים שעדיין חסרה להם המלצה, ולא נוגעים בקיימים.
+    const targetIdx=recs.some(Boolean)?validParams.map((_,i)=>i).filter(i=>!recs[i]):validParams.map((_,i)=>i);
+    if(!targetIdx.length){setMsg("יש כבר המלצה לכל האינדיקטורים — אין מה להשלים.");return;}
     setLoad(true);setMsg("");setMissingIdx([]);
-    const paramLines=validParams.map((p,i)=>{const f=findings[i]||{};const cur=f.found===true?`כן${f.verse?` ${f.verse}`:""}`:f.found===false?"לא":"לא נבדק";const label=paramLabelOf(p);const markers=paramMarkersStr(p);return `${i+1}. ${label?`פרמטר: ${label} | `:""}אינדיקטור: ${paramText(p)}${markers?` | סימנים: ${markers}`:""}\n   בדיקת החוקרת כעת: ${cur}${f.note?` — ${f.note}`:""}`;}).join("\n\n");
-    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. קראת את פירושי הפרשנים על היחידה "${conceptName}" (דמות ${who}). תפקידך: להמליץ לחוקרת — לא למלא את הטבלה בעצמך. חובה להתייחס לכל אחד מ-${validParams.length} הפרמטרים המנוספרים למטה, גם אם אין לך המלצה עבור חלקם (במקרה זה כתבי "אין המלצה").
+    const paramLines=targetIdx.map(i=>{const p=validParams[i];const f=findings[i]||{};const cur=f.found===true?`כן${f.verse?` ${f.verse}`:""}`:f.found===false?"לא":"לא נבדק";const label=paramLabelOf(p);const markers=paramMarkersStr(p);return `${i+1}. ${label?`פרמטר: ${label} | `:""}אינדיקטור: ${paramText(p)}${markers?` | סימנים: ${markers}`:""}\n   בדיקת החוקרת כעת: ${cur}${f.note?` — ${f.note}`:""}`;}).join("\n\n");
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. קראת את פירושי הפרשנים על היחידה "${conceptName}" (דמות ${who}). תפקידך: להמליץ לחוקרת — לא למלא את הטבלה בעצמך. חובה להתייחס לכל אחד מ-${targetIdx.length} הפרמטרים המנוספרים למטה (המספור תואם את מספרם המקורי ברשימה המלאה), גם אם אין לך המלצה עבור חלקם (במקרה זה כתבי "אין המלצה").
 
 לכל פרמטר, המלץ האם ועל מה כדאי לחזק או להוסיף על סמך הפרשנים, וציין במפורש על אילו פרשנים אתה נשען. אל תשנה את הבדיקה — רק המלץ.
 
 טקסט (${modeLabel}):
 ${unitText}
 
-פרמטרים ובדיקת החוקרת הנוכחית:
+פרמטרים ובדיקת החוקרת הנוכחית (רק אלו שעדיין חסרה להם המלצה):
 ${paramLines}
 
 פירושי הפרשנים על היחידה:
 ${scholarship}
 
-ענה ONLY ב-JSON תקני, ללא טקסט לפני/אחרי, וחובה להחזיר בדיוק ${validParams.length} איברים (אחד לכל פרמטר, מספור 1 עד ${validParams.length}):
+ענה ONLY ב-JSON תקני, ללא טקסט לפני/אחרי, וחובה להחזיר בדיוק ${targetIdx.length} איברים, כאשר "param" הוא המספר המקורי כפי שמופיע למעלה (לא רצף מ-1):
 [
-  {"param":1,"recommendation":"מה כדאי לחזק/להוסיף על סמך הפרשנים, או 'אין המלצה' אם הפרשנים אינם מוסיפים","commentators":["שם פרשן"],"suggest_found":true,"suggest_verse":"(ג)"}
+  {"param":${targetIdx[0]+1},"recommendation":"מה כדאי לחזק/להוסיף על סמך הפרשנים, או 'אין המלצה' אם הפרשנים אינם מוסיפים","commentators":["שם פרשן"],"suggest_found":true,"suggest_verse":"(ג)"}
 ]
 - recommendation: המלצה קצרה ומעשית בעברית.
 - commentators: שמות הפרשנים שעליהם ההמלצה נשענת (מערך).
@@ -1454,10 +1457,17 @@ ${scholarship}
 - suggest_verse: פסוק שהפרשנים מצביעים עליו אם רלוונטי, אחרת "".`;
     try{
       const parsed=parseParamJSON(await aiCall(prompt,4000));
-      setRecs(validParams.map((p,i)=>{const it=parsed.find(x=>x.param-1===i);return it?{text:it.recommendation||"",commentators:it.commentators||[],suggestFound:(it.suggest_found===undefined?null:it.suggest_found),suggestVerse:it.suggest_verse||"",noteAdopted:false,foundAdopted:false}:null;}));
-      const missing=validParams.map((_,i)=>i).filter(i=>!parsed.some(x=>x.param-1===i));
+      setRecs(prev=>{
+        const a=[...prev];
+        targetIdx.forEach(i=>{
+          const it=parsed.find(x=>x.param-1===i);
+          a[i]=it?{text:it.recommendation||"",commentators:it.commentators||[],suggestFound:(it.suggest_found===undefined?null:it.suggest_found),suggestVerse:it.suggest_verse||"",noteAdopted:false,foundAdopted:false}:a[i];
+        });
+        return a;
+      });
+      const missing=targetIdx.filter(i=>!parsed.some(x=>x.param-1===i));
       setMissingIdx(missing);
-      setMsg(missing.length?`⚠️ התקבלו המלצות, אך חסרות עבור ${missing.length} אינדיקטורים (${missing.map(i=>i+1).join(", ")}) — אפשר להריץ שוב.`:"✓ התקבלו המלצות לכל האינדיקטורים — קראי והחליטי מה לאמץ");
+      setMsg(missing.length?`⚠️ הושלמו חלק מהחסרים, אך עדיין חסרות המלצות ל-${missing.length} אינדיקטורים (${missing.map(i=>i+1).join(", ")}) — אפשר להריץ שוב.`:"✓ הושלמו כל ההמלצות — קראי והחליטי מה לאמץ (ההמלצות הקודמות לא נפגעו)");
     }catch(e){ setMsg("⚠️ "+e.message); }
     setLoad(false);
   }
@@ -1513,7 +1523,7 @@ ${scholarship}
       </div>
 
       <button onClick={run} disabled={load||!scholarship} style={{width:"100%",marginBottom:"12px",padding:"9px",borderRadius:"7px",border:"none",cursor:(load||!scholarship)?"not-allowed":"pointer",background:(load||!scholarship)?"#1e293b":"#3b0764",color:(load||!scholarship)?"#475569":"#e9d5ff",fontSize:"13px",fontWeight:"700"}}>
-        {load?"⏳ מפיק המלצות...":recs.some(Boolean)?"🔄 הפק המלצות מחדש":"🤖 קבל המלצות מהפרשנים"}
+        {load?"⏳ מפיק המלצות...":recs.some(Boolean)?"🔄 השלימי המלצות חסרות":"🤖 קבל המלצות מהפרשנים"}
       </button>
       {msg&&<div style={{fontSize:"12px",color:msg.startsWith("✓")?"#34d399":"#fca5a5",marginBottom:"12px",padding:"6px 10px",background:"#1e293b",borderRadius:"6px"}}>{msg}</div>}
 
