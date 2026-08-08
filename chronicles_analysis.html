@@ -1416,19 +1416,22 @@ function ImplicitStation({conceptName,params,sem,unitText,modeLabel,character,en
 function ScholarStation({conceptName,params,sem,unitText,modeLabel,character,scholarship,entry,onSave,onClose}){
   const validParams=validParamDefs(params);
   const savedRecs=(entry&&entry.scholarRecommendations)||{};
-  const initRecs=validParams.map(p=>{const r=savedRecs[paramId(p)]; return r?{text:r.text||"",commentators:r.commentators||[],suggestFound:(r.suggestFound===undefined?null:r.suggestFound),suggestVerse:r.suggestVerse||"",adopted:!!r.adopted}:null;});
+  const initRecs=validParams.map(p=>{const r=savedRecs[paramId(p)]; return r?{text:r.text||"",commentators:r.commentators||[],suggestFound:(r.suggestFound===undefined?null:r.suggestFound),suggestVerse:r.suggestVerse||"",noteAdopted:!!r.noteAdopted,foundAdopted:!!r.foundAdopted}:null;});
   const [recs,setRecs]=useState(initRecs);
-  const [findings,setFindings]=useState(()=>alignedFindings(entry,validParams)); // עותק עבודה של הנרמז, כדי ש"אמץ" יחיל עליו
+  const initialFindings=useMemo(()=>alignedFindings(entry,validParams),[]); // תמונת מצב קבועה של הנרמז בכניסה למסך — קו הבסיס שלא נוגעים בו בלי פעולה מפורשת
+  const [findings,setFindings]=useState(()=>initialFindings);
+  const [changed,setChanged]=useState(false); // true רק אם בוצעה פעולת אימוץ בפועל
   const [load,setLoad]=useState(false);
   const [msg,setMsg]=useState("");
+  const [missingIdx,setMissingIdx]=useState([]);
   const who=character==="solomon"?"שלמה":"דוד";
 
   async function run(){
     if(!scholarship||!scholarship.trim()){setMsg("אין הערות פרשנים שמורות ליחידה זו — יש להזין אותן בכלי ההשוואה.");return;}
     if(!validParams.length){setMsg("אין פרמטרים מוגדרים.");return;}
-    setLoad(true);setMsg("");
+    setLoad(true);setMsg("");setMissingIdx([]);
     const paramLines=validParams.map((p,i)=>{const f=findings[i]||{};const cur=f.found===true?`כן${f.verse?` ${f.verse}`:""}`:f.found===false?"לא":"לא נבדק";const label=paramLabelOf(p);const markers=paramMarkersStr(p);return `${i+1}. ${label?`פרמטר: ${label} | `:""}אינדיקטור: ${paramText(p)}${markers?` | סימנים: ${markers}`:""}\n   בדיקת החוקרת כעת: ${cur}${f.note?` — ${f.note}`:""}`;}).join("\n\n");
-    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. קראת את פירושי הפרשנים על היחידה "${conceptName}" (דמות ${who}). תפקידך: להמליץ לחוקרת — לא למלא את הטבלה בעצמך.
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. קראת את פירושי הפרשנים על היחידה "${conceptName}" (דמות ${who}). תפקידך: להמליץ לחוקרת — לא למלא את הטבלה בעצמך. חובה להתייחס לכל אחד מ-${validParams.length} הפרמטרים המנוספרים למטה, גם אם אין לך המלצה עבור חלקם (במקרה זה כתבי "אין המלצה").
 
 לכל פרמטר, המלץ האם ועל מה כדאי לחזק או להוסיף על סמך הפרשנים, וציין במפורש על אילו פרשנים אתה נשען. אל תשנה את הבדיקה — רק המלץ.
 
@@ -1441,50 +1444,66 @@ ${paramLines}
 פירושי הפרשנים על היחידה:
 ${scholarship}
 
-ענה ONLY ב-JSON תקני, ללא טקסט לפני/אחרי:
+ענה ONLY ב-JSON תקני, ללא טקסט לפני/אחרי, וחובה להחזיר בדיוק ${validParams.length} איברים (אחד לכל פרמטר, מספור 1 עד ${validParams.length}):
 [
   {"param":1,"recommendation":"מה כדאי לחזק/להוסיף על סמך הפרשנים, או 'אין המלצה' אם הפרשנים אינם מוסיפים","commentators":["שם פרשן"],"suggest_found":true,"suggest_verse":"(ג)"}
 ]
 - recommendation: המלצה קצרה ומעשית בעברית.
 - commentators: שמות הפרשנים שעליהם ההמלצה נשענת (מערך).
-- suggest_found: אם הפרשנים תומכים בשינוי הסימון — true/false; אם אין המלצה לשינוי — null.
+- suggest_found: דעת הפרשנים על הסימון הנכון, ללא קשר לבדיקת החוקרת — true/false; אם אין עמדה, null.
 - suggest_verse: פסוק שהפרשנים מצביעים עליו אם רלוונטי, אחרת "".`;
     try{
       const parsed=parseParamJSON(await aiCall(prompt,4000));
-      setRecs(validParams.map((p,i)=>{const it=parsed.find(x=>x.param-1===i);return it?{text:it.recommendation||"",commentators:it.commentators||[],suggestFound:(it.suggest_found===undefined?null:it.suggest_found),suggestVerse:it.suggest_verse||"",adopted:false}:null;}));
-      setMsg("✓ התקבלו המלצות — קראי והחליטי מה לאמץ");
+      setRecs(validParams.map((p,i)=>{const it=parsed.find(x=>x.param-1===i);return it?{text:it.recommendation||"",commentators:it.commentators||[],suggestFound:(it.suggest_found===undefined?null:it.suggest_found),suggestVerse:it.suggest_verse||"",noteAdopted:false,foundAdopted:false}:null;}));
+      const missing=validParams.map((_,i)=>i).filter(i=>!parsed.some(x=>x.param-1===i));
+      setMissingIdx(missing);
+      setMsg(missing.length?`⚠️ התקבלו המלצות, אך חסרות עבור ${missing.length} אינדיקטורים (${missing.map(i=>i+1).join(", ")}) — אפשר להריץ שוב.`:"✓ התקבלו המלצות לכל האינדיקטורים — קראי והחליטי מה לאמץ");
     }catch(e){ setMsg("⚠️ "+e.message); }
     setLoad(false);
   }
 
-  function adopt(i){
+  // מוסיף רק את הערת הפרשן לתיעוד — לעולם אינו נוגע ב-found. פעולה בטוחה תמיד.
+  function adoptNote(i){
     const r=recs[i]; if(!r)return;
     setFindings(prev=>{
       const a=[...prev];
       const cur=a[i]||{found:null,verse:"",note:""};
       const src=r.commentators&&r.commentators.length?` [פרשנים: ${r.commentators.join(", ")}]`:"";
       const addNote=`${r.text}${src}`;
-      a[i]={
-        found: (r.suggestFound===true||r.suggestFound===false)?r.suggestFound:cur.found,
-        verse: r.suggestVerse?(cur.verse?cur.verse:r.suggestVerse):cur.verse,
-        note: cur.note?`${cur.note}\n↳ ${addNote}`:addNote
-      };
+      a[i]={...cur, note: cur.note?`${cur.note}\n↳ ${addNote}`:addNote};
       return a;
     });
-    setRecs(prev=>{const a=[...prev];a[i]={...a[i],adopted:true};return a;});
-    setMsg(`✓ המלצה ${i+1} נוספה להערת הפרמטר — זכרי לשמור`);
+    setRecs(prev=>{const a=[...prev];a[i]={...a[i],noteAdopted:true};return a;});
+    setChanged(true);
+    setMsg(`✓ ההערה נוספה לתיעוד הפרמטר ${i+1} (הסימון שלך לא השתנה) — זכרי לשמור`);
+  }
+
+  // פעולה נפרדת ומפורשת: לשנות בפועל את הסימון לפי דעת הפרשנים. מוצגת רק כשיש חוסר הסכמה אמיתי.
+  function adoptFoundChange(i){
+    const r=recs[i]; if(!r||(r.suggestFound!==true&&r.suggestFound!==false))return;
+    setFindings(prev=>{
+      const a=[...prev];
+      const cur=a[i]||{found:null,verse:"",note:""};
+      a[i]={...cur, found:r.suggestFound, verse:r.suggestVerse?(cur.verse?cur.verse:r.suggestVerse):cur.verse};
+      return a;
+    });
+    setRecs(prev=>{const a=[...prev];a[i]={...a[i],foundAdopted:true};return a;});
+    setChanged(true);
+    setMsg(`✓ הסימון של פרמטר ${i+1} עודכן לפי דעת הפרשנים — זכרי לשמור`);
   }
 
   function save(){
     const recObj={};
-    validParams.forEach((p,i)=>{ if(recs[i]) recObj[paramId(p)||("i"+i)]={text:recs[i].text,commentators:recs[i].commentators,suggestFound:recs[i].suggestFound,suggestVerse:recs[i].suggestVerse,adopted:recs[i].adopted}; });
-    onSave({params:taggedFindings(validParams,findings),scholarRecommendations:recObj});
+    validParams.forEach((p,i)=>{ if(recs[i]) recObj[paramId(p)||("i"+i)]={text:recs[i].text,commentators:recs[i].commentators,suggestFound:recs[i].suggestFound,suggestVerse:recs[i].suggestVerse,noteAdopted:recs[i].noteAdopted,foundAdopted:recs[i].foundAdopted}; });
+    // אם לא בוצעה שום פעולת אימוץ בפועל, אין לגעת בכלל בטבלת ה-params של הנרמז — נשמרות רק ההמלצות עצמן.
+    const patch=changed?{params:taggedFindings(validParams,findings),scholarRecommendations:recObj}:{scholarRecommendations:recObj};
+    onSave(patch);
   }
 
   return(
     <div style={{background:"#0f172a",borderRadius:"10px",padding:"16px",border:"1px solid #c084fc44"}}>
       <div style={{fontSize:"14px",fontWeight:"700",color:"#c084fc",marginBottom:"4px"}}>📖 בדיקה מול פרשנים — {conceptName}</div>
-      <div style={{fontSize:"11px",color:"#64748b",marginBottom:"12px"}}>ה-AI ממליץ בלבד ומציין על אילו פרשנים נשען. את מחליטה מה לאמץ — "אמץ" מוסיף להערת הפרמטר בטבלה מבלי לדרוס.</div>
+      <div style={{fontSize:"11px",color:"#64748b",marginBottom:"12px"}}>הפרשנים ממליצים בלבד. הסימון שלך מהנרמז נשאר קבוע: "הוסיפי הערה" רק מוסיפה תיעוד ולעולם לא נוגעת בסימון. שינוי סימון בפועל מתבצע רק בלחיצה נפרדת ומפורשת, ומוצג רק כשיש חוסר הסכמה אמיתי בין דעתך לדעת הפרשנים.</div>
 
       <div style={{background:"#1e293b",borderRadius:"8px",padding:"12px",marginBottom:"12px",border:"1px solid #334155"}}>
         <div style={{fontSize:"12px",fontWeight:"700",color:"#fbbf24",marginBottom:"6px"}}>📝 פירושי הפרשנים (מכלי ההשוואה)</div>
@@ -1502,21 +1521,29 @@ ${scholarship}
         {validParams.map((param,i)=>{
           const r=recs[i]; const f=findings[i]||{found:null,verse:"",note:""};
           const curTxt=f.found===true?`כן ✓${f.verse?` ${f.verse}`:""}`:f.found===false?"לא ✗":"לא נבדק";
+          const disagreement=r&&(r.suggestFound===true||r.suggestFound===false)&&r.suggestFound!==f.found;
           return(
             <div key={i} style={{background:"#1e293b",borderRadius:"8px",padding:"11px",marginBottom:"8px",border:"1px solid #334155"}}>
               <div style={{fontSize:"12px",color:"#cbd5e1",fontWeight:"600",marginBottom:"4px",lineHeight:"1.5"}}>{i+1}. {paramText(param)}</div>
-              <div style={{fontSize:"11px",color:"#818cf8",marginBottom:"6px"}}>הבדיקה שלך: <span style={{fontWeight:"700"}}>{curTxt}</span></div>
+              <div style={{fontSize:"11px",color:"#818cf8",marginBottom:"6px"}}>הבדיקה שלך (מהנרמז, קבועה): <span style={{fontWeight:"700"}}>{curTxt}</span></div>
               {!r?(
-                <div style={{fontSize:"11px",color:"#475569"}}>— טרם התקבלה המלצה —</div>
+                missingIdx.includes(i)
+                  ?<div style={{fontSize:"11px",color:"#fbbf24"}}>⚠️ לא התקבלה המלצה עבור אינדיקטור זה בהרצה האחרונה — אפשר להריץ שוב.</div>
+                  :<div style={{fontSize:"11px",color:"#475569"}}>— טרם התקבלה המלצה —</div>
               ):(
                 <div style={{background:"#0f172a",borderRadius:"6px",padding:"9px",border:"1px solid #3b0764"}}>
                   <div style={{fontSize:"12px",color:"#e9d5ff",lineHeight:"1.7",marginBottom:"6px"}}>💡 {r.text||"אין המלצה"}</div>
                   {r.commentators&&r.commentators.length>0&&<div style={{fontSize:"10px",color:"#c084fc",marginBottom:"6px"}}>נשען על: {r.commentators.join(", ")}</div>}
-                  {r.suggestFound!==null&&<div style={{fontSize:"10px",color:"#fbbf24",marginBottom:"6px"}}>מציע לסמן: {r.suggestFound?"כן ✓":"לא ✗"}{r.suggestVerse?` ${r.suggestVerse}`:""}</div>}
+                  {disagreement&&<div style={{fontSize:"10px",color:"#fbbf24",marginBottom:"6px"}}>לדעת הפרשנים ראוי לשקול: {r.suggestFound?"כן ✓":"לא ✗"}{r.suggestVerse?` ${r.suggestVerse}`:""} (שונה מהסימון שלך — שינוי בפועל דורש לחיצה נפרדת למטה)</div>}
                   {(r.text&&r.text!=="אין המלצה")&&(
-                    r.adopted
-                      ?<div style={{fontSize:"11px",color:"#34d399",fontWeight:"700"}}>✓ אומץ להערת הפרמטר</div>
-                      :<button onClick={()=>adopt(i)} style={{padding:"5px 14px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#7e22ce",color:"white",fontSize:"12px",fontWeight:"700"}}>אמץ ↓</button>
+                    <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginTop:"4px"}}>
+                      {r.noteAdopted
+                        ?<div style={{fontSize:"11px",color:"#34d399",fontWeight:"700"}}>✓ ההערה נוספה לתיעוד</div>
+                        :<button onClick={()=>adoptNote(i)} style={{padding:"5px 14px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#7e22ce",color:"white",fontSize:"12px",fontWeight:"700"}}>➕ הוסיפי הערה לתיעוד (לא נוגע בסימון)</button>}
+                      {disagreement&&(r.foundAdopted
+                        ?<div style={{fontSize:"11px",color:"#fbbf24",fontWeight:"700"}}>✓ הסימון עודכן לפי הפרשנים</div>
+                        :<button onClick={()=>adoptFoundChange(i)} style={{padding:"5px 14px",borderRadius:"8px",border:"1px solid #fbbf24",cursor:"pointer",background:"transparent",color:"#fbbf24",fontSize:"12px",fontWeight:"700"}}>⚠️ שני בפועל לסימון {r.suggestFound?"כן":"לא"}</button>)}
+                    </div>
                   )}
                 </div>
               )}
