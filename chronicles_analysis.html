@@ -655,13 +655,13 @@ function EntryEditor({unitId,conceptName,conceptParams,entry,onChange,unitText,s
 טקסט (${modeLabel}):
 ${unitText}
 
-ענה בעברית בתמציתיות:
-1. **מילים שנמצאו מהשדה החיובי** — כל מילה + מספר פסוק מדויק.
-2. **מילים שנמצאו מהשדה ההפוך** — אותו פורמט.
-3. **מסקנה** — האם המושג "${conceptName}" מופיע ישירות בטקסט?`;
+ענה בעברית, קצר וצפוף, ללא שורות ריקות. שלוש שורות בלבד:
+חיובי: <המילים מהשדה החיובי, מופרדות בפסיקים, כל אחת עם מספר פסוק; אם אין — "אין">
+הפוך: <אותו פורמט; אם אין — "אין">
+מסקנה: <משפט אחד: האם המושג מופיע ישירות בטקסט>`;
     try{
       const res=await fetch("https://anthropic-proxy.anna-sho-ea8.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:500,messages:[{role:"user",content:prompt}]})});
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:2000,messages:[{role:"user",content:prompt}]})});
       const data=await res.json();
       if(!data.content||!data.content.length){
         setExplAiRes("⚠️ שגיאת AI: "+aiErrorText(data));
@@ -1167,6 +1167,7 @@ async function aiCall(prompt,maxTokens){
     body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:maxTokens,messages:[{role:"user",content:prompt}]})});
   const data=await res.json();
   if(!data.content||!data.content.length) throw new Error("שגיאת AI: "+aiErrorText(data));
+  if(data.stop_reason==="max_tokens") console.warn("aiCall: התשובה נקטעה עקב מגבלת max_tokens");
   return data.content.map(b=>b.text||"").join("");
 }
 function parseParamJSON(rawText){
@@ -1232,11 +1233,11 @@ async function aiExplicit({conceptName,sem,unitText,modeLabel}){
 טקסט (${modeLabel}):
 ${unitText}
 
-ענה בעברית בתמציתיות:
-1. **מילים שנמצאו מהשדה החיובי** — כל מילה + מספר פסוק מדויק.
-2. **מילים שנמצאו מהשדה ההפוך** — אותו פורמט.
-3. **מסקנה** — האם המושג "${conceptName}" מופיע ישירות בטקסט?`;
-  return await aiCall(prompt,500);
+ענה בעברית, קצר וצפוף, ללא שורות ריקות. שלוש שורות בלבד:
+חיובי: <המילים מהשדה החיובי, מופרדות בפסיקים, כל אחת עם מספר פסוק; אם אין — "אין">
+הפוך: <אותו פורמט; אם אין — "אין">
+מסקנה: <משפט אחד: האם המושג מופיע ישירות בטקסט>`;
+  return await aiCall(prompt,2000);
 }
 function buildParamPrompt({conceptName,validParams,sem,unitText,modeLabel,character,explicitNote,scholarship}){
   const paramsList=validParams.map((p,i)=>{const label=paramLabelOf(p),q=paramText(p),markers=paramMarkersStr(p);return `${i+1}. ${label?`[פרמטר: ${label}] `:""}אינדיקטור: ${q}${markers?`\n   סימנים בטקסט (ראיות לחיפוש): ${markers}`:""}`;}).join("\n\n");
