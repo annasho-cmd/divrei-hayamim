@@ -26,6 +26,7 @@
     body{font-family:'Segoe UI',Arial,sans-serif;background:#f8fafc;}
     select,input,textarea,button{font-family:inherit;}
   </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -289,10 +290,16 @@ const FB_PATH = "research";
 let pendingFbSaves = 0; // counts saves that haven't been confirmed by the server yet
 const FB_BASE_SHAPE = {units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[],compareNotes:{},commentary:{}};
 // fbSave — שמירה "עוורת" (כותבת בדיוק את מה שקיבלה, בלי לבדוק מה יש בשרת). נשמרת לתאימות בלבד, לא בשימוש בקוד החדש.
+const FB_PATH2 = "research2";
+const PER_UNIT_KEYS = ["analysis","analysis_chronicles","analysis_source","unitSummary","compareNotes","compareFactual","commentary"];
+function __packJson(data){ const s=JSON.stringify(data); try{ return (window.LZString)?("z:"+LZString.compressToBase64(s)):s; }catch(e){ return s; } }
+function __unpackJson(str){ if(str==null) return null; try{ if(typeof str==="string" && str.slice(0,2)==="z:" && window.LZString){ const d=LZString.decompressFromBase64(str.slice(2)); if(d) return JSON.parse(d); } }catch(e){} return JSON.parse(str); }
+function __shard(data){ data=data||{}; const meta={}; for(const k of Object.keys(data)){ if(!PER_UNIT_KEYS.includes(k)) meta[k]=data[k]; } const uids=new Set(); for(const k of PER_UNIT_KEYS){ const o=data[k]; if(o&&typeof o==="object") for(const u of Object.keys(o)) uids.add(u); } const u={}; for(const uid of uids){ const slice={}; for(const k of PER_UNIT_KEYS){ if(data[k]&&data[k][uid]!==undefined) slice[k]=data[k][uid]; } u[uid]=__packJson(slice); } return { meta: __packJson(meta), u }; }
+function __unshard(sh){ if(!sh) return null; const data=__unpackJson(sh.meta)||{}; for(const k of PER_UNIT_KEYS){ if(data[k]===undefined) data[k]={}; } const u=sh.u||{}; for(const uid of Object.keys(u)){ const slice=__unpackJson(u[uid])||{}; for(const k of PER_UNIT_KEYS){ if(slice[k]!==undefined) data[k][uid]=slice[k]; } } return data; }
 const fbSave = (data) => {
   pendingFbSaves++;
   let p;
-  try{ p = db.ref(FB_PATH).set({json: JSON.stringify(data)}); }
+  try{ p = db.ref(FB_PATH2).set(__shard(data)); }
   catch(e){ console.error("FB save error",e); pendingFbSaves--; return Promise.reject(e); }
   return p.then(()=>{ pendingFbSaves--; }).catch(err=>{ pendingFbSaves--; console.error("FB save error",err); throw err; });
 };
@@ -304,13 +311,13 @@ const fbSaveMerge = (patchFn) => {
   pendingFbSaves++;
   const run = async () => {
     try{
-      const snap = await db.ref(FB_PATH).once("value");
+      const snap = await db.ref(FB_PATH2).once("value");
       const v = snap.val();
       let serverData;
-      try{ serverData = v ? JSON.parse(v.json) : {...FB_BASE_SHAPE}; }
+      try{ serverData = __unshard(v) || {...FB_BASE_SHAPE}; }
       catch{ serverData = {...FB_BASE_SHAPE}; }
       const merged = patchFn({...FB_BASE_SHAPE, ...serverData});
-      await db.ref(FB_PATH).set({json: JSON.stringify(merged)});
+      await db.ref(FB_PATH2).set(__shard(merged));
       return merged;
     }catch(err){
       console.error("FB save error",err);
@@ -324,12 +331,33 @@ const fbSaveMerge = (patchFn) => {
   return result;
 };
 const fbLoad = (cb) => {
-  db.ref(FB_PATH).once("value").then(snap => {
-    const v=snap.val();
-    if(!v){cb(null);return;}
-    try{ cb(JSON.parse(v.json)); }catch{ cb(null); }
-  });
+  db.ref(FB_PATH2).once("value").then(snap => {
+    const sh = snap.val();
+    if(sh && (sh.meta || (sh.u && Object.keys(sh.u).length))){ cb(__unshard(sh)); return; }
+    db.ref(FB_PATH).once("value").then(old => {
+      const v = old.val();
+      if(!v){ cb(null); return; }
+      let legacy; try{ legacy = __unpackJson(v.json); }catch(e){ legacy=null; }
+      if(!legacy){ cb(null); return; }
+      cb(legacy);
+      try{ db.ref(FB_PATH2).set(__shard(legacy))
+        .then(()=>console.log("migrated to sharded storage (research2); legacy 'research' kept as backup"))
+        .catch(e=>console.error("migration write failed (legacy kept)",e)); }catch(e){ console.error(e); }
+    }).catch(()=>cb(null));
+  }).catch(()=>cb(null));
 };
+(function(){
+  function __setupImport(){
+    if(!document.body || document.getElementById("__impBtn")) return;
+    const btn=document.createElement("button"); btn.id="__impBtn"; btn.textContent="\u2b06\ufe0f \u05d4\u05e2\u05dc\u05d4 \u05d2\u05d9\u05d1\u05d5\u05d9";
+    btn.style.cssText="position:fixed;bottom:12px;left:12px;z-index:99999;padding:8px 12px;border-radius:8px;border:1px solid #475569;background:#1e293b;color:#e2e8f0;cursor:pointer;font-size:12px;font-family:inherit";
+    const inp=document.createElement("input"); inp.type="file"; inp.accept=".json,application/json"; inp.style.display="none";
+    btn.onclick=()=>inp.click();
+    inp.onchange=()=>{ const f=inp.files&&inp.files[0]; if(!f)return; const rd=new FileReader(); rd.onload=()=>{ try{ const d=JSON.parse(rd.result); if(!confirm("\u05dc\u05d8\u05e2\u05d5\u05df \u05d0\u05ea \u05d4\u05d2\u05d9\u05d1\u05d5\u05d9? \u05d4\u05e0\u05ea\u05d5\u05e0\u05d9\u05dd \u05d1\u05e2\u05e0\u05df \u05d9\u05d5\u05d7\u05dc\u05e4\u05d5 \u05d1\u05d2\u05d9\u05d1\u05d5\u05d9, \u05d5\u05d4\u05d3\u05e3 \u05d9\u05e8\u05d5\u05e2\u05e0\u05df.")) return; fbSave(d).then(()=>{ alert("\u2713 \u05d4\u05d2\u05d9\u05d1\u05d5\u05d9 \u05e0\u05d8\u05e2\u05df. \u05de\u05e8\u05e2\u05e0\u05df..."); location.reload(); }).catch(err=>alert("\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e9\u05de\u05d9\u05e8\u05d4: "+err)); }catch(err){ alert("\u05e7\u05d5\u05d1\u05e5 \u05d2\u05d9\u05d1\u05d5\u05d9 \u05dc\u05d0 \u05ea\u05e7\u05d9\u05df: "+err); } }; rd.readAsText(f); };
+    document.body.appendChild(btn); document.body.appendChild(inp);
+  }
+  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",__setupImport); else __setupImport();
+})();
 // אזהרה אם מנסים לסגור/לרענן את הדף בזמן ששמירה לענן עדיין לא אושרה
 window.addEventListener("beforeunload",(e)=>{
   if(pendingFbSaves>0){
