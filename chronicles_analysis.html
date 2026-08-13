@@ -29,6 +29,7 @@
     ::-webkit-scrollbar-track{background:#1e293b;}
     ::-webkit-scrollbar-thumb{background:#475569;border-radius:3px;}
   </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
 </head>
 <body><div id="root"><div style="padding:40px;color:white;font-size:18px;text-align:center">⏳ טוען... אם מסך זה נשאר — סגרי ופתחי מחדש בכרום</div></div>
 <script type="text/babel">
@@ -523,6 +524,8 @@ const SEMANTIC = {"בינה": {"pos": "בינה, תבונה, נבון, להבי�
 // ── Commentators ─────────────────────────────────────────────────────
 // ── Firebase Storage ──────────────────────────────────────────────────
 const FB_PATH = "research";
+function __packJson(data){ const s=JSON.stringify(data); try{ return (window.LZString)?LZString.compressToBase64(s):s; }catch(e){ return s; } }
+function __unpackJson(str){ if(str==null) return null; if(window.LZString){ try{ const d=LZString.decompressFromBase64(str); if(d){ return JSON.parse(d); } }catch(e){} } return JSON.parse(str); }
 let pendingFbSaves = 0; // counts saves that haven't been confirmed by the server yet
 const FB_BASE_SHAPE = {units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[],compareNotes:{},compareFactual:{},unitSummary:{}};
 // fbSave — שמירה "עוורת" (כותבת בדיוק את מה שקיבלה, בלי לבדוק מה יש בשרת). נשמרת לתאימות, אך עדיף שלא להשתמש בה לשינויים חלקיים.
@@ -530,7 +533,7 @@ const fbSave = (data) => {
   pendingFbSaves++;
   let p;
   try{
-    p = db.ref(FB_PATH).set({json: JSON.stringify(data)});
+    p = db.ref(FB_PATH).set({json: __packJson(data)});
   }catch(e){
     console.error("FB save error",e);
     pendingFbSaves--;
@@ -551,10 +554,10 @@ const fbSaveMerge = (patchFn) => {
       const snap = await db.ref(FB_PATH).once("value");
       const v = snap.val();
       let serverData;
-      try{ serverData = v ? JSON.parse(v.json) : {...FB_BASE_SHAPE}; }
+      try{ serverData = v ? __unpackJson(v.json) : {...FB_BASE_SHAPE}; }
       catch{ serverData = {...FB_BASE_SHAPE}; }
       const merged = patchFn({...FB_BASE_SHAPE, ...serverData});
-      await db.ref(FB_PATH).set({json: JSON.stringify(merged)});
+      await db.ref(FB_PATH).set({json: __packJson(merged)});
       return merged;
     }catch(err){
       console.error("FB save error",err);
@@ -571,7 +574,7 @@ const fbLoad = (cb) => {
   db.ref(FB_PATH).once("value").then(snap => {
     const v=snap.val();
     if(!v){cb(null);return;}
-    try{ cb(JSON.parse(v.json)); }catch{ cb(null); }
+    try{ cb(__unpackJson(v.json)); }catch{ cb(null); }
   });
 };
 // אזהרה אם מנסים לסגור/לרענן את הדף בזמן ששמירה לענן עדיין לא אושרה
@@ -2579,7 +2582,7 @@ function App(){
   const [newParams,setNewParams]=useState(Array(10).fill(""));
 
   function flash(m){setMsg(m);setTimeout(()=>setMsg(""),m&&m.startsWith("⚠️")?6000:2000);}
-  function cloudSave(){const d=window.__rawData||raw;fbSave(d).then(()=>flash("☁️ נשמר לענן")).catch(()=>flash("⚠️ השמירה לענן נכשלה — בדקי חיבור לאינטרנט!"));}
+  function cloudSave(){const d=window.__rawData||raw;fbSave(d).then(()=>flash("☁️ נשמר לענן")).catch(()=>flash("⚠️ השמירה לענן נכשלה — ראי קונסול (ייתכן שהנתונים גדולים מדי)"));}
 
   function setData(fn){
     setRaw(prev=>{
