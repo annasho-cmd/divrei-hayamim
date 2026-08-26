@@ -2069,6 +2069,53 @@ ${scholarship&&scholarship.trim()?scholarship:"אין הערות פרשנים ש
   function saveFactual(){ setFactual(unit.id,conceptName,factual); setSavedF(true); setTimeout(()=>setSavedF(false),2000); }
   function saveConclusion(){ setCompareNote(unit.id,conceptName,conclusion); setSavedC(true); setTimeout(()=>setSavedC(false),2000); }
 
+  async function runSondergutConclusion(){
+    setLoadC(true);
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך, הבוחן כיצד הכרוניסט מעצב את דמותו של ${who} ביחידה ספרותית מספר דברי הימים שאין לה מקבילה בשמואל ובמלכים (יחידת סונדרגוט). כיוון שאין השוואה למקבילה, הניתוח מתמקד ביחידה עצמה ובמשמעותה למושג "${conceptName}" בעיצוב דמותו של ${who}.
+
+מושג: "${conceptName}"
+יחידה: ${unit.label} | דמות: ${who}
+
+טקסט היחידה בדברי הימים:
+${unit.chroniclesText||"—"}
+
+תוצאות הפרמטרים ביחידה:
+${paramsText}${scholarText}
+
+הערות פרשנים על היחידה (מכלי ההשוואה):
+${scholarship&&scholarship.trim()?scholarship:"אין הערות פרשנים שמורות ליחידה זו"}
+
+הנחיות לכתיבת המסקנה: כתבי בעברית אקדמית, כ-220-280 מילה, בפרוזה רציפה בלבד.
+
+איסור מוחלט על כל סימן עיצוב טקסט: אסור להשתמש בסולמיות (###, ##, #) לכותרות, אסור בכוכביות כפולות (**מילה**) להדגשה, אסור בקווי הפרדה (---, ***), אסור ברשימות ממוספרות (1. 2. 3.) או בתבליטים (-, •, *). כתבי הכל כפסקאות פרוזה רגילות בלבד. אסור בשורות ריקות מיותרות בין הפסקאות — לכל היותר שורה ריקה אחת בין פסקה לפסקה.
+
+כלל חובה בציטוט חוקרים: הערות הפרשנים לעיל מלוות במספרי עמוד מדויקים (בפורמט "עמ' XXX"). בכל פעם שאת מזכירה חוקר בשמו במסקנה, חובה לצרף מיד לאחר שמו את מספר העמוד בסוגריים על סמך המספר המדויק המופיע בהערות. הפורמט הנדרש: "שם החוקר (עמ' XXX)". אם החוקר מוזכר ביחס לטענה שאין לה מספר עמוד ספציפי בהערות שלעיל, אל תנקבי בשמו כלל אלא נסחי את התובנה באופן כללי (למשל "הפרשנות המחקרית מדגישה" או "מקובל בפרשנות"). אין להמציא מספרי עמוד בשום מקרה — רק להשתמש במספרים המופיעים במפורש בהערות.
+
+המבנה הפנימי הוא שלוש פסקאות רצופות. כיוון שיחידה זו היא סונדרגוט (ללא מקבילה בשמואל/מלכים), הניתוח מבוסס על שלושה עמודי תווך: נוכחות לקסיקלית, מבנה מיקום וכמות, והד לספרות הנבואית של חזון המלך האידיאלי.
+
+פסקה ראשונה — השדה הגלוי ונוכחות לקסיקלית: האם המושג "${conceptName}" מופיע במפורש בטקסט היחידה? באילו פסוקים ובאילו ביטויים ספציפיים? אילו מונחים מהמשפחה הסמנטית של המושג (מילים קרובות, שורשים דומים, ביטויים נלווים) עולים מן היחידה? ציינו במפורש אם המושג נעדר לחלוטין מהרובד הגלוי.
+
+פסקה שנייה — מבנה, מיקום, כמות והד נבואי: כיצד היחידה בנויה סביב המושג? כמה מקום מוקדש להיבט זה בתוך היחידה? האם מיקום היחידה במבנה הרחב של פרקי ${who} בדברי הימים מלמד על משקלה בעיצוב הדמות? האם ניתן לזהות בטקסט הדים לביטויים, לתמונות או לתבניות של חזון המלך האידיאלי מישעיהו, מירמיהו ומיחזקאל? עברו על הפרמטרים שהתקיימו ביחידה והסבירו מה הם חושפים על עיצוב המושג. השתמשו בהערות הפרשנים לביסוס, תוך הקפדה על כלל החובה לציון מספר העמוד בסוגריים לאחר כל שם חוקר.
+
+פסקה שלישית — מסקנה: באיזה אופן היחידה מבססת את המושג "${conceptName}" בדמותו של ${who}? האם מדובר בביסוס מרכזי, בעיגון משני, או שהמושג נעדר מן החומר?`;
+    try{
+      let text=await aiCall(prompt,2500);
+      try{
+        text=text
+          .replace(/^\s*#{1,6}\s+/gm,"")
+          .replace(/\*\*([^*]+?)\*\*/g,"$1")
+          .replace(/__([^_]+?)__/g,"$1")
+          .replace(/^\s*[-=*_]{3,}\s*$/gm,"")
+          .replace(/^\s*[\-•]\s+/gm,"")
+          .replace(/\n{3,}/g,"\n\n")
+          .replace(/[ \t]+\n/g,"\n")
+          .trim();
+      }catch(cleanErr){console.warn("markdown cleanup failed:",cleanErr);}
+      setConclusion(text);
+    }catch(e){ setConclusion("⚠️ "+e.message); }
+    setLoadC(false);
+  }
+
   return(
     <>
       {/* טבלת השוואת פרמטרים */}
@@ -2128,10 +2175,18 @@ ${scholarship&&scholarship.trim()?scholarship:"אין הערות פרשנים ש
       {/* אזור ד' — מסקנה מחקרית */}
       <div style={{background:"#0f172a",borderRadius:"10px",padding:"14px",border:"1px solid #34d39944"}}>
         <div style={{fontSize:"13px",fontWeight:"700",color:"#34d399",marginBottom:"10px"}}>✍️ מסקנה מחקרית</div>
-        <button onClick={runConclusion} disabled={loadC}
-          style={{width:"100%",marginBottom:"10px",padding:"9px",borderRadius:"7px",border:"none",cursor:loadC?"wait":"pointer",background:loadC?"#1e293b":"#064e3b",color:loadC?"#475569":"#34d399",fontSize:"13px",fontWeight:"700"}}>
-          {loadC?"⏳ כותב מסקנה...":conclusion?"🔄 כתבי מסקנה מחדש":"✍️ כתבי מסקנה"}
-        </button>
+        <div style={{display:"flex",gap:"8px",marginBottom:"10px"}}>
+          <button onClick={runConclusion} disabled={loadC}
+            style={{flex:1,padding:"9px",borderRadius:"7px",border:"none",cursor:loadC?"wait":"pointer",background:loadC?"#1e293b":"#064e3b",color:loadC?"#475569":"#34d399",fontSize:"13px",fontWeight:"700"}}
+            title="מסקנה השוואתית: משווה בין דה&quot;י למקבילה בשמואל/מלכים">
+            {loadC?"⏳ כותב מסקנה...":conclusion?"🔄 מסקנה השוואתית":"✍️ מסקנה השוואתית"}
+          </button>
+          <button onClick={runSondergutConclusion} disabled={loadC}
+            style={{flex:1,padding:"9px",borderRadius:"7px",border:"none",cursor:loadC?"wait":"pointer",background:loadC?"#1e293b":"#3b0764",color:loadC?"#475569":"#c084fc",fontSize:"13px",fontWeight:"700"}}
+            title="מסקנה עצמאית: ליחידות סונדרגוט (בלי מקבילה) — מנתח את היחידה בפני עצמה לפי נוכחות לקסיקלית, מבנה והד נבואי">
+            {loadC?"⏳ כותב מסקנה...":conclusion?"🔄 מסקנה עצמאית (סונדרגוט)":"✍️ מסקנה עצמאית (סונדרגוט)"}
+          </button>
+        </div>
         <textarea value={conclusion} onChange={e=>setConclusion(e.target.value)} rows={9}
           placeholder="המסקנה המחקרית תופיע כאן — ניתן לערוך לפני שמירה..." style={{...S.input,resize:"vertical",lineHeight:"1.8"}}/>
         <button onClick={saveConclusion}
