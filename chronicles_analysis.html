@@ -1925,7 +1925,7 @@ function buildDiffSummaryText(unit){
 }
 
 // ── מסך 1 — בחירת יחידת ההשוואה ──
-function StageBPick({allUnits,allConcepts,getE,getParams,onOpen,onSummary,isAnalyzed}){
+function StageBPick({allUnits,allConcepts,getE,getParams,onOpen,onSummary,isAnalyzed,getCompareNote,getUnitSummary,setUnitSummary}){
   const [character,setCharacter]=useState(null);
   const [selUnitId,setSelUnitId]=useState(null);
   const units=allUnits.filter(u=>u.character===character||(character==="david"&&!u.character));
@@ -1934,6 +1934,24 @@ function StageBPick({allUnits,allConcepts,getE,getParams,onOpen,onSummary,isAnal
   const chrOk=sel?isAnalyzed(sel.id,"chronicles"):false;
   const srcOk=sel?isAnalyzed(sel.id,"source"):false;
   const ready=chrOk&&(isSondergut||srcOk);
+
+  // חישוב סטטוס עבודת שלב ב' לכל יחידה — מבוסס על מספר המסקנות המחקריות שנכתבו
+  function stageBStatus(uid){
+    const summary=getUnitSummary?getUnitSummary(uid):{};
+    if(summary&&summary.notInThesis) return {icon:"⏭️",label:"אינה בתזה",color:"#7c3aed",count:0,total:allConcepts.length,notInThesis:true};
+    const concls=allConcepts.filter(c=>((getCompareNote(uid,c.name)||"").trim().length>0)).length;
+    const total=allConcepts.length;
+    if(concls===0) return {icon:"⬜",label:"טרם",color:"#64748b",count:concls,total:total};
+    if(concls>=total*0.75) return {icon:"✅",label:"סיימת",color:"#34d399",count:concls,total:total};
+    return {icon:"🟡",label:"בעבודה",color:"#fbbf24",count:concls,total:total};
+  }
+
+  // פונקציה שמסמנת/מבטלת סימון יחידה כלא רלוונטית לתזה
+  function toggleNotInThesis(uid){
+    if(!setUnitSummary||!getUnitSummary) return;
+    const cur=getUnitSummary(uid)||{};
+    setUnitSummary(uid,{...cur,notInThesis:!cur.notInThesis});
+  }
   return(
     <div style={{maxWidth:"860px",margin:"0 auto",padding:"32px 16px"}}>
       <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>שלב ב׳ — סינתזה והשוואה</div>
@@ -1950,40 +1968,68 @@ function StageBPick({allUnits,allConcepts,getE,getParams,onOpen,onSummary,isAnal
 
       {character&&(
         <>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>בחירת יחידה (לפי דברי הימים)</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"10px"}}>
+            <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8"}}>בחירת יחידה (לפי דברי הימים)</div>
+            {(()=>{const done=units.filter(u=>stageBStatus(u.id).icon==="✅").length;
+                    const inprog=units.filter(u=>stageBStatus(u.id).icon==="🟡").length;
+                    const notin=units.filter(u=>stageBStatus(u.id).notInThesis).length;
+                    const empty=units.length-done-inprog-notin;
+                    return<div style={{fontSize:"11px",color:"#64748b"}}>
+                      <span style={{color:"#34d399",marginLeft:"10px"}}>✅ {done}</span>
+                      <span style={{color:"#fbbf24",marginLeft:"10px"}}>🟡 {inprog}</span>
+                      <span style={{color:"#64748b",marginLeft:"10px"}}>⬜ {empty}</span>
+                      {notin>0&&<span style={{color:"#a78bfa",marginLeft:"10px"}}>⏭️ {notin}</span>}
+                      <span style={{color:"#94a3b8",marginRight:"12px"}}>מתוך {units.length} יחידות</span>
+                    </div>;})()}
+          </div>
           <div style={{background:"#1e293b",borderRadius:"10px",padding:"12px",border:"1px solid #334155",marginBottom:"18px"}}>
             {units.length===0&&<div style={{fontSize:"12px",color:"#475569",padding:"8px"}}>אין יחידות</div>}
             {units.map(u=>{
               const isSel=selUnitId===u.id;
               const pr=unitProgress(u.id,"chronicles",allConcepts,getE,getParams);
+              const st=stageBStatus(u.id);
               return(
                 <button key={u.id} onClick={()=>setSelUnitId(u.id)}
                   style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",textAlign:"right",padding:"9px 12px",borderRadius:"7px",border:"none",marginBottom:"4px",fontSize:"13px",cursor:"pointer",
-                    background:isSel?"#34d39922":"#0f172a",color:isSel?"#34d399":"#cbd5e1",borderRight:isSel?"3px solid #34d399":"3px solid transparent"}}>
-                  <span>{u.label}{u.sourceRef&&<span style={{fontSize:"11px",color:"#64748b"}}> · {u.sourceRef}</span>}</span>
-                  <ProgressBadge done={pr.done} total={pr.total}/>
+                    background:isSel?"#34d39922":"#0f172a",color:isSel?"#34d399":"#cbd5e1",borderRight:isSel?"3px solid #34d399":"3px solid transparent"}}
+                  title={`שלב ב': ${st.label} (${st.count}/${st.total} מסקנות)`}>
+                  <span style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontSize:"14px"}}>{st.icon}</span>
+                    <span>{u.label}{u.sourceRef&&<span style={{fontSize:"11px",color:"#64748b"}}> · {u.sourceRef}</span>}</span>
+                  </span>
+                  <span style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontSize:"11px",color:st.color,fontWeight:"600"}}>{st.count}/{st.total}</span>
+                    <ProgressBadge done={pr.done} total={pr.total}/>
+                  </span>
                 </button>
               );
             })}
           </div>
 
-          {sel&&(
+          {sel&&(()=>{const selStatus=stageBStatus(sel.id);return(
             <div style={{background:"#0f172a",borderRadius:"10px",padding:"16px",border:"1px solid #334155"}}>
-              <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"12px"}}>{sel.label}{isSondergut&&<span style={{fontSize:"11px",color:"#c084fc",marginRight:"8px",fontWeight:"600"}}>· יחידה עצמאית (ללא מקבילה)</span>}</div>
+              <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"12px"}}>{sel.label}
+                {isSondergut&&<span style={{fontSize:"11px",color:"#c084fc",marginRight:"8px",fontWeight:"600"}}>· יחידה עצמאית (ללא מקבילה)</span>}
+                {selStatus.notInThesis&&<span style={{fontSize:"11px",color:"#a78bfa",marginRight:"8px",fontWeight:"600"}}>· אינה נכללת בתזה</span>}
+              </div>
               <div style={{display:"flex",gap:"20px",marginBottom:"14px",flexWrap:"wrap"}}>
                 <div style={{fontSize:"13px",color:chrOk?"#34d399":"#f87171",fontWeight:"600"}}>{chrOk?"✅":"❌"} דה"י {chrOk?"— נותח":"— טרם נותח"}</div>
                 {!isSondergut&&<div style={{fontSize:"13px",color:srcOk?"#34d399":"#f87171",fontWeight:"600"}}>{srcOk?"✅":"❌"} מקבילה {srcOk?"— נותחה":"— טרם נותחה"}</div>}
               </div>
-              {!ready&&<div style={{fontSize:"12px",color:"#fca5a5",marginBottom:"12px"}}>{isSondergut?"יש להשלים את ניתוח יחידת דה\"י בשלב א' לפני התחלת הסינתזה.":"יש להשלים את ניתוח שתי היחידות בשלב א' לפני התחלת הסינתזה."}</div>}
+              {!ready&&!selStatus.notInThesis&&<div style={{fontSize:"12px",color:"#fca5a5",marginBottom:"12px"}}>{isSondergut?"יש להשלים את ניתוח יחידת דה\"י בשלב א' לפני התחלת הסינתזה.":"יש להשלים את ניתוח שתי היחידות בשלב א' לפני התחלת הסינתזה."}</div>}
               <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
-                <button onClick={()=>ready&&onOpen(sel.id)} disabled={!ready}
-                  style={{flex:1,minWidth:"180px",padding:"14px",borderRadius:"10px",border:"none",cursor:ready?"pointer":"not-allowed",
-                    background:ready?"#818cf8":"#1e293b",color:ready?"white":"#475569",fontSize:"15px",fontWeight:"700"}}>{isSondergut?"הצג יחידה":"הצג השוואה"}</button>
-                <button onClick={()=>onSummary(sel.id)}
-                  style={{padding:"14px 18px",borderRadius:"10px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"13px",fontWeight:"700"}}>סיכום היחידה →</button>
+                <button onClick={()=>ready&&!selStatus.notInThesis&&onOpen(sel.id)} disabled={!ready||selStatus.notInThesis}
+                  style={{flex:1,minWidth:"180px",padding:"14px",borderRadius:"10px",border:"none",cursor:(ready&&!selStatus.notInThesis)?"pointer":"not-allowed",
+                    background:(ready&&!selStatus.notInThesis)?"#818cf8":"#1e293b",color:(ready&&!selStatus.notInThesis)?"white":"#475569",fontSize:"15px",fontWeight:"700"}}>{isSondergut?"הצג יחידה":"הצג השוואה"}</button>
+                <button onClick={()=>onSummary(sel.id)} disabled={selStatus.notInThesis}
+                  style={{padding:"14px 18px",borderRadius:"10px",border:"1px solid #475569",cursor:selStatus.notInThesis?"not-allowed":"pointer",background:"transparent",color:selStatus.notInThesis?"#334155":"#94a3b8",fontSize:"13px",fontWeight:"700"}}>סיכום היחידה →</button>
+                <button onClick={()=>toggleNotInThesis(sel.id)}
+                  title={selStatus.notInThesis?"סימון היחידה כרלוונטית לתזה":"סימון היחידה כאינה נכללת בתזה (כשדוד לא מופיע ביחידה)"}
+                  style={{padding:"14px 14px",borderRadius:"10px",border:`1px solid ${selStatus.notInThesis?"#a78bfa":"#475569"}`,cursor:"pointer",
+                    background:selStatus.notInThesis?"#3b0764":"transparent",color:selStatus.notInThesis?"#c4b5fd":"#94a3b8",fontSize:"12px",fontWeight:"700"}}>{selStatus.notInThesis?"⏮ החזר לתזה":"⏭️ אינה בתזה"}</button>
               </div>
             </div>
-          )}
+          );})()}
         </>
       )}
     </div>
@@ -2456,7 +2502,7 @@ function StageB({allUnits,allConcepts,getE,getParams,getCompareNote,setCompareNo
   }
 
   if(screen==="pick"||!unit)
-    return <StageBPick allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} isAnalyzed={isAnalyzed}
+    return <StageBPick allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} isAnalyzed={isAnalyzed} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}
       onOpen={uid=>{setUnitId(uid);setScreen("compare");}} onSummary={uid=>{setUnitId(uid);setScreen("summary");}}/>;
 
   if(screen==="summary")
