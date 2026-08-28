@@ -1671,7 +1671,7 @@ function Screen1Picker({allUnits,allConcepts,getE,getParams,mode,onBack,onStart}
 }
 
 // ── מסך 2 — רכזת הניתוח ──
-function Screen2Hub({unit,mode,allConcepts,getParams,getE,setE,dim4concept,raw,onBack}){
+function Screen2Hub({unit,mode,allConcepts,getParams,getE,setE,dim4concept,raw,onBack,getUnitSummary,setUnitSummary}){
   const [activeConcept,setActiveConcept]=useState(null);
   const [station,setStation]=useState(null); // null | explicit | implicit | scholar
   const isChr=mode==="chronicles";
@@ -1728,10 +1728,24 @@ function Screen2Hub({unit,mode,allConcepts,getParams,getE,setE,dim4concept,raw,o
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}>
           <button onClick={onBack} style={{padding:"5px 12px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#334155",color:"#cbd5e1",fontSize:"12px",fontWeight:"600"}}>↩ בחירת יחידה</button>
           <div style={{textAlign:"center"}}>
-            <div style={{fontSize:"15px",fontWeight:"bold",color:"#f1f5f9"}}>{unit.label} <span style={{fontSize:"12px",color:modeColor}}>· {modeLabel}</span></div>
+            <div style={{fontSize:"15px",fontWeight:"bold",color:"#f1f5f9"}}>{unit.label} <span style={{fontSize:"12px",color:modeColor}}>· {modeLabel}</span>
+              {(()=>{const s=getUnitSummary?getUnitSummary(unit.id):null; return s&&s.notInThesis?<span style={{fontSize:"11px",color:"#a78bfa",marginRight:"8px",fontWeight:"600"}}>· אינה נכללת בתזה</span>:null;})()}
+            </div>
             {unit.sourceRef&&<div style={{fontSize:"11px",color:"#64748b"}}>מקביל: {unit.sourceRef}</div>}
           </div>
-          <div style={{width:"90px"}}/>
+          {(()=>{
+            const s=getUnitSummary?getUnitSummary(unit.id):null;
+            const isNot=!!(s&&s.notInThesis);
+            function toggle(){
+              if(!setUnitSummary||!getUnitSummary) return;
+              const cur=getUnitSummary(unit.id)||{};
+              setUnitSummary(unit.id,{...cur,notInThesis:!cur.notInThesis});
+            }
+            return <button onClick={toggle}
+              title={isNot?"סימון היחידה כרלוונטית לתזה":"סימון היחידה כאינה נכללת בתזה (כשדוד לא מופיע ביחידה)"}
+              style={{padding:"5px 10px",borderRadius:"8px",border:`1px solid ${isNot?"#a78bfa":"#475569"}`,cursor:"pointer",
+                background:isNot?"#3b0764":"transparent",color:isNot?"#c4b5fd":"#94a3b8",fontSize:"11px",fontWeight:"700",whiteSpace:"nowrap"}}>{isNot?"⏮ החזר לתזה":"⏭️ אינה בתזה"}</button>;
+          })()}
         </div>
         <div style={{background:"#1e293b",border:`1px solid ${modeColor}44`,borderRadius:"8px",padding:"10px 14px",fontSize:"13px",lineHeight:"2.2",color:"#e2e8f0",maxHeight:"170px",overflowY:"auto"}}>
           {renderColoredText()}
@@ -1856,7 +1870,7 @@ function Screen0ModeChooser({allUnits,allConcepts,getE,getParams,onPick}){
 }
 
 // ── עוטף שלב א' ──
-function StageA({allUnits,allConcepts,getE,setE,getParams,dim4concept,raw}){
+function StageA({allUnits,allConcepts,getE,setE,getParams,dim4concept,raw,getUnitSummary,setUnitSummary}){
   const [phase,setPhase]=useState("mode"); // mode | pick | hub
   const [mode,setMode]=useState(null);
   const [sel,setSel]=useState(null); // {unit}
@@ -1864,7 +1878,7 @@ function StageA({allUnits,allConcepts,getE,setE,getParams,dim4concept,raw}){
     return <Screen0ModeChooser allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} onPick={m=>{setMode(m);setPhase("pick");}}/>;
   if(phase==="pick"||!sel)
     return <Screen1Picker allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} mode={mode} onBack={()=>{setPhase("mode");setMode(null);}} onStart={(unit)=>{setSel({unit});setPhase("hub");}}/>;
-  return <Screen2Hub unit={sel.unit} mode={mode} allConcepts={allConcepts} getParams={getParams} getE={getE} setE={setE} dim4concept={dim4concept} raw={raw} onBack={()=>{setPhase("pick");setSel(null);}}/>;
+  return <Screen2Hub unit={sel.unit} mode={mode} allConcepts={allConcepts} getParams={getParams} getE={getE} setE={setE} dim4concept={dim4concept} raw={raw} onBack={()=>{setPhase("pick");setSel(null);}} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>;
 }
 
 
@@ -2008,9 +2022,15 @@ function StageBPick({allUnits,allConcepts,getE,getParams,onOpen,onSummary,isAnal
 
           {sel&&(()=>{const selStatus=stageBStatus(sel.id);return(
             <div style={{background:"#0f172a",borderRadius:"10px",padding:"16px",border:"1px solid #334155"}}>
-              <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"12px"}}>{sel.label}
-                {isSondergut&&<span style={{fontSize:"11px",color:"#c084fc",marginRight:"8px",fontWeight:"600"}}>· יחידה עצמאית (ללא מקבילה)</span>}
-                {selStatus.notInThesis&&<span style={{fontSize:"11px",color:"#a78bfa",marginRight:"8px",fontWeight:"600"}}>· אינה נכללת בתזה</span>}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"12px",gap:"12px",flexWrap:"wrap"}}>
+                <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9"}}>{sel.label}
+                  {isSondergut&&<span style={{fontSize:"11px",color:"#c084fc",marginRight:"8px",fontWeight:"600"}}>· יחידה עצמאית (ללא מקבילה)</span>}
+                  {selStatus.notInThesis&&<span style={{fontSize:"11px",color:"#a78bfa",marginRight:"8px",fontWeight:"600"}}>· אינה נכללת בתזה</span>}
+                </div>
+                <button onClick={()=>toggleNotInThesis(sel.id)}
+                  title={selStatus.notInThesis?"סימון היחידה כרלוונטית לתזה":"סימון היחידה כאינה נכללת בתזה (כשדוד לא מופיע ביחידה)"}
+                  style={{padding:"6px 10px",borderRadius:"6px",border:`1px solid ${selStatus.notInThesis?"#a78bfa":"#475569"}`,cursor:"pointer",
+                    background:selStatus.notInThesis?"#3b0764":"transparent",color:selStatus.notInThesis?"#c4b5fd":"#94a3b8",fontSize:"11px",fontWeight:"700",whiteSpace:"nowrap"}}>{selStatus.notInThesis?"⏮ החזר לתזה":"⏭️ סמן: אינה בתזה"}</button>
               </div>
               <div style={{display:"flex",gap:"20px",marginBottom:"14px",flexWrap:"wrap"}}>
                 <div style={{fontSize:"13px",color:chrOk?"#34d399":"#f87171",fontWeight:"600"}}>{chrOk?"✅":"❌"} דה"י {chrOk?"— נותח":"— טרם נותח"}</div>
@@ -2023,10 +2043,6 @@ function StageBPick({allUnits,allConcepts,getE,getParams,onOpen,onSummary,isAnal
                     background:(ready&&!selStatus.notInThesis)?"#818cf8":"#1e293b",color:(ready&&!selStatus.notInThesis)?"white":"#475569",fontSize:"15px",fontWeight:"700"}}>{isSondergut?"הצג יחידה":"הצג השוואה"}</button>
                 <button onClick={()=>onSummary(sel.id)} disabled={selStatus.notInThesis}
                   style={{padding:"14px 18px",borderRadius:"10px",border:"1px solid #475569",cursor:selStatus.notInThesis?"not-allowed":"pointer",background:"transparent",color:selStatus.notInThesis?"#334155":"#94a3b8",fontSize:"13px",fontWeight:"700"}}>סיכום היחידה →</button>
-                <button onClick={()=>toggleNotInThesis(sel.id)}
-                  title={selStatus.notInThesis?"סימון היחידה כרלוונטית לתזה":"סימון היחידה כאינה נכללת בתזה (כשדוד לא מופיע ביחידה)"}
-                  style={{padding:"14px 14px",borderRadius:"10px",border:`1px solid ${selStatus.notInThesis?"#a78bfa":"#475569"}`,cursor:"pointer",
-                    background:selStatus.notInThesis?"#3b0764":"transparent",color:selStatus.notInThesis?"#c4b5fd":"#94a3b8",fontSize:"12px",fontWeight:"700"}}>{selStatus.notInThesis?"⏮ החזר לתזה":"⏭️ אינה בתזה"}</button>
               </div>
             </div>
           );})()}
@@ -3074,7 +3090,7 @@ function App(){
       <Header msg={msg} tab={tab} setTab={setTab} analysisMode={analysisMode} setAnalysisMode={setAnalysisMode}/>
 
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} backupData={backupData} resetNirmaz={resetNirmaz}/>}
-      {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw}/>}
+      {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
       {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
