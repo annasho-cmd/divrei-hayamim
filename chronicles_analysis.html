@@ -1176,7 +1176,7 @@ function Header({msg,tab,setTab,analysisMode,setAnalysisMode}){
           ))}
         </div>
         <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
-        {[["home","🏠"],["stagea","🔬 שלב א׳"],["stageb","✨ שלב ב׳"],["rmatrix","🗂️ מטריצת מחקר"],["reports","📄 דו״חות"],["byconcept","מאגר מושגים"]].map(([t,l])=>(
+        {[["home","🏠"],["stagea","🔬 שלב א׳"],["stageb","✨ שלב ב׳"],["stagec","📊 שלב ג׳"],["rmatrix","🗂️ מטריצת מחקר"],["reports","📄 דו״חות"],["byconcept","מאגר מושגים"]].map(([t,l])=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600",background:tab===t?"#818cf8":"transparent",color:tab===t?"white":"#64748b"}}>{l}</button>
         ))}
       </div>
@@ -2534,6 +2534,167 @@ function StageB({allUnits,allConcepts,getE,getParams,getCompareNote,setCompareNo
 
 
 // ════════════════════════════════════════════════════════════════════════
+// ── שלב ג' — סינתזה פרקית לפי פרקי תנ"ך ──
+// אוסף את היחידות הספרותיות שנותחו בשלב ב' לפי חלוקה לפרקי מקרא,
+// ומאפשר לזהות מוקדים ולכתוב טיוטת פסקאות לפרק שלם.
+// ════════════════════════════════════════════════════════════════════════
+
+// המרת מספר לכתיב עברי (11 -> י"א, 27 -> כ"ז, וכו')
+function toHebrewNumber(n){
+  const ones=["","א","ב","ג","ד","ה","ו","ז","ח","ט"];
+  const tens=["","י","כ","ל","מ","נ","ס","ע","פ","צ"];
+  if(n<=0) return "";
+  if(n<10) return ones[n];
+  if(n===10) return "י";
+  if(n===15) return "ט\"ו";
+  if(n===16) return "ט\"ז";
+  const t=Math.floor(n/10), o=n%10;
+  if(o===0) return tens[t];
+  return tens[t]+"\""+ones[o];
+}
+
+// חילוץ מספר פרק מיחידה. שדה chapter הוא "11_1_3" -> 11
+function unitChapterNum(unit){
+  if(!unit||!unit.chapter) return null;
+  const parts=String(unit.chapter).split("_");
+  const n=parseInt(parts[0],10);
+  return isFinite(n)?n:null;
+}
+
+// קיבוץ יחידות לפי פרק לדמות נתונה
+function groupUnitsByChapter(allUnits,character){
+  const filtered=allUnits.filter(u=>u.character===character||(character==="david"&&!u.character));
+  const map=new Map();
+  filtered.forEach(u=>{
+    const ch=unitChapterNum(u);
+    if(ch==null) return;
+    if(!map.has(ch)) map.set(ch,[]);
+    map.get(ch).push(u);
+  });
+  // מיין יחידות בתוך כל פרק לפי הפסוק ההתחלתי
+  map.forEach(units=>{
+    units.sort((a,b)=>{
+      const pa=parseInt(String(a.chapter||"").split("_")[1]||"0",10);
+      const pb=parseInt(String(b.chapter||"").split("_")[1]||"0",10);
+      return pa-pb;
+    });
+  });
+  // החזר מערך ממוין של [chapterNum, units]
+  return [...map.entries()].sort((a,b)=>a[0]-b[0]);
+}
+
+function StageC({allUnits,allConcepts,getE,getParams,getCompareNote,getUnitSummary,setUnitSummary}){
+  const [character,setCharacter]=useState(null);
+  const [selectedChapter,setSelectedChapter]=useState(null);
+
+  // רשימת פרקים עבור הדמות הנבחרת
+  const chapterGroups=character?groupUnitsByChapter(allUnits,character):[];
+
+  // יחידות של הפרק הנבחר
+  const chapterUnits=selectedChapter?
+    (chapterGroups.find(([n])=>n===selectedChapter)||[null,[]])[1]:[];
+
+  const bookLabel=character==="david"?'דה"א':'דה"ב';
+
+  // חישוב סטטוס של יחידה
+  function unitStatus(uid){
+    const summary=getUnitSummary?getUnitSummary(uid):null;
+    if(summary&&summary.notInThesis) return {icon:"⏭️",label:"אינה בתזה",color:"#a78bfa",inThesis:false};
+    const concls=allConcepts.filter(c=>((getCompareNote(uid,c.name)||"").trim().length>0)).length;
+    const total=allConcepts.length;
+    if(concls===0) return {icon:"⬜",label:"טרם התחיל",color:"#64748b",count:concls,total:total,inThesis:true};
+    if(concls>=total*0.75) return {icon:"✅",label:"סיימת",color:"#34d399",count:concls,total:total,inThesis:true};
+    return {icon:"🟡",label:"בעבודה",color:"#fbbf24",count:concls,total:total,inThesis:true};
+  }
+
+  // בחירת דמות — מסך פתיחה
+  if(!character){
+    return(
+      <div style={{maxWidth:"860px",margin:"0 auto",padding:"32px 16px"}}>
+        <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>שלב ג׳ — סינתזה פרקית</div>
+        <div style={{fontSize:"13px",color:"#64748b",marginBottom:"24px"}}>איסוף היחידות הספרותיות לפי פרקי תנ"ך, זיהוי מוקדים וכתיבת טיוטות פסקאות לפרק שלם.</div>
+        <div style={{fontSize:"14px",color:"#94a3b8",marginBottom:"12px",fontWeight:"700"}}>בחירת דמות</div>
+        <div style={{display:"flex",gap:"12px"}}>
+          <button onClick={()=>setCharacter("david")} style={{flex:1,padding:"20px",borderRadius:"12px",border:"1px solid #334155",cursor:"pointer",background:"#0f172a",color:"#f1f5f9",fontSize:"16px",fontWeight:"700"}}>👑 דוד המלך<div style={{fontSize:"11px",color:"#64748b",marginTop:"4px",fontWeight:"400"}}>דה"א י"א–כ"ט</div></button>
+          <button onClick={()=>setCharacter("solomon")} style={{flex:1,padding:"20px",borderRadius:"12px",border:"1px solid #334155",cursor:"pointer",background:"#0f172a",color:"#f1f5f9",fontSize:"16px",fontWeight:"700"}}>👑 שלמה המלך<div style={{fontSize:"11px",color:"#64748b",marginTop:"4px",fontWeight:"400"}}>דה"ב א׳–ט׳</div></button>
+        </div>
+      </div>
+    );
+  }
+
+  // מסך רשימת פרקים + פרק נבחר
+  return(
+    <div style={{maxWidth:"1100px",margin:"0 auto",padding:"24px 16px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"18px"}}>
+        <div>
+          <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"2px"}}>שלב ג׳ — סינתזה פרקית · {character==="david"?"דוד המלך":"שלמה המלך"}</div>
+          <div style={{fontSize:"12px",color:"#64748b"}}>{chapterGroups.length} פרקים · {chapterGroups.reduce((s,[,us])=>s+us.length,0)} יחידות ספרותיות</div>
+        </div>
+        <button onClick={()=>{setCharacter(null);setSelectedChapter(null);}} style={{padding:"6px 12px",borderRadius:"7px",border:"1px solid #334155",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ החלף דמות</button>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:selectedChapter?"280px 1fr":"1fr",gap:"18px"}}>
+        {/* עמודה ראשונה: רשימת פרקים */}
+        <div style={{background:"#1e293b",borderRadius:"10px",padding:"12px",border:"1px solid #334155",maxHeight:"75vh",overflowY:"auto"}}>
+          <div style={{fontSize:"12px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>בחירת פרק ({bookLabel})</div>
+          {chapterGroups.map(([ch,units])=>{
+            const isSel=selectedChapter===ch;
+            const relevantUnits=units.filter(u=>{const s=getUnitSummary?getUnitSummary(u.id):null;return !(s&&s.notInThesis);});
+            const doneUnits=relevantUnits.filter(u=>unitStatus(u.id).icon==="✅").length;
+            const readyForSynth=relevantUnits.length>0&&doneUnits===relevantUnits.length;
+            return(
+              <button key={ch} onClick={()=>setSelectedChapter(ch)}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",textAlign:"right",padding:"9px 12px",borderRadius:"7px",border:"none",marginBottom:"4px",fontSize:"13px",cursor:"pointer",
+                  background:isSel?"#818cf822":"#0f172a",color:isSel?"#c7d2fe":"#cbd5e1",borderRight:isSel?"3px solid #818cf8":"3px solid transparent"}}>
+                <span style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                  <span style={{fontSize:"13px",fontWeight:"700"}}>פרק {toHebrewNumber(ch)}</span>
+                  <span style={{fontSize:"10px",color:"#64748b"}}>{units.length} יחידות</span>
+                </span>
+                {readyForSynth&&<span style={{fontSize:"11px",color:"#34d399"}}>✓</span>}
+                {!readyForSynth&&relevantUnits.length>0&&<span style={{fontSize:"10px",color:"#fbbf24"}}>{doneUnits}/{relevantUnits.length}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* עמודה שנייה: פרטי הפרק הנבחר */}
+        {selectedChapter&&(
+          <div style={{background:"#1e293b",borderRadius:"10px",padding:"20px",border:"1px solid #334155"}}>
+            <div style={{fontSize:"18px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"14px"}}>פרק {toHebrewNumber(selectedChapter)} · {bookLabel}</div>
+            <div style={{fontSize:"12px",color:"#94a3b8",fontWeight:"700",marginBottom:"8px"}}>יחידות ספרותיות בפרק ({chapterUnits.length})</div>
+            <div>
+              {chapterUnits.map(u=>{
+                const st=unitStatus(u.id);
+                return(
+                  <div key={u.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",borderRadius:"8px",background:"#0f172a",marginBottom:"6px",border:`1px solid ${st.inThesis?"#334155":"#3b0764"}`,opacity:st.inThesis?1:0.6}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+                      <span style={{fontSize:"14px"}}>{st.icon}</span>
+                      <div>
+                        <div style={{fontSize:"13px",color:"#f1f5f9",fontWeight:"600"}}>{u.name||"—"}</div>
+                        <div style={{fontSize:"11px",color:"#64748b"}}>
+                          פסוקים {String(u.chapter||"").split("_").slice(1).join("-")}
+                          {u.sourceRef&&<span> · מקביל: {u.sourceRef}</span>}
+                          {!u.sourceRef&&<span style={{color:"#c084fc"}}> · סונדרגוט</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <span style={{fontSize:"11px",color:st.color,fontWeight:"600"}}>{st.inThesis?`${st.count}/${st.total}`:"אינה בתזה"}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{marginTop:"18px",padding:"14px",background:"#0f172a",borderRadius:"8px",border:"1px dashed #475569",fontSize:"12px",color:"#94a3b8",textAlign:"center"}}>
+              🚧 הכלי לניתוח הפרק (תמונת מושגים, זיהוי מוקדים וכתיבת טיוטות) יתווסף בשלב הבא של הבנייה.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
 // ── מטריצת המחקר — תצוגת ממצאים (read-only) ──
 // אוספת אוטומטית מכל היחידות שיש בהן נתונים, משלב א' וב'. אין הזנה.
 // ════════════════════════════════════════════════════════════════════════
@@ -3092,6 +3253,7 @@ function App(){
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} backupData={backupData} resetNirmaz={resetNirmaz}/>}
       {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
+      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
       {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
       {tab==="byunit"&&<ByUnitTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} onUnitSelect={setActiveUnit} analysisMode={analysisMode}/>}
