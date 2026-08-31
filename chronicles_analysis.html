@@ -1949,11 +1949,16 @@ function StageBPick({allUnits,allConcepts,getE,getParams,onOpen,onSummary,isAnal
   const srcOk=sel?isAnalyzed(sel.id,"source"):false;
   const ready=chrOk&&(isSondergut||srcOk);
 
-  // חישוב סטטוס עבודת שלב ב' לכל יחידה — מבוסס על מספר המסקנות המחקריות שנכתבו
+  // חישוב סטטוס עבודת שלב ב' לכל יחידה — מבוסס על מספר המסקנות המחקריות שנכתבו + מושגים שסומנו כלא רלוונטיים
   function stageBStatus(uid){
     const summary=getUnitSummary?getUnitSummary(uid):{};
     if(summary&&summary.notInThesis) return {icon:"⏭️",label:"אינה בתזה",color:"#7c3aed",count:0,total:allConcepts.length,notInThesis:true};
-    const concls=allConcepts.filter(c=>((getCompareNote(uid,c.name)||"").trim().length>0)).length;
+    const notRelList=(summary&&Array.isArray(summary.notRelevantConcepts))?summary.notRelevantConcepts:[];
+    const concls=allConcepts.filter(c=>{
+      const hasNote=((getCompareNote(uid,c.name)||"").trim().length>0);
+      const isNotRel=notRelList.includes(c.name);
+      return hasNote||isNotRel;
+    }).length;
     const total=allConcepts.length;
     if(concls===0) return {icon:"⬜",label:"טרם",color:"#64748b",count:concls,total:total};
     if(concls>=total*0.75) return {icon:"✅",label:"סיימת",color:"#34d399",count:concls,total:total};
@@ -2053,14 +2058,28 @@ function StageBPick({allUnits,allConcepts,getE,getParams,onOpen,onSummary,isAnal
 }
 
 // ── בלוק: ניתוח השוואתי עובדתי + מסקנה מחקרית (אזורים ג'+ד') ──
-function CompareConceptBlock({unit,conceptName,validParams,ec,es,esc,scholarship,getFactual,setFactual,getCompareNote,setCompareNote}){
+function CompareConceptBlock({unit,conceptName,validParams,ec,es,esc,scholarship,getFactual,setFactual,getCompareNote,setCompareNote,getUnitSummary,setUnitSummary}){
   const [factual,setFactualText]=useState(getFactual(unit.id,conceptName)||"");
   const [conclusion,setConclusion]=useState(getCompareNote(unit.id,conceptName)||"");
   const [loadF,setLoadF]=useState(false);
   const [loadC,setLoadC]=useState(false);
   const [savedF,setSavedF]=useState(false);
   const [savedC,setSavedC]=useState(false);
-  React.useEffect(()=>{ setFactualText(getFactual(unit.id,conceptName)||""); setConclusion(getCompareNote(unit.id,conceptName)||""); },[unit.id,conceptName]);
+  const [notRelevant,setNotRelevantState]=useState(false);
+  React.useEffect(()=>{ setFactualText(getFactual(unit.id,conceptName)||""); setConclusion(getCompareNote(unit.id,conceptName)||"");
+    const s=getUnitSummary?getUnitSummary(unit.id):null;
+    setNotRelevantState(!!(s&&Array.isArray(s.notRelevantConcepts)&&s.notRelevantConcepts.includes(conceptName)));
+  },[unit.id,conceptName]);
+
+  function toggleNotRelevant(){
+    if(!setUnitSummary||!getUnitSummary) return;
+    const cur=getUnitSummary(unit.id)||{};
+    const list=Array.isArray(cur.notRelevantConcepts)?[...cur.notRelevantConcepts]:[];
+    const idx=list.indexOf(conceptName);
+    if(idx>=0){ list.splice(idx,1); setNotRelevantState(false); }
+    else { list.push(conceptName); setNotRelevantState(true); }
+    setUnitSummary(unit.id,{...cur,notRelevantConcepts:list});
+  }
 
   const who=unit.character==="solomon"?"שלמה":"דוד";
   const paramsText=buildCompareParamsText(validParams,ec,es);
@@ -2220,8 +2239,22 @@ ${scholarship&&scholarship.trim()?scholarship:"אין הערות פרשנים ש
 
   return(
     <>
+      {/* כותרת מושג + כפתור סימון "לא רלוונטי" */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"10px",padding:"10px 14px",background:notRelevant?"#3b076433":"transparent",borderRadius:"8px",border:notRelevant?"1px solid #a78bfa":"1px solid transparent"}}>
+        <div style={{fontSize:"14px",fontWeight:"700",color:notRelevant?"#c4b5fd":"#f1f5f9"}}>
+          מושג: {conceptName}
+          {notRelevant&&<span style={{fontSize:"11px",color:"#a78bfa",marginRight:"10px",fontWeight:"600"}}>· סומן כאינו רלוונטי ליחידה</span>}
+        </div>
+        <button onClick={toggleNotRelevant}
+          title={notRelevant?"החזר את המושג לרלוונטי — יידרש שוב לניתוח מלא":"סמן שהמושג אינו נמצא בשני הטקסטים — היחידה תיחשב שלמה גם בלי מסקנה למושג זה"}
+          style={{padding:"5px 10px",borderRadius:"6px",border:`1px solid ${notRelevant?"#a78bfa":"#475569"}`,cursor:"pointer",
+            background:notRelevant?"#3b0764":"transparent",color:notRelevant?"#c4b5fd":"#94a3b8",fontSize:"11px",fontWeight:"700",whiteSpace:"nowrap"}}>
+          {notRelevant?"↺ החזר כרלוונטי":"🚫 סמן כלא רלוונטי"}
+        </button>
+      </div>
+
       {/* טבלת השוואת פרמטרים */}
-      <div style={{background:"#1e293b",borderRadius:"10px",padding:"14px",border:"1px solid #334155",marginBottom:"14px"}}>
+      <div style={{background:"#1e293b",borderRadius:"10px",padding:"14px",border:"1px solid #334155",marginBottom:"14px",opacity:notRelevant?0.5:1}}>
         <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"10px"}}>טבלת השוואה — {conceptName}</div>
         {validParams.length===0?(
           <div style={{fontSize:"12px",color:"#475569"}}>אין פרמטרים למושג זה (שדה סמנטי בלבד).</div>
@@ -2299,7 +2332,7 @@ ${scholarship&&scholarship.trim()?scholarship:"אין הערות פרשנים ש
 }
 
 // ── מסך 2 — סביבת ההשוואה ──
-function StageBCompare({unit,allConcepts,getE,getParams,getFactual,setFactual,getCompareNote,setCompareNote,onBack,onSummary,initConcept}){
+function StageBCompare({unit,allConcepts,getE,getParams,getFactual,setFactual,getCompareNote,setCompareNote,onBack,onSummary,initConcept,getUnitSummary,setUnitSummary}){
   const [activeConcept,setActiveConcept]=useState(initConcept||null);
   React.useEffect(()=>{ if(initConcept) setActiveConcept(initConcept); },[initConcept]);
   const ec=activeConcept?(getE(unit.id,activeConcept,"chronicles")||{}):{};
@@ -2329,7 +2362,8 @@ function StageBCompare({unit,allConcepts,getE,getParams,getFactual,setFactual,ge
             ):(
               <CompareConceptBlock key={unit.id+activeConcept} unit={unit} conceptName={activeConcept} validParams={validParams}
                 ec={ec} es={es} esc={ec} scholarship={unit.scholarship}
-                getFactual={getFactual} setFactual={setFactual} getCompareNote={getCompareNote} setCompareNote={setCompareNote}/>
+                getFactual={getFactual} setFactual={setFactual} getCompareNote={getCompareNote} setCompareNote={setCompareNote}
+                getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>
             )}
           </div>
 
@@ -2344,13 +2378,14 @@ function StageBCompare({unit,allConcepts,getE,getParams,getFactual,setFactual,ge
                   <div style={{fontSize:"10px",color:dim.color,fontWeight:"700",marginBottom:"4px"}}>{dim.label.split(":")[1]?dim.label.split(":")[1].trim():dim.label}</div>
                   {cs.map(c=>{
                     const hasConcl=!!(getCompareNote(unit.id,c.name)||"").trim();
+                    const notRel=(()=>{const s=getUnitSummary?getUnitSummary(unit.id):null;return !!(s&&Array.isArray(s.notRelevantConcepts)&&s.notRelevantConcepts.includes(c.name));})();
                     const isActive=activeConcept===c.name;
                     return(
                       <button key={c.name} onClick={()=>setActiveConcept(c.name)}
                         style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",textAlign:"right",padding:"6px 8px",borderRadius:"6px",border:"none",cursor:"pointer",marginBottom:"2px",fontSize:"12px",
-                          background:isActive?dim.color+"33":"transparent",color:isActive?dim.color:hasConcl?"#34d399":"#94a3b8",
+                          background:isActive?dim.color+"33":"transparent",color:isActive?dim.color:(notRel?"#a78bfa":(hasConcl?"#34d399":"#94a3b8")),
                           borderRight:isActive?`3px solid ${dim.color}`:"3px solid transparent",fontWeight:isActive?"700":"400"}}>
-                        <span>{c.name}</span>{hasConcl&&<span style={{color:"#34d399",fontSize:"11px"}}>✓</span>}
+                        <span>{c.name}</span>{notRel?<span style={{color:"#a78bfa",fontSize:"11px"}}>🚫</span>:hasConcl?<span style={{color:"#34d399",fontSize:"11px"}}>✓</span>:null}
                       </button>
                     );
                   })}
@@ -2534,6 +2569,7 @@ function StageB({allUnits,allConcepts,getE,getParams,getCompareNote,setCompareNo
 
   return <StageBCompare key={unitId} unit={unit} allConcepts={allConcepts} getE={getE} getParams={getParams}
     getFactual={getFactual} setFactual={setFactual} getCompareNote={getCompareNote} setCompareNote={setCompareNote}
+    getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}
     initConcept={jumpConcept}
     onBack={()=>{setScreen("pick");setUnitId(null);setJumpConcept(null);}} onSummary={()=>setScreen("summary")}/>;
 }
@@ -2606,7 +2642,12 @@ function StageC({allUnits,allConcepts,getE,getParams,getCompareNote,getUnitSumma
   function unitStatus(uid){
     const summary=getUnitSummary?getUnitSummary(uid):null;
     if(summary&&summary.notInThesis) return {icon:"⏭️",label:"אינה בתזה",color:"#a78bfa",inThesis:false};
-    const concls=allConcepts.filter(c=>((getCompareNote(uid,c.name)||"").trim().length>0)).length;
+    const notRelList=(summary&&Array.isArray(summary.notRelevantConcepts))?summary.notRelevantConcepts:[];
+    const concls=allConcepts.filter(c=>{
+      const hasNote=((getCompareNote(uid,c.name)||"").trim().length>0);
+      const isNotRel=notRelList.includes(c.name);
+      return hasNote||isNotRel;
+    }).length;
     const total=allConcepts.length;
     if(concls===0) return {icon:"⬜",label:"טרם התחיל",color:"#64748b",count:concls,total:total,inThesis:true};
     if(concls>=total*0.75) return {icon:"✅",label:"סיימת",color:"#34d399",count:concls,total:total,inThesis:true};
