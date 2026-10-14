@@ -3435,8 +3435,10 @@ function App(){
   // All concepts
   const allConcepts=useMemo(()=>{
     const r=[];
-    DIMS.forEach(d=>d.concepts.forEach(name=>r.push({name,dimId:d.id})));
-    (raw.customConcepts||[]).forEach(c=>r.push({name:c.name,dimId:c.dimId}));
+    const seen=new Set();
+    DIMS.forEach(d=>d.concepts.forEach(name=>{ r.push({name,dimId:d.id}); seen.add(name); }));
+    // דילוג על customConcepts שכבר נמצאים ב-DIMS (למשל אם מושג הועבר לממד אחר ב-DIMS)
+    (raw.customConcepts||[]).forEach(c=>{ if(!seen.has(c.name)){ r.push({name:c.name,dimId:c.dimId}); seen.add(c.name); } });
     return r;
   },[raw.customConcepts]);
 
