@@ -251,7 +251,7 @@ function DiffPanel({unit}){
 const DIMS=[
   {id:"d1",label:"ממד 1: רוחני-תיאולוגי",color:"#818cf8",concepts:["רוח/ריח","חכמה","בינה","עצה","גבורה","דעת","יראה","צניעות","ענווה"]},
   {id:"d2",label:"ממד 2: חברתי-משפטי",color:"#34d399",concepts:["משפט","צדקה","מוסר","יושר","חסד"]},
-  {id:"d3",label:"ממד 3: מדיני-לאומי",color:"#fbbf24",concepts:["שלום","ביטחון","רועה"]},
+  {id:"d3",label:"ממד 3: מדיני-לאומי",color:"#fbbf24",concepts:["שלום","ביטחון","רועה","אחד/יחד"]},
   {id:"d4",label:"ממד 4: הברית והנצחיות",color:"#f87171",concepts:["ברית","נצח","עולם"]},
 ];
 
@@ -2638,23 +2638,176 @@ function StageC({allUnits,allConcepts,dim4concept,getE,getParams,getCompareNote,
     }
   }
 
-  async function runStage(stageNum,extraInstructions=""){
-    setLoading(true);
-    await new Promise(r=>setTimeout(r,700));
-    // TODO: החלפה בקריאה אמיתית ל-AI בסבבים הבאים
-    const placeholder={
+  // ─────────────────────────────────────────────────────────────────────────
+  // איסוף יחידות רלוונטיות של הדמות הנבחרת (לא כולל "אינה בתזה")
+  // ─────────────────────────────────────────────────────────────────────────
+  function collectRelevantUnits(){
+    const list=(allUnits||[]).filter(u=>{
+      const uChar=u.character||"david";
+      if(uChar!==character) return false;
+      const s=getUnitSummary?getUnitSummary(u.id):null;
+      if(s&&s.notInThesis) return false;
+      return true;
+    });
+    // מיין לפי פרק+פסוק
+    list.sort((a,b)=>{
+      const pa=String(a.chapter||"").split("_"),pb=String(b.chapter||"").split("_");
+      const na=parseInt(pa[0]||"999",10),nb=parseInt(pb[0]||"999",10);
+      if(na!==nb) return na-nb;
+      return (parseInt(pa[1]||"999",10))-(parseInt(pb[1]||"999",10));
+    });
+    return list;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // שלב 3: בסיס טקסטואלי + נושא הממצא
+  // ─────────────────────────────────────────────────────────────────────────
+  async function runStage3(extraInstructions=""){
+    const isEternal=(conceptName==="נצח"||conceptName==="עולם");
+    const who=character==="solomon"?"שלמה":"דוד";
+    const relevantUnits=collectRelevantUnits();
+
+    // סינון: רק יחידות שבהן יש אינדיקטור חיובי במושג, או שסומנו "לא רלוונטי" (יוזכרו ברשימה)
+    // גם: לא רלוונטי = נוציא לרשימה נפרדת שרק מוזכרת
+    const unitsWithIndicators=[];
+    const unitsMarkedNotRel=[];
+    relevantUnits.forEach(u=>{
+      const uid=String(u.id);
+      const summary=getUnitSummary?getUnitSummary(uid):null;
+      const notRelList=(summary&&Array.isArray(summary.notRelevantConcepts))?summary.notRelevantConcepts:[];
+      if(notRelList.includes(conceptName)){
+        unitsMarkedNotRel.push(u);
+        return;
+      }
+      const ec=getE(uid,conceptName,"chronicles")||{};
+      const params=ec.params||[];
+      const hasPositive=params.some(p=>p&&p.found===true);
+      const hasExplicit=!!(ec.explicit_note&&ec.explicit_note.trim());
+      if(hasPositive||hasExplicit){
+        unitsWithIndicators.push(u);
+      }
+    });
+
+    if(unitsWithIndicators.length===0){
+      return {
+        status:"אין נתונים",
+        hasTable:false,
+        summary:`לא נמצאו יחידות עם אינדיקטורים חיוביים למושג "${conceptName}" ב${who}. ייתכן שהמושג סומן כלא רלוונטי בכל היחידות, או שטרם הושלם שלב ב' עבורו.`,
+        selfCheck:"אין יחידות לניתוח — אין צורך בבדיקה עצמית."
+      };
+    }
+
+    // בניית הסקציה של הנתונים
+    const unitBlocks=unitsWithIndicators.map(u=>{
+      const uid=String(u.id);
+      const ec=getE(uid,conceptName,"chronicles")||{};
+      const es=getE(uid,conceptName,"source")||{};
+      const params=getParams?getParams(conceptName):[];
+      const validParams=validParamDefs(params);
+      const foundParams=(ec.params||[]).map((p,i)=>({...p,def:validParams[i]})).filter(x=>x&&x.found===true);
+      const paramList=foundParams.map((p,i)=>`  פרמטר ${i+1} (${(p.def&&(p.def.paramLabel||""))||""}): ${(p.def&&(p.def.q||""))||""}${p.verse?` [פסוק ${p.verse}]`:""}${p.note?` — ${p.note}`:""}`).join("\n");
+      const explicitNote=ec.explicit_note?`\nהערה על השדה הגלוי: ${ec.explicit_note}`:"";
+      const compareNote=(getCompareNote?getCompareNote(uid,conceptName):"")||"";
+      const sourceInfo=u.sourceRef?`מקבילה: ${u.sourceRef}`:"יחידת סונדרגוט (אין מקבילה)";
+      return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### יחידה: ${u.name||u.label||"?"} (${u.chapter||"?"}) — ${sourceInfo}
+
+טקסט דה"י:
+${(u.chroniclesText||"—").substring(0,1200)}
+
+${u.sourceText?`טקסט המקבילה:
+${u.sourceText.substring(0,1200)}`:""}
+
+אינדיקטורים חיוביים שסומנו במושג (${foundParams.length}):
+${paramList||"(אין פרטי פרמטרים)"}${explicitNote}
+
+המסקנה המחקרית של הכותבת:
+${compareNote||"(טרם נכתבה)"}`;
+    }).join("\n\n");
+
+    const notRelMention=unitsMarkedNotRel.length?`\n\nהערה: ${unitsMarkedNotRel.length} יחידות נוספות סומנו ככלא רלוונטיות למושג "${conceptName}" ואינן נכללות בניתוח (${unitsMarkedNotRel.map(u=>u.name||u.label).join(", ")}).`:"";
+
+    const eternalNote=isEternal?`\n\nהוראה מיוחדת: המושג "${conceptName}" הוא פרמטר תחת המושג "ברית" ואין לו ניתוח פרמטרים עצמאי. יש להסתמך אך ורק על השדה הגלוי — הופעת המילים "נצח", "לנצח", "עולם", "לעולם", "לעולמים", "עד עולם", "לדור ודור" וביטויים דומים בטקסט. אין להתייחס לפרמטרים.`:"";
+
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. אנחנו מנתחים את עיצוב המושג "${conceptName}" בדמות ${who} בכרוניסט, לפי מתודולוגיה של 7 שלבים.
+
+כעת אנחנו בשלב 3: בסיס טקסטואלי + נושא הממצא.
+
+מטרת השלב: לכל יחידה שבה סומנו אינדיקטורים חיוביים למושג, עליך לקבוע שני דברים:
+1. הבסיס הטקסטואלי — מה בפועל נאמר או קורה בטקסט שגרם לסימון
+2. נושא הממצא — מי נושא התופעה בפועל
+
+ארבע קטגוריות אפשריות לנושא הממצא:
+א) דוד עצמו — דוד הוא הפועל / האומר
+ב) המספר בעיצוב דוד — המספר/הכרוניסט מתאר את דוד ומסגר אותו (למשל: "ויהי דוד עשה משפט וצדקה")
+ג) דמות אחרת ביחס לדוד — דמות אחרת (יואב, עמשי, בני יששכר, הלויים וכו')
+ד) הסביבה המלכותית של דוד — מערכת, מוסד או קבוצה שסביב דוד (רשימות, מערכי שלטון)
+
+כלל חמור: אסור לייחס לדוד ממצא ששייך לדמות אחרת. אם "רוח לבשה את עמשי" — נושא הממצא הוא עמשי, לא דוד. אם "יודעי בינה לעתים" הם בני יששכר — נושא הממצא הוא בני יששכר. ברירות שגויות של נושא הממצא פוסלות את כל התוצאה.
+
+חובת ציטוט: לכל ממצא עליך לציטט פרשן ועמוד מתוך המסקנות המחקריות של הכותבת שמצורפות למטה. אסור להמציא ציטוטים או עמודים. אם במסקנה המחקרית צוטטו "קליין עמ' 301" ו"קנופרס עמ' 707" — אלה הפרשנים שאתה מצטט. אם הכותבת לא ציטטה פרשן ליחידה מסוימת, רשום בעמודה "פרשנים": —${eternalNote}
+
+נתונים — ${unitsWithIndicators.length} יחידות עם אינדיקטורים חיוביים למושג "${conceptName}":
+
+${unitBlocks}${notRelMention}
+
+${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstructions}\n`:""}
+
+פורמט הפלט (JSON מובנה בלבד — בלי markdown, בלי שום טקסט מעבר ל-JSON):
+{
+  "tableHeaders": ["יחידה", "בסיס טקסטואלי", "נושא הממצא", "פרשנים"],
+  "tableRows": [
+    ["שם היחידה (פרק)", "תיאור קצר של מה בטקסט (2-4 משפטים)", "אחת מ-4 הקטגוריות + הסבר קצר", "קליין עמ' X; קנופרס עמ' Y"]
+  ],
+  "summary": "סיכום של 2-3 שורות: כמה מהאינדיקטורים שייכים לדוד עצמו, כמה לדמויות אחרות/לסביבה, ומה המשמעות הראשונית",
+  "selfCheck": "בדיקה עצמית מפורטת: 1) האם כל ${unitsWithIndicators.length} היחידות טופלו? 2) האם צוטטו פרשנים עם עמודים מתוך המסקנות שסופקו? 3) האם היה מקרה שבו ייחסתי לדוד ממצא ששייך לאחר? 4) האם ההבחנה בין 4 הקטגוריות נעשתה בעקביות?"
+}`;
+
+    const rawResponse=await aiCall(prompt,8000);
+    const parsed=parseParamJSON(rawResponse);
+    return {
       status:"מוכן לאישור",
       hasTable:true,
-      tableHeaders:["עמודה 1","עמודה 2","עמודה 3"],
-      tableRows:[
-        ["דוגמה 1","ערך זמני","הערה"],
-        ["דוגמה 2","ערך זמני","הערה"],
-      ],
-      summary:`תוצאת placeholder של שלב ${stageNum}. הפרומפט האמיתי ל-AI יתווסף בסבבים הבאים.` + (extraInstructions?` הנחיות שהתקבלו: "${extraInstructions}"`:""),
-      selfCheck:"בדיקה עצמית תופיע כאן — האם כל היחידות טופלו? האם הפרשנים צוטטו? האם התוצאה מובנית לפי המבנה הנדרש?"
+      tableHeaders:parsed.tableHeaders||["יחידה","בסיס טקסטואלי","נושא הממצא","פרשנים"],
+      tableRows:parsed.tableRows||[],
+      summary:parsed.summary||"",
+      selfCheck:parsed.selfCheck||""
     };
-    const newData={...stageData,[`stage${stageNum}`]:placeholder};
-    saveNow(newData);
+  }
+
+  async function runStage(stageNum,extraInstructions=""){
+    setLoading(true);
+    try{
+      let result;
+      if(stageNum===3){
+        result=await runStage3(extraInstructions);
+      } else {
+        // placeholder לשאר השלבים — יבוא בסבבים הבאים
+        await new Promise(r=>setTimeout(r,500));
+        result={
+          status:"מוכן לאישור (placeholder)",
+          hasTable:true,
+          tableHeaders:["עמודה 1","עמודה 2","עמודה 3"],
+          tableRows:[
+            ["דוגמה 1","ערך זמני","הערה"],
+            ["דוגמה 2","ערך זמני","הערה"]
+          ],
+          summary:`תוצאת placeholder של שלב ${stageNum}. הפרומפט האמיתי ל-AI יתווסף בסבב הבא.`+(extraInstructions?` הנחיות שהתקבלו: "${extraInstructions}"`:""),
+          selfCheck:"בדיקה עצמית תופיע כאן בסבב הבנייה הבא."
+        };
+      }
+      const newData={...stageData,[`stage${stageNum}`]:result};
+      saveNow(newData);
+    } catch(e){
+      const errorResult={
+        status:"שגיאה",
+        hasTable:false,
+        summary:`⚠️ שגיאה בהרצת שלב ${stageNum}: ${e.message||e}`,
+        selfCheck:"לא בוצעה בדיקה בעקבות שגיאה. ייתכן שהתשובה חרגה ממגבלת הטוקנים, או שהתשובה אינה בפורמט JSON תקין. נסי שוב, ואם הבעיה חוזרת — פני לבנאי."
+      };
+      const newData={...stageData,[`stage${stageNum}`]:errorResult};
+      saveNow(newData);
+    }
     setLoading(false);
   }
 
