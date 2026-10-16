@@ -2664,116 +2664,143 @@ function StageC({allUnits,allConcepts,dim4concept,getE,getParams,getCompareNote,
   // ─────────────────────────────────────────────────────────────────────────
   // שלב 3: בסיס טקסטואלי + נושא הממצא
   // ─────────────────────────────────────────────────────────────────────────
-  async function runStage3(extraInstructions=""){
+  // בונה בלוק טקסט ליחידה בודדת (לשימוש בפרומפט של שלב 3)
+  function buildUnitBlock(u){
+    const uid=String(u.id);
+    const ec=getE(uid,conceptName,"chronicles")||{};
+    const params=getParams?getParams(conceptName):[];
+    const validParams=validParamDefs(params);
+    const foundParams=(ec.params||[]).map((p,i)=>({...p,def:validParams[i]})).filter(x=>x&&x.found===true);
+    const paramList=foundParams.map((p,i)=>`  פרמטר ${i+1} (${(p.def&&(p.def.paramLabel||""))||""}): ${(p.def&&(p.def.q||""))||""}${p.verse?` [פסוק ${p.verse}]`:""}${p.note?` — ${p.note}`:""}`).join("\n");
+    const explicitNote=ec.explicit_note?`\nהערה על השדה הגלוי: ${ec.explicit_note}`:"";
+    const compareNote=(getCompareNote?getCompareNote(uid,conceptName):"")||"";
+    const sourceInfo=u.sourceRef?`מקבילה: ${u.sourceRef}`:"יחידת סונדרגוט (אין מקבילה)";
+    // קיצוץ אגרסיבי לטקסטים כדי לחסוך טוקנים — 800 תווים במקום 1200
+    return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### יחידה: ${u.name||u.label||"?"} (${u.chapter||"?"}) — ${sourceInfo}
+
+טקסט דה"י:
+${(u.chroniclesText||"—").substring(0,800)}
+
+${u.sourceText?`טקסט המקבילה:
+${u.sourceText.substring(0,800)}`:""}
+
+אינדיקטורים חיוביים שסומנו (${foundParams.length}):
+${paramList||"(אין פרטי פרמטרים)"}${explicitNote}
+
+המסקנה המחקרית של הכותבת:
+${compareNote||"(טרם נכתבה)"}`;
+  }
+
+  // בונה את הפרומפט לקבוצת יחידות
+  function buildBatchPrompt(batch,batchIdx,totalBatches,unitsWithIndicators,unitsMarkedNotRel,extraInstructions){
     const isEternal=(conceptName==="נצח"||conceptName==="עולם");
+    const who=character==="solomon"?"שלמה":"דוד";
+    const unitBlocks=batch.map(buildUnitBlock).join("\n\n");
+    const batchInfo=totalBatches>1?`\n\nזוהי קבוצה ${batchIdx+1} מתוך ${totalBatches} (${batch.length} יחידות מתוך ${unitsWithIndicators.length} סה"כ). טפל רק ביחידות שבקבוצה זו.`:"";
+    const notRelMention=(batchIdx===0&&unitsMarkedNotRel.length)?`\n\nהערה: ${unitsMarkedNotRel.length} יחידות סומנו ככלא רלוונטיות למושג "${conceptName}" ואינן נכללות בניתוח.`:"";
+    const eternalNote=isEternal?`\n\nהוראה מיוחדת: המושג "${conceptName}" הוא פרמטר תחת "ברית" ואין לו פרמטרים עצמאיים. הסתמך רק על השדה הגלוי — הופעת המילים "נצח/לנצח/עולם/לעולם/לעולמים/עד עולם/לדור ודור" וביטויים דומים.`:"";
+    return `אתה עוזר מחקר לתזה בתנ"ך. אנחנו מנתחים את עיצוב המושג "${conceptName}" בדמות ${who} בכרוניסט.${batchInfo}
+
+שלב 3: בסיס טקסטואלי + נושא הממצא.
+
+לכל יחידה בקבוצה שלפניך — קבע שני דברים:
+1. הבסיס הטקסטואלי — מה בפועל נאמר/קורה בטקסט שגרם לסימון האינדיקטור
+2. נושא הממצא — מי נושא התופעה בפועל
+
+ארבע קטגוריות לנושא הממצא:
+א) דוד עצמו — דוד הוא הפועל/האומר
+ב) המספר בעיצוב דוד — המספר מתאר את דוד ומסגר אותו
+ג) דמות אחרת ביחס לדוד — יואב, עמשי, בני יששכר, הלויים וכו'
+ד) הסביבה המלכותית של דוד — מערכת/מוסד/קבוצה סביב דוד
+
+כלל חמור: אסור לייחס לדוד ממצא ששייך לדמות אחרת. "רוח לבשה את עמשי" — נושא הממצא עמשי. "יודעי בינה לעתים" — נושא הממצא בני יששכר.
+
+חובת ציטוט: לכל ממצא צטט פרשן ועמוד מתוך המסקנה המחקרית של הכותבת. אסור להמציא. אם הכותבת לא ציטטה פרשן — רשום "—".${eternalNote}
+
+נתונים — ${batch.length} יחידות:
+
+${unitBlocks}${notRelMention}
+
+${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
+
+פורמט פלט (JSON בלבד, בלי markdown):
+{
+  "tableRows": [
+    ["שם היחידה (פרק)", "בסיס טקסטואלי קצר (2-3 משפטים)", "קטגוריית הנושא + הסבר", "פרשן עמ' X; פרשן עמ' Y"]
+  ],
+  "batchSummary": "סיכום הקבוצה ב-1-2 שורות"
+}`;
+  }
+
+  async function runStage3(extraInstructions=""){
     const who=character==="solomon"?"שלמה":"דוד";
     const relevantUnits=collectRelevantUnits();
 
-    // סינון: רק יחידות שבהן יש אינדיקטור חיובי במושג, או שסומנו "לא רלוונטי" (יוזכרו ברשימה)
-    // גם: לא רלוונטי = נוציא לרשימה נפרדת שרק מוזכרת
+    // סינון יחידות: עם אינדיקטור חיובי / סומנו כלא רלוונטי
     const unitsWithIndicators=[];
     const unitsMarkedNotRel=[];
     relevantUnits.forEach(u=>{
       const uid=String(u.id);
       const summary=getUnitSummary?getUnitSummary(uid):null;
       const notRelList=(summary&&Array.isArray(summary.notRelevantConcepts))?summary.notRelevantConcepts:[];
-      if(notRelList.includes(conceptName)){
-        unitsMarkedNotRel.push(u);
-        return;
-      }
+      if(notRelList.includes(conceptName)){ unitsMarkedNotRel.push(u); return; }
       const ec=getE(uid,conceptName,"chronicles")||{};
       const params=ec.params||[];
       const hasPositive=params.some(p=>p&&p.found===true);
       const hasExplicit=!!(ec.explicit_note&&ec.explicit_note.trim());
-      if(hasPositive||hasExplicit){
-        unitsWithIndicators.push(u);
-      }
+      if(hasPositive||hasExplicit) unitsWithIndicators.push(u);
     });
 
     if(unitsWithIndicators.length===0){
       return {
-        status:"אין נתונים",
-        hasTable:false,
-        summary:`לא נמצאו יחידות עם אינדיקטורים חיוביים למושג "${conceptName}" ב${who}. ייתכן שהמושג סומן כלא רלוונטי בכל היחידות, או שטרם הושלם שלב ב' עבורו.`,
-        selfCheck:"אין יחידות לניתוח — אין צורך בבדיקה עצמית."
+        status:"אין נתונים",hasTable:false,
+        summary:`לא נמצאו יחידות עם אינדיקטורים חיוביים למושג "${conceptName}" ב${who}.`,
+        selfCheck:"אין יחידות לניתוח."
       };
     }
 
-    // בניית הסקציה של הנתונים
-    const unitBlocks=unitsWithIndicators.map(u=>{
-      const uid=String(u.id);
-      const ec=getE(uid,conceptName,"chronicles")||{};
-      const es=getE(uid,conceptName,"source")||{};
-      const params=getParams?getParams(conceptName):[];
-      const validParams=validParamDefs(params);
-      const foundParams=(ec.params||[]).map((p,i)=>({...p,def:validParams[i]})).filter(x=>x&&x.found===true);
-      const paramList=foundParams.map((p,i)=>`  פרמטר ${i+1} (${(p.def&&(p.def.paramLabel||""))||""}): ${(p.def&&(p.def.q||""))||""}${p.verse?` [פסוק ${p.verse}]`:""}${p.note?` — ${p.note}`:""}`).join("\n");
-      const explicitNote=ec.explicit_note?`\nהערה על השדה הגלוי: ${ec.explicit_note}`:"";
-      const compareNote=(getCompareNote?getCompareNote(uid,conceptName):"")||"";
-      const sourceInfo=u.sourceRef?`מקבילה: ${u.sourceRef}`:"יחידת סונדרגוט (אין מקבילה)";
-      return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-### יחידה: ${u.name||u.label||"?"} (${u.chapter||"?"}) — ${sourceInfo}
+    // פיצול לקבוצות של 8 יחידות — כדי לא לחצות timeout של Cloudflare worker
+    const BATCH_SIZE=8;
+    const batches=[];
+    for(let i=0;i<unitsWithIndicators.length;i+=BATCH_SIZE){
+      batches.push(unitsWithIndicators.slice(i,i+BATCH_SIZE));
+    }
 
-טקסט דה"י:
-${(u.chroniclesText||"—").substring(0,1200)}
+    // הרצת הקבוצות ברצף + מד התקדמות
+    const allRows=[];
+    const batchSummaries=[];
+    for(let i=0;i<batches.length;i++){
+      setStageData(prev=>({...prev,progressNote:`עובד על קבוצה ${i+1}/${batches.length} (${batches[i].length} יחידות)...`}));
+      const prompt=buildBatchPrompt(batches[i],i,batches.length,unitsWithIndicators,unitsMarkedNotRel,extraInstructions);
+      const rawResponse=await aiCall(prompt,4000); // 4000 תווים לקבוצה — מספיק ל-8 יחידות
+      const parsed=parseParamJSON(rawResponse);
+      const rows=parsed.tableRows||[];
+      rows.forEach(r=>allRows.push(r));
+      if(parsed.batchSummary) batchSummaries.push(parsed.batchSummary);
+    }
 
-${u.sourceText?`טקסט המקבילה:
-${u.sourceText.substring(0,1200)}`:""}
+    // ספירה גסה של נושאי הממצא
+    let countDavid=0,countNarr=0,countOther=0,countEnv=0;
+    allRows.forEach(r=>{
+      const subject=(r[2]||"").toLowerCase();
+      if(subject.includes("דוד עצמו")) countDavid++;
+      else if(subject.includes("מספר")) countNarr++;
+      else if(subject.includes("אחרת")) countOther++;
+      else if(subject.includes("סביבה")) countEnv++;
+    });
 
-אינדיקטורים חיוביים שסומנו במושג (${foundParams.length}):
-${paramList||"(אין פרטי פרמטרים)"}${explicitNote}
+    const combinedSummary=`נותחו ${allRows.length} יחידות עם אינדיקטורים חיוביים ב-${batches.length} קבוצות. התפלגות נושאי הממצא: ${countDavid} מיוחסים לדוד עצמו, ${countNarr} למספר בעיצוב דוד, ${countOther} לדמויות אחרות, ${countEnv} לסביבה המלכותית.${batchSummaries.length>1?" סיכומי קבוצות: "+batchSummaries.join(" | "):""}`;
 
-המסקנה המחקרית של הכותבת:
-${compareNote||"(טרם נכתבה)"}`;
-    }).join("\n\n");
+    const selfCheck=`בדיקה עצמית: 1) טופלו ${allRows.length} יחידות מתוך ${unitsWithIndicators.length} אפשריות. 2) הניתוח פוצל ל-${batches.length} קבוצות של עד ${BATCH_SIZE} יחידות כל אחת. 3) הפרמטר הקריטי להצלחה: האם ה-AI זיהה נכון שאינדיקטורים ששייכים לדמויות אחרות (עמשי, בני יששכר, יואב) לא מיוחסים לדוד.`;
 
-    const notRelMention=unitsMarkedNotRel.length?`\n\nהערה: ${unitsMarkedNotRel.length} יחידות נוספות סומנו ככלא רלוונטיות למושג "${conceptName}" ואינן נכללות בניתוח (${unitsMarkedNotRel.map(u=>u.name||u.label).join(", ")}).`:"";
-
-    const eternalNote=isEternal?`\n\nהוראה מיוחדת: המושג "${conceptName}" הוא פרמטר תחת המושג "ברית" ואין לו ניתוח פרמטרים עצמאי. יש להסתמך אך ורק על השדה הגלוי — הופעת המילים "נצח", "לנצח", "עולם", "לעולם", "לעולמים", "עד עולם", "לדור ודור" וביטויים דומים בטקסט. אין להתייחס לפרמטרים.`:"";
-
-    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. אנחנו מנתחים את עיצוב המושג "${conceptName}" בדמות ${who} בכרוניסט, לפי מתודולוגיה של 7 שלבים.
-
-כעת אנחנו בשלב 3: בסיס טקסטואלי + נושא הממצא.
-
-מטרת השלב: לכל יחידה שבה סומנו אינדיקטורים חיוביים למושג, עליך לקבוע שני דברים:
-1. הבסיס הטקסטואלי — מה בפועל נאמר או קורה בטקסט שגרם לסימון
-2. נושא הממצא — מי נושא התופעה בפועל
-
-ארבע קטגוריות אפשריות לנושא הממצא:
-א) דוד עצמו — דוד הוא הפועל / האומר
-ב) המספר בעיצוב דוד — המספר/הכרוניסט מתאר את דוד ומסגר אותו (למשל: "ויהי דוד עשה משפט וצדקה")
-ג) דמות אחרת ביחס לדוד — דמות אחרת (יואב, עמשי, בני יששכר, הלויים וכו')
-ד) הסביבה המלכותית של דוד — מערכת, מוסד או קבוצה שסביב דוד (רשימות, מערכי שלטון)
-
-כלל חמור: אסור לייחס לדוד ממצא ששייך לדמות אחרת. אם "רוח לבשה את עמשי" — נושא הממצא הוא עמשי, לא דוד. אם "יודעי בינה לעתים" הם בני יששכר — נושא הממצא הוא בני יששכר. ברירות שגויות של נושא הממצא פוסלות את כל התוצאה.
-
-חובת ציטוט: לכל ממצא עליך לציטט פרשן ועמוד מתוך המסקנות המחקריות של הכותבת שמצורפות למטה. אסור להמציא ציטוטים או עמודים. אם במסקנה המחקרית צוטטו "קליין עמ' 301" ו"קנופרס עמ' 707" — אלה הפרשנים שאתה מצטט. אם הכותבת לא ציטטה פרשן ליחידה מסוימת, רשום בעמודה "פרשנים": —${eternalNote}
-
-נתונים — ${unitsWithIndicators.length} יחידות עם אינדיקטורים חיוביים למושג "${conceptName}":
-
-${unitBlocks}${notRelMention}
-
-${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstructions}\n`:""}
-
-פורמט הפלט (JSON מובנה בלבד — בלי markdown, בלי שום טקסט מעבר ל-JSON):
-{
-  "tableHeaders": ["יחידה", "בסיס טקסטואלי", "נושא הממצא", "פרשנים"],
-  "tableRows": [
-    ["שם היחידה (פרק)", "תיאור קצר של מה בטקסט (2-4 משפטים)", "אחת מ-4 הקטגוריות + הסבר קצר", "קליין עמ' X; קנופרס עמ' Y"]
-  ],
-  "summary": "סיכום של 2-3 שורות: כמה מהאינדיקטורים שייכים לדוד עצמו, כמה לדמויות אחרות/לסביבה, ומה המשמעות הראשונית",
-  "selfCheck": "בדיקה עצמית מפורטת: 1) האם כל ${unitsWithIndicators.length} היחידות טופלו? 2) האם צוטטו פרשנים עם עמודים מתוך המסקנות שסופקו? 3) האם היה מקרה שבו ייחסתי לדוד ממצא ששייך לאחר? 4) האם ההבחנה בין 4 הקטגוריות נעשתה בעקביות?"
-}`;
-
-    const rawResponse=await aiCall(prompt,8000);
-    const parsed=parseParamJSON(rawResponse);
     return {
       status:"מוכן לאישור",
       hasTable:true,
-      tableHeaders:parsed.tableHeaders||["יחידה","בסיס טקסטואלי","נושא הממצא","פרשנים"],
-      tableRows:parsed.tableRows||[],
-      summary:parsed.summary||"",
-      selfCheck:parsed.selfCheck||""
+      tableHeaders:["יחידה","בסיס טקסטואלי","נושא הממצא","פרשנים"],
+      tableRows:allRows,
+      summary:combinedSummary,
+      selfCheck:selfCheck
     };
   }
 
@@ -3093,7 +3120,7 @@ ${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstruct
                       <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"10px"}}>הכלי יריץ AI על החומר של המושג ויציג תוצאה מובנית לאישור.</div>
                       <button onClick={()=>runStage(n)} disabled={loading}
                         style={{padding:"9px 18px",borderRadius:"7px",border:"none",cursor:loading?"wait":"pointer",background:loading?"#475569":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>
-                        {loading?"רץ...":"▶ הפעל שלב"}
+                        {loading?(stageData.progressNote||"רץ..."):"▶ הפעל שלב"}
                       </button>
                     </div>
                   )}
