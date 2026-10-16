@@ -2775,14 +2775,104 @@ ${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstruct
     };
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // שלב 1: מיפוי גלוי/נרמז — חישוב דטרמיניסטי מתוך הנתונים (ללא AI)
+  // ─────────────────────────────────────────────────────────────────────────
+  function runStage1Computational(){
+    const relevantUnits=collectRelevantUnits();
+    const customSem=raw.customSemantic||{};
+    const semData=(typeof SEMANTIC!=='undefined'?SEMANTIC:{})[conceptName]||customSem[conceptName]||null;
+    const posStr=(semData&&semData.pos)||"";
+    const posWords=posStr.split(/[,،;]/).map(s=>s.trim()).filter(w=>w.length>0);
+    const tableRows=[];
+    let countSemNirm=0,countNirm=0,countSem=0,countNone=0,countNotRel=0;
+    relevantUnits.forEach(u=>{
+      const uid=String(u.id);
+      const summary=getUnitSummary?getUnitSummary(uid):null;
+      const notRelList=(summary&&Array.isArray(summary.notRelevantConcepts))?summary.notRelevantConcepts:[];
+      if(notRelList.includes(conceptName)){
+        countNotRel++;
+        tableRows.push([`${u.name||"?"} (${u.chapter||"?"})`,"—","—","לא רלוונטי"]);
+        return;
+      }
+      const text=u.chroniclesText||"";
+      const hasSem=posWords.some(w=>w&&text.indexOf(w)>=0);
+      const ec=getE(uid,conceptName,"chronicles")||{};
+      const hasNirmaz=(ec.params||[]).some(p=>p&&p.found===true);
+      let sym="—";
+      if(hasSem&&hasNirmaz){sym="ס+נ";countSemNirm++;}
+      else if(hasSem){sym="ס";countSem++;}
+      else if(hasNirmaz){sym="נ";countNirm++;}
+      else countNone++;
+      tableRows.push([`${u.name||"?"} (${u.chapter||"?"})`,hasSem?"✓":"—",hasNirmaz?"✓":"—",sym]);
+    });
+    return{
+      status:"חישוב מיידי — מוכן לאישור",
+      hasTable:true,
+      tableHeaders:["יחידה","ס (סמנטי גלוי)","נ (נרמז)","סימון"],
+      tableRows:tableRows,
+      summary:`מתוך ${relevantUnits.length} יחידות: ${countSemNirm} עם ס+נ, ${countNirm} עם נ בלבד, ${countSem} עם ס בלבד, ${countNone} ללא ממצא, ${countNotRel} סומנו כלא רלוונטיות. סה"כ ${countSemNirm+countNirm+countSem} יחידות עם ממצא כלשהו למושג "${conceptName}".`,
+      selfCheck:"חישוב דטרמיניסטי מתוך הנתונים בכלי — לא נדרשת בדיקה עצמית של AI. הסימון ס מבוסס על מילון השדה הסמנטי של המושג; הסימון נ מבוסס על פרמטר אחד לפחות שסומן כחיובי בשלב ב'."
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // שלב 2: פירוט אינדיקטורים לפי קטגוריות הפרמטרים — חישוב דטרמיניסטי
+  // ─────────────────────────────────────────────────────────────────────────
+  function runStage2Computational(){
+    const relevantUnits=collectRelevantUnits();
+    const params=getParams?getParams(conceptName):[];
+    const validParams=validParamDefs(params);
+    // קיבוץ פרמטרים לפי paramLabel
+    const labelOrder=[];
+    const labelToIndices={};
+    validParams.forEach((p,i)=>{
+      const label=(p&&p.paramLabel)||"אחר";
+      if(!labelToIndices[label]){labelToIndices[label]=[];labelOrder.push(label);}
+      labelToIndices[label].push(i);
+    });
+    const headers=["יחידה",...labelOrder,'סה"כ'];
+    const tableRows=[];
+    let totalIndicators=0;
+    relevantUnits.forEach(u=>{
+      const uid=String(u.id);
+      const summary=getUnitSummary?getUnitSummary(uid):null;
+      const notRelList=(summary&&Array.isArray(summary.notRelevantConcepts))?summary.notRelevantConcepts:[];
+      if(notRelList.includes(conceptName)) return;
+      const ec=getE(uid,conceptName,"chronicles")||{};
+      const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?i:-1).filter(i=>i>=0);
+      if(positives.length===0) return;
+      const row=[`${u.name||"?"} (${u.chapter||"?"})`];
+      labelOrder.forEach(label=>{
+        const count=positives.filter(i=>labelToIndices[label].includes(i)).length;
+        row.push(String(count));
+      });
+      row.push(String(positives.length));
+      totalIndicators+=positives.length;
+      tableRows.push(row);
+    });
+    return{
+      status:"חישוב מיידי — מוכן לאישור",
+      hasTable:true,
+      tableHeaders:headers,
+      tableRows:tableRows,
+      summary:`${tableRows.length} יחידות עם אינדיקטורים חיוביים למושג "${conceptName}", סה"כ ${totalIndicators} אינדיקטורים ב-${labelOrder.length} קטגוריות: ${labelOrder.join(", ")}. יחידות אלה הן הבסיס לניתוח של שלב 3.`,
+      selfCheck:"חישוב דטרמיניסטי מתוך הנתונים בכלי — לא נדרשת בדיקה עצמית של AI. הקטגוריות נגזרות מתוך שדה paramLabel של כל פרמטר בהגדרת המושג."
+    };
+  }
+
   async function runStage(stageNum,extraInstructions=""){
     setLoading(true);
     try{
       let result;
-      if(stageNum===3){
+      if(stageNum===1){
+        result=runStage1Computational();
+      } else if(stageNum===2){
+        result=runStage2Computational();
+      } else if(stageNum===3){
         result=await runStage3(extraInstructions);
       } else {
-        // placeholder לשאר השלבים — יבוא בסבבים הבאים
+        // placeholder לשלבים 4-6 — יבוא בסבבים הבאים
         await new Promise(r=>setTimeout(r,500));
         result={
           status:"מוכן לאישור (placeholder)",
@@ -2958,7 +3048,7 @@ ${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstruct
 
       {/* הודעת סטטוס הבנייה — אילו שלבים כבר פעילים ואילו placeholder */}
       <div style={{marginBottom:"14px",padding:"10px 14px",background:"#1e3a5f",borderRadius:"7px",border:"1px solid #3b82f6",fontSize:"12px",color:"#bfdbfe",lineHeight:"1.6"}}>
-        <strong>סטטוס בנייה:</strong> שלב 3 מופעל עם AI אמיתי. שלבים 1, 2, 4, 5, 6 עדיין בפיתוח ומציגים דוגמה זמנית. לחצי על כותרת של שלב כדי לקפוץ אליו ישירות (ללא צורך לעבור את השלבים הקודמים).
+        <strong>סטטוס בנייה:</strong> שלבים 1-2 מופעלים בחישוב מיידי מתוך הנתונים (ללא קריאה ל-AI). שלב 3 מופעל עם AI אמיתי. שלבים 4-6 עדיין בפיתוח. לחצי על כותרת של שלב כדי לקפוץ אליו ישירות.
       </div>
 
       {/* רשימת שלבים */}
@@ -2967,7 +3057,13 @@ ${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstruct
           const isApproved=(stageData.approvedStages||[]).includes(n);
           const isCurrent=n===currentStage&&!isApproved;
           const hasResult=stageData[`stage${n}`];
-          const isReal=n===3; // רק שלב 3 מופעל כרגע עם AI אמיתי
+          // מיפוי סטטוס לכל שלב: computational (ללא AI), ai (עם AI), dev (בפיתוח)
+          const stageMode=(n===1||n===2)?"computational":(n===3)?"ai":"dev";
+          const badgeConfig={
+            computational:{text:"חישוב מיידי",color:"#60a5fa",bg:"#1e3a5f44"},
+            ai:{text:"AI פעיל",color:"#34d399",bg:"#06402844"},
+            dev:{text:"בפיתוח",color:"#fbbf24",bg:"#78350f44"}
+          }[stageMode];
           const icon=isApproved?"✓":isCurrent?"▶":"○";
           const color=isApproved?"#34d399":isCurrent?dimColor:"#475569";
           return(
@@ -2978,8 +3074,7 @@ ${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstruct
                 <div style={{flex:1}}>
                   <div style={{fontSize:"13px",fontWeight:"700",color:isCurrent?"#f1f5f9":isApproved?"#cbd5e1":"#64748b",display:"flex",alignItems:"center",gap:"8px"}}>
                     שלב {n}: {STAGE_LABELS[n]}
-                    {isReal?<span style={{fontSize:"10px",color:"#34d399",background:"#06402844",padding:"1px 7px",borderRadius:"9px",fontWeight:"700"}}>AI פעיל</span>
-                           :<span style={{fontSize:"10px",color:"#fbbf24",background:"#78350f44",padding:"1px 7px",borderRadius:"9px",fontWeight:"700"}}>בפיתוח</span>}
+                    <span style={{fontSize:"10px",color:badgeConfig.color,background:badgeConfig.bg,padding:"1px 7px",borderRadius:"9px",fontWeight:"700"}}>{badgeConfig.text}</span>
                   </div>
                   <div style={{fontSize:"11px",color:"#64748b",marginTop:"2px"}}>{STAGE_DESCRIPTIONS[n]}</div>
                 </div>
