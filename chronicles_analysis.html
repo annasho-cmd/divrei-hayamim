@@ -2956,23 +2956,34 @@ ${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstruct
         <button onClick={resetAll} style={{padding:"6px 14px",borderRadius:"7px",border:"1px solid #334155",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ בחירה חדשה</button>
       </div>
 
+      {/* הודעת סטטוס הבנייה — אילו שלבים כבר פעילים ואילו placeholder */}
+      <div style={{marginBottom:"14px",padding:"10px 14px",background:"#1e3a5f",borderRadius:"7px",border:"1px solid #3b82f6",fontSize:"12px",color:"#bfdbfe",lineHeight:"1.6"}}>
+        <strong>סטטוס בנייה:</strong> שלב 3 מופעל עם AI אמיתי. שלבים 1, 2, 4, 5, 6 עדיין בפיתוח ומציגים דוגמה זמנית. לחצי על כותרת של שלב כדי לקפוץ אליו ישירות (ללא צורך לעבור את השלבים הקודמים).
+      </div>
+
       {/* רשימת שלבים */}
       <div style={{marginBottom:"16px"}}>
         {[1,2,3,4,5,6].map(n=>{
           const isApproved=(stageData.approvedStages||[]).includes(n);
           const isCurrent=n===currentStage&&!isApproved;
           const hasResult=stageData[`stage${n}`];
+          const isReal=n===3; // רק שלב 3 מופעל כרגע עם AI אמיתי
           const icon=isApproved?"✓":isCurrent?"▶":"○";
           const color=isApproved?"#34d399":isCurrent?dimColor:"#475569";
           return(
             <div key={n} style={{marginBottom:"8px"}}>
-              <div style={{display:"flex",alignItems:"center",gap:"12px",padding:"10px 14px",borderRadius:"8px",background:isCurrent?"#1e293b":"#0f172a",border:`1px solid ${isCurrent?color:"#334155"}`}}>
+              <div onClick={()=>!isApproved&&setCurrentStage(n)}
+                style={{display:"flex",alignItems:"center",gap:"12px",padding:"10px 14px",borderRadius:"8px",background:isCurrent?"#1e293b":"#0f172a",border:`1px solid ${isCurrent?color:"#334155"}`,cursor:isApproved?"default":"pointer"}}>
                 <span style={{fontSize:"18px",color,fontWeight:"700",minWidth:"18px"}}>{icon}</span>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:"13px",fontWeight:"700",color:isCurrent?"#f1f5f9":isApproved?"#cbd5e1":"#64748b"}}>שלב {n}: {STAGE_LABELS[n]}</div>
+                  <div style={{fontSize:"13px",fontWeight:"700",color:isCurrent?"#f1f5f9":isApproved?"#cbd5e1":"#64748b",display:"flex",alignItems:"center",gap:"8px"}}>
+                    שלב {n}: {STAGE_LABELS[n]}
+                    {isReal?<span style={{fontSize:"10px",color:"#34d399",background:"#06402844",padding:"1px 7px",borderRadius:"9px",fontWeight:"700"}}>AI פעיל</span>
+                           :<span style={{fontSize:"10px",color:"#fbbf24",background:"#78350f44",padding:"1px 7px",borderRadius:"9px",fontWeight:"700"}}>בפיתוח</span>}
+                  </div>
                   <div style={{fontSize:"11px",color:"#64748b",marginTop:"2px"}}>{STAGE_DESCRIPTIONS[n]}</div>
                 </div>
-                {isApproved&&<button onClick={()=>unapproveStage(n)} style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"10px",fontWeight:"600"}}>בטל אישור</button>}
+                {isApproved&&<button onClick={(e)=>{e.stopPropagation();unapproveStage(n);}} style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"10px",fontWeight:"600"}}>בטל אישור</button>}
               </div>
 
               {/* אזור הרצה של השלב הפעיל */}
