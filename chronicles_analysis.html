@@ -2617,9 +2617,11 @@ function StageC({allUnits,allConcepts,dim4concept,getE,getParams,getCompareNote,
     if(!character||!dimension||!conceptName){ return; }
     const saved=getStage3Result?getStage3Result(character,dimension,conceptName):null;
     if(saved){
+      // סינון: תוצאות שגיאה שנשמרו בעבר נזרקות — אסור להציג אותן כתוצאה שמורה
+      const cleanStage=(s)=>(s&&s.status==="שגיאה")?null:s;
       setStageData({
-        stage1:saved.stage1||null,stage2:saved.stage2||null,stage3:saved.stage3||null,
-        stage4:saved.stage4||null,stage5:saved.stage5||null,stage6:saved.stage6||null,
+        stage1:cleanStage(saved.stage1),stage2:cleanStage(saved.stage2),stage3:cleanStage(saved.stage3),
+        stage4:cleanStage(saved.stage4),stage5:cleanStage(saved.stage5),stage6:cleanStage(saved.stage6),
         approvedStages:saved.approvedStages||[]
       });
       const approved=saved.approvedStages||[];
@@ -2889,14 +2891,16 @@ ${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstruct
       const newData={...stageData,[`stage${stageNum}`]:result};
       saveNow(newData);
     } catch(e){
+      // שגיאות NOT נשמרות בפיירבייס — רק מוצגות זמנית
+      // המשתמשת תוכל פשוט ללחוץ "הפעל שלב" שוב בלי לדחות
       const errorResult={
         status:"שגיאה",
         hasTable:false,
         summary:`⚠️ שגיאה בהרצת שלב ${stageNum}: ${e.message||e}`,
-        selfCheck:"לא בוצעה בדיקה בעקבות שגיאה. ייתכן שהתשובה חרגה ממגבלת הטוקנים, או שהתשובה אינה בפורמט JSON תקין. נסי שוב, ואם הבעיה חוזרת — פני לבנאי."
+        selfCheck:"לא בוצעה בדיקה בעקבות שגיאה. ייתכן שהתשובה חרגה ממגבלת הטוקנים, או שהתשובה אינה בפורמט JSON תקין, או ש-worker ה-CORS לא זמין. נסי שוב — אין צורך ללחוץ 'דחה' (השגיאה לא נשמרה)."
       };
-      const newData={...stageData,[`stage${stageNum}`]:errorResult};
-      saveNow(newData);
+      // מציג את השגיאה במצב הנוכחי בלבד, בלי saveNow — כך שבפתיחה הבאה היא תיעלם
+      setStageData({...stageData,[`stage${stageNum}`]:errorResult});
     }
     setLoading(false);
   }
@@ -3136,16 +3140,25 @@ ${extraInstructions?`\nהנחיות נוספות מהכותבת: ${extraInstruct
                         </div>
                       )}
 
-                      {/* כפתורי פעולה */}
+                      {/* כפתורי פעולה — כפתור "הפעל שוב" אם התוצאה היא שגיאה, אחרת אשר/דחה */}
                       <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                        <button onClick={()=>approveStage(n)}
-                          style={{padding:"8px 16px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700"}}>
-                          ✓ אשר {n<6?"ועבור לשלב הבא":"סיים ניתוח"}
-                        </button>
-                        <button onClick={()=>toggleReject(n)}
-                          style={{padding:"8px 16px",borderRadius:"7px",border:"1px solid #ef4444",cursor:"pointer",background:"transparent",color:"#ef4444",fontSize:"12px",fontWeight:"700"}}>
-                          ✗ דחה והרץ שוב
-                        </button>
+                        {hasResult.status==="שגיאה"?(
+                          <button onClick={()=>runStage(n)} disabled={loading}
+                            style={{padding:"8px 18px",borderRadius:"7px",border:"none",cursor:loading?"wait":"pointer",background:loading?"#475569":"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                            {loading?"רץ מחדש...":"🔄 הפעל שוב"}
+                          </button>
+                        ):(
+                          <>
+                            <button onClick={()=>approveStage(n)}
+                              style={{padding:"8px 16px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                              ✓ אשר {n<6?"ועבור לשלב הבא":"סיים ניתוח"}
+                            </button>
+                            <button onClick={()=>toggleReject(n)}
+                              style={{padding:"8px 16px",borderRadius:"7px",border:"1px solid #ef4444",cursor:"pointer",background:"transparent",color:"#ef4444",fontSize:"12px",fontWeight:"700"}}>
+                              ✗ דחה והרץ שוב
+                            </button>
+                          </>
+                        )}
                       </div>
 
                       {/* שדה הנחיות נוספות */}
