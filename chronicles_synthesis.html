@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8"/>
+  <title>🧬 כלי סינתזה — דברי הימים</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:"Segoe UI",Arial,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;}
+    select,input,textarea,button{font-family:inherit;}
+    ::-webkit-scrollbar{width:7px;}
+    ::-webkit-scrollbar-track{background:#1e293b;}
+    ::-webkit-scrollbar-thumb{background:#475569;border-radius:3px;}
+    table{border-collapse:collapse;width:100%;}
+    th,td{padding:7px 10px;text-align:right;}
+    .pulse{animation:pulse 1.4s ease-in-out infinite;}
+    @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.5;}}
+  </style>
+</head>
+<body><div id="root"><div style="padding:40px;color:white;font-size:18px;text-align:center">⏳ טוען...</div></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo,useRef} = React;
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── קבועים ממקור הכלי האנליטי ─────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+const DIMS=[
+  {id:"d1",label:"רוחני-תיאולוגי",color:"#818cf8",concepts:["רוח/ריח","חכמה","בינה","עצה","גבורה","דעת","יראה","צניעות","ענווה"]},
+  {id:"d2",label:"חברתי-משפטי",color:"#34d399",concepts:["משפט","צדקה","מוסר","יושר","חסד"]},
+  {id:"d3",label:"מדיני-לאומי",color:"#fbbf24",concepts:["שלום","ביטחון","רועה","אחד/יחד","אמן"]},
+  {id:"d4",label:"ברית ונצחיות",color:"#f87171",concepts:["ברית","נצח","עולם"]},
+];
+
+const STAGE_LABELS={
+  1:"מיפוי גלוי/נרמז",
+  2:"פירוט אינדיקטורים לפי קטגוריות",
+  3:"בסיס טקסטואלי + נושא הממצא",
+  4:"איחוד לתופעות טקסטואליות",
+  5:"זיהוי דפוסים חוזרים",
+  6:"השוואה לשמואל-מלכים",
+  7:"חזרה למושג הנבואי"
+};
+const STAGE_DESC={
+  1:"מיפוי לכל יחידה: ס (סמנטי גלוי), נ (נרמז), ס+נ, או —",
+  2:"פירוט האינדיקטורים החיוביים בכל יחידה לפי קטגוריות הפרמטרים",
+  3:"לכל יחידה: מה בטקסט + מי נושא הממצא (דוד/המספר/אחר/סביבה)",
+  4:"איחוד האינדיקטורים לתופעות טקסטואליות — בלי לציין שם המושג",
+  5:"זיהוי דפוסים חוזרים ברוב היחידות",
+  6:"לכל דפוס: מה הכרוניסט עשה — נשמר/חוזק/שונה/יצירה מלאה",
+  7:"בדיקה: אילו דפוסים מתאימים להגדרת המושג מפרק ב' של התזה"
+};
+const STAGE_MODE={1:"computational",2:"computational",3:"ai",4:"ai",5:"ai",6:"ai",7:"ai_defs"};
+
+// רק מילון הגיבוי לשדה סמנטי — אם אין customSemantic בגיבוי
+const SEMANTIC_FALLBACK={
+  "בינה":{pos:"בינה, תבונה, נבון, להבין, חכמה, דעת, ידע, שכל, ערמה, עצה"},
+  "גבורה":{pos:"עז, חיל, תקופה, אמץ, עוצמה, עצה, גבור, גיבור, גבורה"},
+  "דעת":{pos:"ידע, הבין, חכם, בינה, הכיר, זכר, ראה, למד, דרש, דעת, דעה"},
+  "חכמה":{pos:"יעץ, חכם, תבונה, שכל, מוסר, תוכחה, חכמה, בינה, דעת, עצה"},
+  "עצה":{pos:"בינה, דעת, תבונה, עצה, יעץ"},
+  "ענווה":{pos:"צדק, הגינות, סדר, צדקה, משפט, טוב, מוסר, חסיד, ענוה, ענו, ענווה"},
+  "יושר":{pos:"משפט, חסד, אמת, רחמים, שלום, צדק, אמונה, ישר, תמים, טוב, טהור"},
+  "צדקה":{pos:"תורה, חסד, חלק, צדק, אורח, משפט, חוקה, צדקה"},
+  "מוסר":{pos:"הוכיח, הדרכה, תיקון, ענוש, משפט, תוכחה, חכמה, בינה, מוסר"},
+  "ביטחון":{pos:"שאנות, מנוחה, תקווה, שכב, רבץ, לחסות, לקוות, אשרי, בטח, בטחון"},
+  "שלום":{pos:"שלמונים, שלם, שלום, טוב, צדקה, ברית, בטח, שלווה, שמחה, ברכה"},
+  "ברית":{pos:"ברית, לכרות, לאכול, קשר, חוק, מצווה, עדות, שמר, לזכור, אמונה, חסד"},
+  "עולם":{pos:"עולם, לעולם, לעולמים, עד עולם, נצח, תמיד, דור"},
+  "נצח":{pos:"נצח, לנצח, תמיד, תקיף"},
+  "חסד":{pos:"חסד, אמת, רחמים, אהבה, ברית, טוב, חן"},
+  "יראה":{pos:"ירא, יראה, פחד, כבד, בטח, שמע, עבד, חכמה, מוסר"},
+  "צניעות":{pos:"ענווה, יראה, צדק, טוב, שלום, צניעות, מועט"},
+  "רועה":{pos:"רועה, רעה, רעי, רעיה, מרעה, מרעית, עדר, נהג, שמר, פקד"},
+  "אחד/יחד":{pos:"אחד, יחד, אחדות, קהל, קבוץ, כנס, אסף"},
+  "אמן":{pos:"אמן, אמונה, אמונים, נאמן, אמת"},
+  "משפט":{pos:"משפט, שפט, שופט, דין, חוק, חוקה, משפטים"},
+  "רוח/ריח":{pos:"רוח, ריח, רוחות"}
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── עזרים ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+function LS_get(k,def){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):def;}catch{return def;} }
+function LS_set(k,v){ try{localStorage.setItem(k,JSON.stringify(v));}catch(e){console.warn("LS save failed",e);} }
+
+function parseCh(u){
+  try{ const p=String(u.chapter||"").split("_"); return [parseInt(p[0]||"999",10),parseInt(p[1]||"999",10)]; }
+  catch{ return [999,999]; }
+}
+
+function validParams(params){ return (params||[]).filter(p=>p&&(typeof p==="object"?p.q:p).toString().trim()); }
+
+function dim4concept(name,raw){
+  const d=DIMS.find(d=>d.concepts.includes(name));
+  if(d) return d;
+  const cc=(raw&&raw.customConcepts||[]).find(c=>c.name===name);
+  if(cc){ const dd=DIMS.find(x=>x.id===cc.dimId); if(dd) return dd; }
+  return null;
+}
+
+function allConceptsFrom(raw){
+  const r=[]; const seen=new Set();
+  DIMS.forEach(d=>d.concepts.forEach(n=>{ r.push({name:n,dimId:d.id}); seen.add(n); }));
+  ((raw&&raw.customConcepts)||[]).forEach(c=>{ if(!seen.has(c.name)){ r.push({name:c.name,dimId:c.dimId}); seen.add(c.name); } });
+  return r;
+}
+
+function getParams(name,raw){
+  const c=raw&&raw.concepts&&raw.concepts[name];
+  return (c&&Array.isArray(c.params))?c.params:[];
+}
+
+function getSemantic(name,raw){
+  const custom=(raw&&raw.customSemantic&&raw.customSemantic[name])||null;
+  if(custom) return custom;
+  const inRaw=(raw&&raw.concepts&&raw.concepts[name]&&raw.concepts[name].sem)||null;
+  if(inRaw) return inRaw;
+  return SEMANTIC_FALLBACK[name]||null;
+}
+
+function getEntry(uid,cname,mode,raw){
+  const store=mode==="source"?"analysis_source":"analysis_chronicles";
+  return (raw&&raw[store]&&raw[store][String(uid)]&&raw[store][String(uid)][cname])||null;
+}
+
+function getCompareNote(uid,cname,raw){
+  return (raw&&raw.compareNotes&&raw.compareNotes[String(uid)]&&raw.compareNotes[String(uid)][cname])||"";
+}
+
+function getUnitSummary(uid,raw){
+  return (raw&&raw.unitSummary&&raw.unitSummary[String(uid)])||{};
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── מסך 1: ברוך הבא / העלאת גיבוי ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+function WelcomeScreen({onBackupLoaded,hasBackup,hasApiKey,onOpenApiKey,backupStats}){
+  const fileRef=useRef(null);
+  function handleFile(e){
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{ const data=JSON.parse(ev.target.result); onBackupLoaded(data,f.name); }
+      catch(err){ alert("שגיאה בטעינת הגיבוי: "+err.message); }
+    };
+    reader.readAsText(f);
+  }
+  return(
+    <div style={{maxWidth:"880px",margin:"0 auto",padding:"38px 20px"}}>
+      <div style={{textAlign:"center",marginBottom:"34px"}}>
+        <div style={{fontSize:"34px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"8px"}}>🧬 כלי סינתזה</div>
+        <div style={{fontSize:"15px",color:"#94a3b8",lineHeight:"1.7"}}>סינתזה פרקית של מושגים לרוחב יחידות דוד/שלמה בדברי הימים<br/>7 שלבים מדורגים לכל מושג, בהתאם למתודולוגיה שבנינו</div>
+      </div>
+
+      {/* תיבת העלאת גיבוי */}
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",border:`1px solid ${hasBackup?"#34d399":"#334155"}`,marginBottom:"18px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"10px"}}>
+          <div>
+            <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>📥 1. גיבוי מהכלי האנליטי</div>
+            <div style={{fontSize:"12px",color:"#94a3b8"}}>העלי קובץ JSON מהכלי האנליטי (הגיבוי מכיל את כל המסקנות, הפרמטרים והטקסטים)</div>
+          </div>
+          <span style={{fontSize:"24px",color:hasBackup?"#34d399":"#475569"}}>{hasBackup?"✓":"○"}</span>
+        </div>
+        <input ref={fileRef} type="file" accept=".json" onChange={handleFile} style={{display:"none"}}/>
+        <button onClick={()=>fileRef.current.click()} style={{padding:"10px 18px",borderRadius:"8px",border:"none",cursor:"pointer",background:hasBackup?"#065f46":"#818cf8",color:"white",fontSize:"13px",fontWeight:"700"}}>
+          {hasBackup?"🔄 החלף גיבוי":"📂 בחרי קובץ JSON"}
+        </button>
+        {hasBackup&&backupStats&&(
+          <div style={{marginTop:"12px",fontSize:"11px",color:"#94a3b8",lineHeight:"1.7"}}>
+            <strong style={{color:"#34d399"}}>גיבוי נטען:</strong> {backupStats.units} יחידות ({backupStats.davidCount} דוד, {backupStats.solomonCount} שלמה), {backupStats.notes} מסקנות מחקריות, {backupStats.concepts} מושגים
+          </div>
+        )}
+      </div>
+
+      {/* תיבת מפתח API */}
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",border:`1px solid ${hasApiKey?"#34d399":"#334155"}`,marginBottom:"18px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"10px"}}>
+          <div>
+            <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>🔑 2. מפתח API של Anthropic</div>
+            <div style={{fontSize:"12px",color:"#94a3b8"}}>נדרש לשלבים 3-7 שמשתמשים ב-AI. הקוד שלך נשמר רק ב-localStorage של הדפדפן, לא עובר לשום שרת אחר</div>
+          </div>
+          <span style={{fontSize:"24px",color:hasApiKey?"#34d399":"#475569"}}>{hasApiKey?"✓":"○"}</span>
+        </div>
+        <button onClick={onOpenApiKey} style={{padding:"10px 18px",borderRadius:"8px",border:"none",cursor:"pointer",background:hasApiKey?"#065f46":"#818cf8",color:"white",fontSize:"13px",fontWeight:"700"}}>
+          {hasApiKey?"🔄 שנה מפתח":"🔑 הזן מפתח"}
+        </button>
+      </div>
+
+      {/* הסבר על הכלי */}
+      <div style={{background:"#0f172a",borderRadius:"10px",padding:"18px",border:"1px dashed #334155",fontSize:"12px",color:"#94a3b8",lineHeight:"1.9"}}>
+        <strong style={{color:"#cbd5e1"}}>איך הכלי עובד:</strong><br/>
+        1. בחרי דמות (דוד או שלמה), ממד נבואי, ומושג<br/>
+        2. הכלי מריץ 7 שלבים מדורגים — החל ממיפוי בסיסי, דרך זיהוי דפוסים, ועד התאמה למושג הנבואי מפרק ב' של התזה<br/>
+        3. כל שלב מציג טבלה מובנית לאישור, עם אפשרות לדחות ולהריץ שוב עם הנחיות<br/>
+        4. בסיום — ייצוא טקסטים מוכנים לפרקים ג' (דוד) ו-ד' (שלמה), ובהמשך סינתזה לפרק ה'
+      </div>
+    </div>
+  );
+}
+
+function ApiKeyModal({currentKey,onSave,onClose}){
+  const [val,setVal]=useState(currentKey||"");
+  const [show,setShow]=useState(false);
+  return(
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"#000c",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"20px"}}>
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",maxWidth:"560px",width:"100%",border:"1px solid #475569"}}>
+        <div style={{fontSize:"17px",fontWeight:"700",color:"#f1f5f9",marginBottom:"6px"}}>🔑 מפתח API של Anthropic</div>
+        <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"14px",lineHeight:"1.6"}}>הדביקי את המפתח שלך. הוא יישמר ב-localStorage של הדפדפן בלבד.</div>
+        <div style={{position:"relative"}}>
+          <input type={show?"text":"password"} value={val} onChange={e=>setVal(e.target.value)} placeholder="sk-ant-api03-..."
+            style={{width:"100%",padding:"10px 44px 10px 12px",borderRadius:"7px",border:"1px solid #475569",background:"#0f172a",color:"#f1f5f9",fontSize:"13px",fontFamily:"monospace"}}/>
+          <button onClick={()=>setShow(!show)} style={{position:"absolute",left:"6px",top:"50%",transform:"translateY(-50%)",padding:"4px 8px",borderRadius:"5px",border:"none",cursor:"pointer",background:"#334155",color:"#cbd5e1",fontSize:"11px"}}>{show?"🙈":"👁"}</button>
+        </div>
+        <div style={{display:"flex",gap:"8px",marginTop:"16px",justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{padding:"9px 16px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>ביטול</button>
+          <button onClick={()=>{onSave(val.trim());onClose();}} disabled={!val.trim().startsWith("sk-ant")}
+            style={{padding:"9px 16px",borderRadius:"7px",border:"none",cursor:val.trim().startsWith("sk-ant")?"pointer":"not-allowed",background:val.trim().startsWith("sk-ant")?"#34d399":"#475569",color:"white",fontSize:"12px",fontWeight:"700"}}>שמור</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── מסך בחירת מושג ─────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+function ConceptSelector({raw,onPick,onBackHome}){
+  const [character,setCharacter]=useState(null);
+  const [dimId,setDimId]=useState(null);
+  const [concept,setConcept]=useState(null);
+  const dimsForUI=DIMS.map(d=>({id:d.id,label:d.label,color:d.color,icon:{d1:"🕊",d2:"⚖",d3:"🏛",d4:"🤝"}[d.id]||"◆"}));
+  const concepts=dimId?(DIMS.find(d=>d.id===dimId)||{}).concepts||[]:[];
+
+  function getConceptStats(name){
+    const results=LS_get("stageResults",{});
+    const key=`${character}__${dimId}__${name}`;
+    const r=results[key];
+    if(!r||!r.approvedStages) return 0;
+    return r.approvedStages.length;
+  }
+
+  return(
+    <div style={{maxWidth:"920px",margin:"0 auto",padding:"28px 20px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"26px"}}>
+        <div>
+          <div style={{fontSize:"22px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"3px"}}>בחירת מושג לניתוח</div>
+          <div style={{fontSize:"12px",color:"#94a3b8"}}>בחרי דמות → ממד נבואי → מושג</div>
+        </div>
+        <button onClick={onBackHome} style={{padding:"7px 13px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ ראשי</button>
+      </div>
+
+      {/* דמות */}
+      <div style={{marginBottom:"22px"}}>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>1. דמות</div>
+        <div style={{display:"flex",gap:"12px"}}>
+          {[["david","דוד המלך",'דה"א י"א–כ"ט'],["solomon","שלמה המלך",'דה"ב א׳–ט׳']].map(([id,name,ref])=>{
+            const sel=character===id;
+            return(
+              <button key={id} onClick={()=>{setCharacter(id);setDimId(null);setConcept(null);}}
+                style={{flex:1,padding:"16px 20px",borderRadius:"12px",border:sel?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:sel?"#818cf822":"#1e293b",color:sel?"#c7d2fe":"#f1f5f9",fontSize:"15px",fontWeight:"700",textAlign:"right"}}>
+                👑 {name}
+                <div style={{fontSize:"11px",color:"#64748b",marginTop:"4px",fontWeight:"400"}}>{ref}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ממד */}
+      {character&&(
+        <div style={{marginBottom:"22px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>2. ממד נבואי</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px"}}>
+            {dimsForUI.map(d=>{
+              const sel=dimId===d.id;
+              return(
+                <button key={d.id} onClick={()=>{setDimId(d.id);setConcept(null);}}
+                  style={{padding:"13px 15px",borderRadius:"10px",border:sel?`2px solid ${d.color}`:"1px solid #334155",cursor:"pointer",background:sel?`${d.color}22`:"#1e293b",color:sel?d.color:"#f1f5f9",fontSize:"14px",fontWeight:"700",textAlign:"right"}}>
+                  {d.icon} {d.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* מושג */}
+      {character&&dimId&&(
+        <div style={{marginBottom:"22px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>3. מושג</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:"8px"}}>
+            {concepts.map(c=>{
+              const sel=concept===c;
+              const approvedCount=getConceptStats(c);
+              return(
+                <button key={c} onClick={()=>setConcept(c)}
+                  style={{padding:"9px 14px",borderRadius:"8px",border:sel?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:sel?"#818cf822":"#1e293b",color:sel?"#c7d2fe":"#cbd5e1",fontSize:"13px",fontWeight:"600",display:"flex",alignItems:"center",gap:"7px"}}>
+                  {c}
+                  {approvedCount>0&&<span style={{fontSize:"10px",color:"#34d399",background:"#065f46",padding:"1px 6px",borderRadius:"9px",fontWeight:"700"}}>{approvedCount}/7</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {character&&dimId&&concept&&(
+        <div style={{marginTop:"26px",textAlign:"center"}}>
+          <button onClick={()=>onPick({character,dimId,concept})}
+            style={{padding:"12px 32px",borderRadius:"10px",border:"none",cursor:"pointer",background:"#818cf8",color:"white",fontSize:"14px",fontWeight:"700"}}>המשך לניתוח ←</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── מסך ניתוח המושג — 7 שלבים ─────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector}){
+  const resultsKey=`${character}__${dimId}__${concept}`;
+  const [stageData,setStageData]=useState(()=>{
+    const all=LS_get("stageResults",{}); return all[resultsKey]||{approvedStages:[]};
+  });
+  const [currentStage,setCurrentStage]=useState(()=>{
+    const sd=stageData;
+    const approved=sd.approvedStages||[];
+    return [1,2,3,4,5,6,7].find(s=>!approved.includes(s))||7;
+  });
+  const [loading,setLoading]=useState(false);
+  const [progressNote,setProgressNote]=useState("");
+
+  function saveNow(newData){
+    setStageData(newData);
+    const all=LS_get("stageResults",{});
+    all[resultsKey]={...newData,lastUpdated:Date.now()};
+    LS_set("stageResults",all);
+  }
+
+  const dimLabel=(DIMS.find(d=>d.id===dimId)||{}).label||dimId;
+  const dimColor=(DIMS.find(d=>d.id===dimId)||{}).color||"#818cf8";
+  const charName=character==="david"?"דוד":"שלמה";
+
+  // ─────── איסוף יחידות רלוונטיות ───────
+  function collectRelevant(){
+    const list=(raw.units||[]).filter(u=>{
+      if((u.character||"david")!==character) return false;
+      const s=getUnitSummary(u.id,raw);
+      if(s&&s.notInThesis) return false;
+      return true;
+    });
+    list.sort((a,b)=>{const [a1,a2]=parseCh(a),[b1,b2]=parseCh(b); return a1-b1||a2-b2;});
+    return list;
+  }
+
+  // ─────── שלב 1 חישובי ───────
+  function runStage1(){
+    const units=collectRelevant();
+    const sem=getSemantic(concept,raw);
+    const posWords=((sem&&sem.pos)||"").split(/[,،;]/).map(s=>s.trim()).filter(Boolean);
+    const rows=[]; let cNN=0,cN=0,cS=0,cNone=0,cNR=0;
+    units.forEach(u=>{
+      const uid=String(u.id);
+      const s=getUnitSummary(uid,raw);
+      const nrList=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
+      if(nrList.includes(concept)){ cNR++; rows.push([`${u.name||"?"} (${u.chapter||"?"})`,"—","—","לא רלוונטי"]); return; }
+      const text=u.chroniclesText||"";
+      const hasSem=posWords.some(w=>w&&text.indexOf(w)>=0);
+      const ec=getEntry(uid,concept,"chronicles",raw)||{};
+      const hasN=(ec.params||[]).some(p=>p&&p.found===true);
+      let sym="—";
+      if(hasSem&&hasN){sym="ס+נ";cNN++;} else if(hasSem){sym="ס";cS++;} else if(hasN){sym="נ";cN++;} else cNone++;
+      rows.push([`${u.name||"?"} (${u.chapter||"?"})`,hasSem?"✓":"—",hasN?"✓":"—",sym]);
+    });
+    return{
+      status:"חישוב מיידי — מוכן לאישור",
+      hasTable:true,
+      tableHeaders:["יחידה","ס (סמנטי גלוי)","נ (נרמז)","סימון"],
+      tableRows:rows,
+      summary:`מתוך ${units.length} יחידות: ${cNN} ס+נ, ${cN} נ בלבד, ${cS} ס בלבד, ${cNone} ללא ממצא, ${cNR} לא רלוונטיות. סה"כ ${cNN+cN+cS} יחידות עם ממצא כלשהו למושג "${concept}".`,
+      selfCheck:"חישוב דטרמיניסטי. ס מבוסס על השדה הסמנטי של המושג; נ מבוסס על פרמטר אחד לפחות עם found=true בשלב ב'."
+    };
+  }
+
+  // ─────── שלב 2 חישובי ───────
+  function runStage2(){
+    const units=collectRelevant();
+    const params=validParams(getParams(concept,raw));
+    const labelOrder=[]; const l2i={};
+    params.forEach((p,i)=>{const l=p.paramLabel||"אחר"; if(!l2i[l]){l2i[l]=[];labelOrder.push(l);} l2i[l].push(i);});
+    const headers=["יחידה",...labelOrder,'סה"כ'];
+    const rows=[]; let total=0;
+    units.forEach(u=>{
+      const uid=String(u.id);
+      const s=getUnitSummary(uid,raw);
+      const nrList=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
+      if(nrList.includes(concept)) return;
+      const ec=getEntry(uid,concept,"chronicles",raw)||{};
+      const pos=(ec.params||[]).map((p,i)=>p&&p.found===true?i:-1).filter(i=>i>=0);
+      if(!pos.length) return;
+      const row=[`${u.name||"?"} (${u.chapter||"?"})`];
+      labelOrder.forEach(l=>row.push(String(pos.filter(i=>l2i[l].includes(i)).length)));
+      row.push(String(pos.length)); total+=pos.length;
+      rows.push(row);
+    });
+    return{
+      status:"חישוב מיידי — מוכן לאישור",
+      hasTable:true,
+      tableHeaders:headers,
+      tableRows:rows,
+      summary:`${rows.length} יחידות עם אינדיקטורים חיוביים, סה"כ ${total} אינדיקטורים ב-${labelOrder.length} קטגוריות: ${labelOrder.join(", ")}.`,
+      selfCheck:"חישוב דטרמיניסטי. הקטגוריות נגזרות מתוך paramLabel של פרמטרי המושג."
+    };
+  }
+
+  async function runStage(n,extra=""){
+    setLoading(true); setProgressNote("");
+    try{
+      let result;
+      if(n===1) result=runStage1();
+      else if(n===2) result=runStage2();
+      else {
+        // שלבים 3-7 — יבואו בסבבים הבאים
+        await new Promise(r=>setTimeout(r,500));
+        result={
+          status:"בפיתוח",hasTable:true,
+          tableHeaders:["עמודה 1","עמודה 2","עמודה 3"],
+          tableRows:[["שלב "+n,"יתווסף בסבב הבא","—"]],
+          summary:`שלב ${n} (${STAGE_LABELS[n]}) — טרם נבנה. סבב הבנייה הבא יוסיף את הקריאה ל-AI.`,
+          selfCheck:"בפיתוח."
+        };
+      }
+      const newData={...stageData,[`stage${n}`]:result};
+      saveNow(newData);
+    } catch(e){
+      // שגיאות לא נשמרות
+      setStageData({...stageData,[`stage${n}`]:{status:"שגיאה",hasTable:false,summary:`⚠️ ${e.message||e}`,selfCheck:"נסי שוב — השגיאה לא נשמרה."}});
+    }
+    setLoading(false); setProgressNote("");
+  }
+
+  function approveStage(n){
+    const approved=[...(stageData.approvedStages||[]),n].filter((v,i,a)=>a.indexOf(v)===i);
+    saveNow({...stageData,approvedStages:approved});
+    if(n<7) setCurrentStage(n+1);
+  }
+  function unapproveStage(n){
+    saveNow({...stageData,approvedStages:(stageData.approvedStages||[]).filter(s=>s!==n)});
+    setCurrentStage(n);
+  }
+
+  return(
+    <div style={{maxWidth:"1100px",margin:"0 auto",padding:"20px 16px"}}>
+      {/* כותרת */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"16px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:`1px solid ${dimColor}44`}}>
+        <div>
+          <div style={{fontSize:"18px",fontWeight:"bold",color:"#f1f5f9"}}>{concept} <span style={{fontSize:"14px",color:dimColor,fontWeight:"600"}}>· ב{charName}</span></div>
+          <div style={{fontSize:"11px",color:"#64748b",marginTop:"2px"}}>ממד: {dimLabel}</div>
+        </div>
+        <button onClick={onBackToSelector} style={{padding:"6px 14px",borderRadius:"7px",border:"1px solid #334155",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ בחירת מושג</button>
+      </div>
+
+      {/* סטטוס בנייה */}
+      <div style={{marginBottom:"14px",padding:"10px 14px",background:"#1e3a5f",borderRadius:"7px",border:"1px solid #3b82f6",fontSize:"12px",color:"#bfdbfe",lineHeight:"1.6"}}>
+        <strong>סטטוס בנייה (סבב 1):</strong> שלבים 1-2 מופעלים בחישוב מיידי. שלבים 3-7 יתווספו בסבבים הבאים. לחצי על כותרת שלב כדי לקפוץ אליו.
+      </div>
+
+      {/* 7 שלבים */}
+      {[1,2,3,4,5,6,7].map(n=>{
+        const approved=(stageData.approvedStages||[]).includes(n);
+        const current=n===currentStage&&!approved;
+        const hasResult=stageData[`stage${n}`];
+        const mode=STAGE_MODE[n];
+        const badge=mode==="computational"?{text:"חישוב מיידי",color:"#60a5fa",bg:"#1e3a5f44"}
+                    :mode==="ai_defs"?{text:"AI + הגדרות",color:"#c084fc",bg:"#581c8744"}
+                    :{text:"AI",color:"#fbbf24",bg:"#78350f44"};
+        const icon=approved?"✓":current?"▶":"○";
+        const color=approved?"#34d399":current?dimColor:"#475569";
+        return(
+          <div key={n} style={{marginBottom:"8px"}}>
+            <div onClick={()=>!approved&&setCurrentStage(n)}
+              style={{display:"flex",alignItems:"center",gap:"12px",padding:"10px 14px",borderRadius:"8px",background:current?"#1e293b":"#0f172a",border:`1px solid ${current?color:"#334155"}`,cursor:approved?"default":"pointer"}}>
+              <span style={{fontSize:"18px",color,fontWeight:"700",minWidth:"18px"}}>{icon}</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:current?"#f1f5f9":approved?"#cbd5e1":"#64748b",display:"flex",alignItems:"center",gap:"8px"}}>
+                  שלב {n}: {STAGE_LABELS[n]}
+                  <span style={{fontSize:"10px",color:badge.color,background:badge.bg,padding:"1px 7px",borderRadius:"9px",fontWeight:"700"}}>{badge.text}</span>
+                </div>
+                <div style={{fontSize:"11px",color:"#64748b",marginTop:"2px"}}>{STAGE_DESC[n]}</div>
+              </div>
+              {approved&&<button onClick={(e)=>{e.stopPropagation();unapproveStage(n);}} style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"10px",fontWeight:"600"}}>בטל אישור</button>}
+            </div>
+
+            {current&&(
+              <div style={{marginTop:"8px",marginRight:"30px",padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}33`}}>
+                {!hasResult&&(
+                  <div>
+                    <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"10px"}}>לחצי להרצת השלב.</div>
+                    <button onClick={()=>runStage(n)} disabled={loading}
+                      style={{padding:"9px 18px",borderRadius:"7px",border:"none",cursor:loading?"wait":"pointer",background:loading?"#475569":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>
+                      {loading?(progressNote||"רץ..."):"▶ הפעל שלב"}
+                    </button>
+                  </div>
+                )}
+
+                {hasResult&&(
+                  <div>
+                    {hasResult.hasTable&&(
+                      <div style={{overflowX:"auto",marginBottom:"12px"}}>
+                        <table style={{fontSize:"12px"}}>
+                          <thead>
+                            <tr style={{background:"#0f172a"}}>
+                              {(hasResult.tableHeaders||[]).map((h,i)=>(<th key={i} style={{textAlign:"right",color:dimColor,fontWeight:"700",borderBottom:`1px solid ${dimColor}44`}}>{h}</th>))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(hasResult.tableRows||[]).map((row,i)=>(
+                              <tr key={i} style={{borderBottom:"1px solid #334155"}}>
+                                {row.map((c,j)=>(<td key={j} style={{color:"#cbd5e1"}}>{c}</td>))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    {hasResult.summary&&(
+                      <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${dimColor}`}}>
+                        <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"4px"}}>סיכום השלב</div>
+                        <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{hasResult.summary}</div>
+                      </div>
+                    )}
+                    {hasResult.selfCheck&&(
+                      <div style={{marginBottom:"12px",padding:"9px 12px",background:"#0f172a",borderRadius:"6px",border:"1px dashed #475569"}}>
+                        <div style={{fontSize:"10px",color:"#94a3b8",fontWeight:"700",marginBottom:"4px"}}>🔍 בדיקה עצמית</div>
+                        <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6"}}>{hasResult.selfCheck}</div>
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+                      {hasResult.status==="שגיאה"?(
+                        <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 18px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700"}}>🔄 הפעל שוב</button>
+                      ):(
+                        <>
+                          <button onClick={()=>approveStage(n)} style={{padding:"8px 16px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700"}}>✓ אשר {n<7?"ועבור לשלב הבא":"סיים ניתוח"}</button>
+                          <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 16px",borderRadius:"7px",border:"1px solid #ef4444",cursor:"pointer",background:"transparent",color:"#ef4444",fontSize:"12px",fontWeight:"700"}}>🔄 הפעל שוב</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── אפליקציה ראשית ─────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+function App(){
+  const [screen,setScreen]=useState("home");
+  const [raw,setRaw]=useState(()=>LS_get("backupData",null));
+  const [backupName,setBackupName]=useState(()=>LS_get("backupName",""));
+  const [apiKey,setApiKey]=useState(()=>LS_get("apiKey",""));
+  const [showApiModal,setShowApiModal]=useState(false);
+  const [selection,setSelection]=useState(null);
+
+  function handleBackup(data,name){
+    setRaw(data); setBackupName(name);
+    LS_set("backupData",data); LS_set("backupName",name);
+  }
+
+  function handleApiKey(key){
+    setApiKey(key); LS_set("apiKey",key);
+  }
+
+  const backupStats=useMemo(()=>{
+    if(!raw) return null;
+    const units=raw.units||[];
+    const notesCount=Object.values(raw.compareNotes||{}).reduce((s,o)=>s+Object.values(o).filter(v=>v&&v.trim()).length,0);
+    const conceptCount=allConceptsFrom(raw).length;
+    return{
+      units:units.length,
+      davidCount:units.filter(u=>u.character==="david").length,
+      solomonCount:units.filter(u=>u.character==="solomon").length,
+      notes:notesCount,
+      concepts:conceptCount
+    };
+  },[raw]);
+
+  const canStart=raw&&apiKey;
+
+  return(
+    <div>
+      {/* סרגל עליון */}
+      <div style={{background:"#1e293b",borderBottom:"1px solid #334155",padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:"14px"}}>
+          <div style={{fontSize:"15px",fontWeight:"bold",color:"#f1f5f9",cursor:"pointer"}} onClick={()=>setScreen("home")}>🧬 כלי סינתזה — דברי הימים</div>
+          {raw&&(
+            <button onClick={()=>setScreen(screen==="home"?"selector":"home")} style={{padding:"5px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px",fontWeight:"600"}}>
+              {screen==="home"?"📊 התחלת ניתוח":"🏠 ראשי"}
+            </button>
+          )}
+        </div>
+        <div style={{display:"flex",gap:"8px",alignItems:"center",fontSize:"10px"}}>
+          <span style={{color:raw?"#34d399":"#64748b"}}>📥 {raw?"גיבוי":"אין גיבוי"}</span>
+          <span style={{color:"#475569"}}>·</span>
+          <span style={{color:apiKey?"#34d399":"#64748b",cursor:"pointer"}} onClick={()=>setShowApiModal(true)}>🔑 {apiKey?"API":"ללא מפתח"}</span>
+        </div>
+      </div>
+
+      {/* תוכן */}
+      {screen==="home"&&<WelcomeScreen onBackupLoaded={handleBackup} hasBackup={!!raw} hasApiKey={!!apiKey} onOpenApiKey={()=>setShowApiModal(true)} backupStats={backupStats}/>}
+      {screen==="home"&&canStart&&(
+        <div style={{textAlign:"center",marginTop:"-20px",paddingBottom:"30px"}}>
+          <button onClick={()=>setScreen("selector")} style={{padding:"14px 36px",borderRadius:"10px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"15px",fontWeight:"700"}}>
+            🚀 התחלת ניתוח
+          </button>
+        </div>
+      )}
+      {screen==="selector"&&raw&&<ConceptSelector raw={raw} onPick={sel=>{setSelection(sel);setScreen("analyze");}} onBackHome={()=>setScreen("home")}/>}
+      {screen==="analyze"&&selection&&<AnalysisScreen raw={raw} character={selection.character} dimId={selection.dimId} concept={selection.concept} apiKey={apiKey} onBackToSelector={()=>setScreen("selector")}/>}
+
+      {showApiModal&&<ApiKeyModal currentKey={apiKey} onSave={handleApiKey} onClose={()=>setShowApiModal(false)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
