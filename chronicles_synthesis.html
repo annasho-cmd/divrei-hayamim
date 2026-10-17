@@ -810,7 +810,8 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
   }
 
   async function runStage(n,extra=""){
-    setLoading(true); setProgressNote("");
+    setLoading(true);
+    setProgressNote(n>=3?`⏳ שלב ${n} רץ... (קריאה ל-AI, יכול לקחת 30-120 שניות)`:`⏳ שלב ${n} רץ...`);
     try{
       let result;
       if(n===1) result=runStage1();
@@ -1046,15 +1047,15 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         )}
                       </div>
                     )}
-                    <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+                    <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center"}}>
                       {approved?(
                         <div style={{fontSize:"11px",color:"#64748b",padding:"6px 0"}}>👁 מצב עיון בלבד. להרצה מחדש או שינוי — לחצי "בטל אישור" למעלה.</div>
                       ):hasResult.status==="שגיאה"?(
-                        <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 18px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700"}}>🔄 הפעל שוב</button>
+                        <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 18px",borderRadius:"7px",border:"none",cursor:loading?"wait":"pointer",background:loading?"#475569":"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700",opacity:loading?0.7:1}}>{loading?(progressNote||"⏳ רץ..."):"🔄 הפעל שוב"}</button>
                       ):(
                         <>
-                          <button onClick={()=>approveStage(n)} style={{padding:"8px 16px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700"}}>✓ אשר {n<7?"ועבור לשלב הבא":"סיים ניתוח"}</button>
-                          <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 16px",borderRadius:"7px",border:"1px solid #ef4444",cursor:"pointer",background:"transparent",color:"#ef4444",fontSize:"12px",fontWeight:"700"}}>🔄 הפעל שוב</button>
+                          <button onClick={()=>approveStage(n)} disabled={loading} style={{padding:"8px 16px",borderRadius:"7px",border:"none",cursor:loading?"not-allowed":"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700",opacity:loading?0.5:1}}>✓ אשר {n<7?"ועבור לשלב הבא":"סיים ניתוח"}</button>
+                          <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 16px",borderRadius:"7px",border:`1px solid ${loading?"#475569":"#ef4444"}`,cursor:loading?"wait":"pointer",background:loading?"#1e293b":"transparent",color:loading?"#94a3b8":"#ef4444",fontSize:"12px",fontWeight:"700",opacity:loading?0.7:1}}>{loading?(progressNote||"⏳ רץ..."):"🔄 הפעל שוב"}</button>
                         </>
                       )}
                     </div>
