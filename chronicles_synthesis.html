@@ -99,7 +99,28 @@ const SEMANTIC_FALLBACK={
 // ── עזרים ─────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
 function LS_get(k,def){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):def;}catch{return def;} }
-function LS_set(k,v){ try{localStorage.setItem(k,JSON.stringify(v));}catch(e){console.warn("LS save failed",e);} }
+function LS_set(k,v){
+  try{ localStorage.setItem(k,JSON.stringify(v)); return true; }
+  catch(e){
+    // התאוששות אוטומטית מ-QuotaExceededError:
+    // Firebase הוא מקור האמת, ולכן אם ה-LS מלא — ננקה אותו (נשמור רק apiKey) וננסה שוב.
+    if(e&&(e.name==="QuotaExceededError"||e.code===22||String(e).includes("quota"))){
+      try{
+        const apiKey=localStorage.getItem("apiKey");
+        localStorage.clear();
+        if(apiKey) localStorage.setItem("apiKey",apiKey);
+        localStorage.setItem(k,JSON.stringify(v));
+        console.log("LS: ניקוי אוטומטי הצליח, נשמר מחדש:",k);
+        return true;
+      }catch(e2){
+        console.warn("LS: גם ניקוי אוטומטי נכשל; מסתמכים על Firebase בלבד",e2);
+      }
+    } else {
+      console.warn("LS save failed",e);
+    }
+    return false;
+  }
+}
 function escapeHtml(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
 
 // ── Firebase ─────────────────────────────────────────────────────────────
