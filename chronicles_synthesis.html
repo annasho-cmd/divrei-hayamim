@@ -799,9 +799,9 @@ ${stage3Block}
 
 ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
-החזרי JSON בלבד (ללא markdown):
-{"phenomena":[{"name":"שם תיאורי קצר (ללא המושג)","description":"2-3 משפטים — מה המכנה המשותף","unitsText":"יח1, יח2, יח3 (רשימת שמות היחידות, לקריאה אנושית)","indicatorIndices":[1,3,5,7],"subject":"דוד עצמו | המספר | דמות אחרת | סביבה | מעורב","commentators":"פרשן עמ' X; פרשן עמ' Y או —"}],"methodNote":"הערת שיטה 1-2 משפטים על אופן הקיבוץ"}`;
-    const resp=await aiCallDirect(prompt,4000);
+החזרי JSON בלבד (ללא markdown). **קציני תיאורים** — description ו-unitsText בקצרה, בלי לחזור על תוכן שכבר נמצא ב-indicatorIndices (האינדיקטורים עצמם זמינים ל-drill-down):
+{"phenomena":[{"name":"שם תיאורי קצר (ללא המושג, 3-6 מילים)","description":"משפט אחד או שניים — המכנה המשותף הטקסטואלי","unitsText":"עד 8 שמות יחידות ייצוגיות מופרדות בפסיקים","indicatorIndices":[1,3,5,7],"subject":"דוד עצמו | המספר | דמות אחרת | סביבה | מעורב","commentators":"עד 4 פרשנים מרכזיים או —"}],"methodNote":"הערת שיטה 1-2 משפטים"}`;
+    const resp=await aiCallDirect(prompt,16000);
     const parsed=parseJSON(resp);
     const phenomena=parsed.phenomena||[];
     const tableRows=phenomena.map(p=>[p.name||"",p.description||"",p.unitsText||p.units||"",p.subject||"",p.commentators||"—"]);
