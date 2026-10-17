@@ -193,6 +193,42 @@ function fbSaveStageResults(stageResults){
   },800);
 }
 
+// ─ Stage 4 (ד') — Firebase helpers ─
+// נתיב: synthesis_v1/stage4/{character__dim}/perUnit/{unitId}/{ai_proposal|user_approved}
+function _stage4UnitPath(characterDimKey,unitId,section){
+  // סניטיזציה — Firebase לא מקבל . # $ [ ] /
+  const safe=String(unitId).replace(/[.#$[\]/]/g,"_");
+  return `${FB_SYNTH_PATH}/stage4/${characterDimKey}/perUnit/${safe}/${section||"ai_proposal"}`;
+}
+function fbSaveStage4Unit(characterDimKey,unitId,section,data){
+  const path=_stage4UnitPath(characterDimKey,unitId,section);
+  const payload=__packJson(data);
+  return db.ref(path).set(payload);
+}
+function fbLoadStage4Unit(characterDimKey,unitId,section,cb){
+  const path=_stage4UnitPath(characterDimKey,unitId,section);
+  db.ref(path).once("value").then(snap=>{
+    const v=snap.val();
+    if(!v){ cb(null); return; }
+    cb(__unpackJson(v));
+  }).catch(e=>{ console.error("fbLoadStage4Unit",path,e); cb(null); });
+}
+function fbLoadStage4Dim(characterDimKey,cb){
+  // טוען את כל יחידות הממד בבת אחת
+  db.ref(`${FB_SYNTH_PATH}/stage4/${characterDimKey}/perUnit`).once("value").then(snap=>{
+    const v=snap.val()||{};
+    const out={}; // {unitId: {ai_proposal, user_approved}}
+    Object.keys(v).forEach(uid=>{
+      const sections=v[uid]||{};
+      out[uid]={};
+      Object.keys(sections).forEach(sec=>{
+        try{ out[uid][sec]=__unpackJson(sections[sec]); }catch(e){ out[uid][sec]=null; }
+      });
+    });
+    cb(out);
+  }).catch(e=>{ console.error("fbLoadStage4Dim",characterDimKey,e); cb({}); });
+}
+
 function parseCh(u){
   try{ const p=String(u.chapter||"").split("_"); return [parseInt(p[0]||"999",10),parseInt(p[1]||"999",10)]; }
   catch{ return [999,999]; }
@@ -709,6 +745,198 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ─ ד'1 — זיהוי תופעות פר-יחידה (עיבוד בטור, שמירות ביניים, המשכיות) ─
+  // ═══════════════════════════════════════════════════════════════════════
+  const characterDimKey=`${character}__${dimId}`;
+  const PROMPT_VERSION_D1="v1-2026-10-18";
+
+  // state של ד'1
+  const [d1State,setD1State]=useState({}); // {unitId: {ai_proposal, user_approved}}
+  const [d1Loading,setD1Loading]=useState(false);
+  const [d1Progress,setD1Progress]=useState({current:0,total:0,unitName:"",status:""});
+  const [d1Error,setD1Error]=useState(null);
+  const [d1Loaded,setD1Loaded]=useState(false);
+
+  // טעינה חד-פעמית של תוצאות ד'1 הקיימות מ-Firebase
+  useEffect(()=>{
+    fbLoadStage4Dim(characterDimKey,data=>{
+      setD1State(data||{});
+      setD1Loaded(true);
+    });
+  },[characterDimKey]);
+
+  // AI call לד'1 פר יחידה — עם הפרומפט המלא שאישרת
+  async function runD1ForUnit(unit,unitFindings,uniqueConceptsInUnit){
+    const chapter=unit.chapter||"?";
+    const unitName=unit.name||unit.label||`יחידה ${unit.id}`;
+    const isSondergut=!unit.sourceRef;
+    const indicatorsBlock=unitFindings.map((f,i)=>
+      `[${i+1}] sid: ${f.sid}\n    label: ${f.label}\n    מושג: ${f.concept}\n    בסיס טקסטואלי: ${f.basis||"—"}\n    נושא: ${f.subject||"—"}\n    פרשנים: ${f.commentators||"—"}`
+    ).join("\n\n");
+
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך. לפניך ${unitFindings.length} אינדיקטורים מן היחידה הספרותית "${unitName}" (${chapter}) הנוגעת ל${character==="solomon"?"שלמה":"דוד"} בספר דברי הימים. אלה כל הממצאים שנאספו ביחידה זו מתוך ${uniqueConceptsInUnit.length} מושגים בממד "${dimLabel}".
+
+**שלב ד'1: זיהוי ואפיון תופעות טקסטואליות ביחידה ספרותית אחת.**
+
+מטרתך לזהות תופעות טקסטואליות מובחנות על בסיס הממצאים שסופקו, תוך שמירה על עקיבות מלאה למקורות. אין לקבוע בשלב זה את מידת הביסוס של הטענות, את מרכזיות התופעות או את התאמתן לחזון הנבואי.
+
+### כללים מתודולוגיים
+
+1. זהי את כל התופעות הטקסטואליות המובחנות העולות מן הממצאים. אחדי ממצאים המתארים אותה פעולה, אמירה, התרחשות או בחירה ספרותית. אל תאחדי תופעות שונות רק כדי לצמצם את מספרן ואל תפצלי תופעה אחת ללא הצדקה טקסטואלית. **אין מספר מחייב של תופעות**.
+2. ממצא ייחודי שאינו משתלב בקבוצה יישמר כתופעה עצמאית בעלת שם תיאורי, אם אפשר לאפיינו מתוך הראיות. אם הנתונים אינם מספיקים, העבירי אותו לרשימת needsReview ונמקי.
+3. לכל תופעה נסחי כותרת תיאורית קצרה ותיאור עובדתי מדויק. הכותרת לא תכלול את שם המושג הנבואי ולא תציג מסקנה תיאולוגית.
+4. הבחיני בין מי שפועל או מדבר (actor) לבין האופן שבו המספר מציג אותו (presentation). אין לייחס למלך מעשה/אמירה/ידיעה/תכונה השייכים לדמות אחרת.
+5. לכל תופעה ציינו את אמצעי העיצוב הטקסטואלי (designMeans) ואת הראיות המדויקות שסופקו (textualEvidence). **אין להמציא פסוקים, ציטוטים, אסמכתאות או פרטים שאינם בקלט.**
+6. נסחי טענה אנליטית מצומצמת (analyticalClaim) המתארת מה ניתן ללמוד מן התופעה על אופן הצגת המלך או מלכותו. הפרידי בבירור בין התיאור העובדתי לטענה. אם אין בסיס לטענה — השאירי analyticalClaim ריק ואל תמציאי קשר.
+7. אל תסיקי מסקנות השוואתיות ביחס לשמואל/מלכים גם אם צוינה מקבילה. אל תקבעי זיקה לחזון הנבואי. אלה שלבים 6-7.
+8. **כל sourceId בקלט חייב להופיע לפחות פעם אחת ב-assignedSourceIds או ב-needsReview. אין להמציא sourceIds שלא בקלט.** מותר לשייך מקור ליותר מתופעה אחת כאשר הוא כולל ממצאים מובחנים — יש להסביר את ההבחנה ב-aspect.
+9. לכל תופעה ציינו בקצרה (justification) מדוע הממצאים שויכו אליה. אם תופעה יחידנית — ציינו כך בלי לנסות איחוד מלאכותי.
+10. אל תסיקי שפעולה היא חיובית/שלילית/מרכזית/חוזרת רק משום שהיא מתאימה למושג מסוים או מופיעה בכמה מושגים. שמרי גם ממצאים מסייגים, חריגים ומורכבים.
+11. השתמשי ב-needsReview רק כאשר קיימת בעיה ממשית בזיהוי/שיוך/ביסוס. אין להעביר לשם ממצא רק משום שהוא מתייחס למספר או לדמות אחרת.
+12. אל תתקני בשקט סתירות בין הממצאים. סמני אותן לבדיקה.
+
+### נתוני היחידה
+שם: ${unitName}
+פרק: ${chapter}
+${isSondergut?"סונדרגוט (ללא מקבילה בשמואל/מלכים)":`מקבילה: ${unit.sourceRef}`}
+
+### ${unitFindings.length} אינדיקטורים (מ-${uniqueConceptsInUnit.length} מושגים: ${uniqueConceptsInUnit.join(", ")})
+
+${indicatorsBlock}
+
+### מבנה התשובה
+החזירי JSON תקין בלבד, ללא טקסט נוסף:
+
+{"phenomena":[{"title":"שם תיאורי קצר","description":"תיאור עובדתי של התופעה","actor":"דוד | שלמה | דמות אחרת | קבוצה | לא רלוונטי | לא ברור","presentation":"דיבור ישיר של המלך | תיאור המספר | דברי דמות אחרת | בחירה ספרותית | משולב","designMeans":"פעולה | אמירה | תיאור | מבנה ספרותי | בחירה לשונית | משולב","textualEvidence":[{"sourceId":"s_xxx","reference":"הפניה מדויקת כפי שנמסרה בקלט","evidence":"הביטוי או המעשה המתועד","aspect":"ההיבט המסוים של המקור המשויך לתופעה"}],"analyticalClaim":"טענה אנליטית מצומצמת, או מחרוזת ריקה","assignedSourceIds":["s_xxx","s_yyy"],"justification":"נימוק לאיחוד או לשימור כתופעה יחידנית"}],"needsReview":[{"sourceId":"s_zzz","reason":"מה חסר או מה אינו ברור"}],"methodNote":"הערה קצרה על האיחודים, הפיצולים והקשיים"}
+
+ודאי: (1) כל מזהה ב-textualEvidence מופיע גם ב-assignedSourceIds של אותה תופעה; (2) כל assignedSourceId קיים בקלט; (3) כל sourceId בקלט מופיע לפחות פעם אחת ב-assignedSourceIds או ב-needsReview.`;
+
+    const resp=await aiCallDirect(prompt,16000);
+    const parsed=parseJSON(resp);
+    return {parsed,prompt};
+  }
+
+  // בקרת שלמות דטרמיניסטית (קוד, לא AI)
+  function validateD1Result(inputFindings,parsed){
+    const inputSids=new Set(inputFindings.map(f=>f.sid));
+    const phenomena=Array.isArray(parsed.phenomena)?parsed.phenomena:[];
+    const needsReview=Array.isArray(parsed.needsReview)?parsed.needsReview:[];
+    const assignedUnion=new Set();
+    const foreignIds=new Set();
+    const evidenceMismatch=[]; // {phenIdx, sid}
+
+    phenomena.forEach((p,pi)=>{
+      const assigned=new Set(Array.isArray(p.assignedSourceIds)?p.assignedSourceIds:[]);
+      assigned.forEach(s=>{
+        if(!inputSids.has(s)) foreignIds.add(s);
+        assignedUnion.add(s);
+      });
+      (Array.isArray(p.textualEvidence)?p.textualEvidence:[]).forEach(te=>{
+        if(te.sourceId){
+          if(!inputSids.has(te.sourceId)) foreignIds.add(te.sourceId);
+          if(!assigned.has(te.sourceId)) evidenceMismatch.push({phenIdx:pi,sid:te.sourceId,phenTitle:p.title||`תופעה ${pi+1}`});
+          assignedUnion.add(te.sourceId);
+        }
+      });
+    });
+    needsReview.forEach(r=>{
+      if(r.sourceId){
+        if(!inputSids.has(r.sourceId)) foreignIds.add(r.sourceId);
+        assignedUnion.add(r.sourceId);
+      }
+    });
+
+    const missing=[...inputSids].filter(s=>!assignedUnion.has(s));
+    const valid=missing.length===0&&foreignIds.size===0&&evidenceMismatch.length===0;
+    return {valid,missing,foreign:[...foreignIds],evidenceMismatch,phenomenaCount:phenomena.length,needsReviewCount:needsReview.length};
+  }
+
+  // רשימת היחידות המוכנות לעיבוד (עם הממצאים שלהן) — ממוינות לפי chapter
+  const unitsToProcess=useMemo(()=>{
+    const result=[];
+    Object.entries(ingest.unitHits||{}).forEach(([uid,sids])=>{
+      const u=rawUnits.find(x=>String(x.id)===uid); if(!u) return;
+      const findings=ingest.findings.filter(f=>f.matchedUnitId===uid);
+      const uniqueConcepts=[...new Set(findings.map(f=>f.concept))];
+      result.push({unit:u,findings,uniqueConcepts});
+    });
+    result.sort((a,b)=>{const [a1,a2]=parseCh(a.unit),[b1,b2]=parseCh(b.unit); return a1-b1||a2-b2;});
+    return result;
+  },[ingest,rawUnits]);
+
+  // סטטוס של יחידה מסוימת
+  function unitStatus(uid){
+    const st=d1State[uid];
+    if(st&&st.user_approved) return {status:"approved",label:"✓ מאושר (חוקרת)"};
+    if(st&&st.ai_proposal){
+      if(st.ai_proposal.validatedByCode) return {status:"ai-valid",label:"🤖 הצעת AI תקינה — ממתינה לאישור"};
+      return {status:"ai-invalid",label:"⚠ הצעת AI לא תקינה — הרץ שוב"};
+    }
+    return {status:"pending",label:"⏳ טרם רץ"};
+  }
+
+  // הפעלת ד'1 — על יחידה אחת או על כל שלא רצו
+  async function runD1(mode){ // mode: "all" | "unit:{uid}"
+    if(!apiKey){ setD1Error("חסר מפתח API"); return; }
+    setD1Error(null); setD1Loading(true);
+    const todo=mode==="all"
+      ? unitsToProcess.filter(u=>{ const s=unitStatus(String(u.unit.id)); return s.status!=="approved"&&s.status!=="ai-valid"; })
+      : unitsToProcess.filter(u=>mode===`unit:${u.unit.id}`);
+    setD1Progress({current:0,total:todo.length,unitName:"",status:""});
+    const localState={...d1State};
+    for(let i=0;i<todo.length;i++){
+      const {unit,findings,uniqueConcepts}=todo[i];
+      const uid=String(unit.id);
+      setD1Progress({current:i+1,total:todo.length,unitName:unit.name||unit.label||uid,status:`עובד על ${findings.length} אינדיקטורים...`});
+      try{
+        const {parsed,prompt}=await runD1ForUnit(unit,findings,uniqueConcepts);
+        const validation=validateD1Result(findings,parsed);
+        const proposal={
+          phenomena:parsed.phenomena||[],
+          needsReview:parsed.needsReview||[],
+          methodNote:parsed.methodNote||"",
+          inputSids:findings.map(f=>f.sid),
+          promptVersion:PROMPT_VERSION_D1,
+          runAt:new Date().toISOString(),
+          model:"claude-sonnet-4-5-20250929",
+          validatedByCode:validation.valid,
+          validationReport:validation
+        };
+        await fbSaveStage4Unit(characterDimKey,uid,"ai_proposal",proposal);
+        localState[uid]={...(localState[uid]||{}),ai_proposal:proposal};
+        setD1State({...localState});
+      }catch(e){
+        console.error(`ד'1 כשל ביחידה ${uid}:`,e);
+        const errProposal={
+          error:String(e.message||e),
+          inputSids:findings.map(f=>f.sid),
+          promptVersion:PROMPT_VERSION_D1,
+          runAt:new Date().toISOString(),
+          validatedByCode:false,
+          validationReport:{valid:false,missing:[],foreign:[],evidenceMismatch:[]}
+        };
+        await fbSaveStage4Unit(characterDimKey,uid,"ai_proposal",errProposal);
+        localState[uid]={...(localState[uid]||{}),ai_proposal:errProposal};
+        setD1State({...localState});
+      }
+    }
+    setD1Loading(false);
+    setD1Progress({current:0,total:0,unitName:"",status:""});
+  }
+
+  const d1Stats=useMemo(()=>{
+    let approved=0, valid=0, invalid=0, pending=0;
+    unitsToProcess.forEach(u=>{
+      const s=unitStatus(String(u.unit.id));
+      if(s.status==="approved") approved++;
+      else if(s.status==="ai-valid") valid++;
+      else if(s.status==="ai-invalid") invalid++;
+      else pending++;
+    });
+    return {approved,valid,invalid,pending,total:unitsToProcess.length};
+  },[unitsToProcess,d1State]);
+
   return(
     <div style={{maxWidth:"1100px",margin:"0 auto",padding:"20px 16px"}}>
       {/* כותרת */}
@@ -871,19 +1099,84 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
 
       {/* כפתור המשך */}
       <div style={{marginTop:"24px",textAlign:"center"}}>
-        {canProceed?(
-          <div>
-            <button disabled style={{padding:"14px 36px",borderRadius:"10px",border:"none",cursor:"not-allowed",background:"#334155",color:"#64748b",fontSize:"14px",fontWeight:"700"}}>
-              → המשך לד'1 (זיהוי תופעות) — בפיתוח
-            </button>
-            <div style={{marginTop:"10px",fontSize:"11px",color:"#34d399"}}>✓ הקליטה תקינה: כל האינדיקטורים זוהו ליחידות אמיתיות מהמאגר. השלב הבא (ד'1 — זיהוי תופעות באמצעות AI) יתווסף בסיבוב הבא.</div>
-          </div>
-        ):(
+        {!canProceed&&(
           <div style={{fontSize:"12px",color:"#f59e0b"}}>
             ⚠ לא ניתן להמשיך — יש לפתור:
             {ingest.missingConcepts.length>0&&<div style={{marginTop:"4px"}}>• {ingest.missingConcepts.length} מושגים חסרים/לא מאושרים</div>}
             {ingest.totalMissingSids>0&&<div style={{marginTop:"4px"}}>• {ingest.totalMissingSids} אינדיקטורים ללא מזהה קבוע</div>}
             {ingest.unmatchedCount>0&&<div style={{marginTop:"4px"}}>• {ingest.unmatchedCount} אינדיקטורים לא זוהו ליחידה מהמאגר</div>}
+          </div>
+        )}
+        {canProceed&&d1Loaded&&(
+          <div style={{marginTop:"24px",padding:"18px 20px",background:"#1e293b",borderRadius:"10px",border:`2px solid ${dimColor}66`}}>
+            <div style={{fontSize:"15px",fontWeight:"700",color:"#f1f5f9",marginBottom:"4px"}}>🤖 ד'1 — זיהוי תופעות באמצעות AI</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"14px",lineHeight:"1.6"}}>עיבוד {unitsToProcess.length} יחידות בטור. לכל יחידה: AI מקבל את כל האינדיקטורים ממנה ומזהה תופעות. בקרת שלמות דטרמיניסטית אוטומטית.</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))",gap:"10px",marginBottom:"14px"}}>
+              <StatBox label="יחידות סה״כ" value={d1Stats.total} color={dimColor}/>
+              <StatBox label="מאושרות" value={d1Stats.approved} color="#34d399"/>
+              <StatBox label="הצעת AI תקינה" value={d1Stats.valid} color="#60a5fa"/>
+              <StatBox label="נכשלו/לא תקינות" value={d1Stats.invalid} color={d1Stats.invalid>0?"#ef4444":"#64748b"}/>
+              <StatBox label="ממתינות" value={d1Stats.pending} color={d1Stats.pending>0?"#fbbf24":"#64748b"}/>
+            </div>
+            {d1Loading?(
+              <div style={{padding:"14px",background:"#0f172a",borderRadius:"8px",border:`1px solid ${dimColor}`}}>
+                <div style={{fontSize:"13px",color:dimColor,fontWeight:"700"}}>⏳ עובד על יחידה {d1Progress.current}/{d1Progress.total}: {d1Progress.unitName}</div>
+                <div style={{fontSize:"11px",color:"#94a3b8",marginTop:"4px"}}>{d1Progress.status}</div>
+              </div>
+            ):(
+              <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+                <button onClick={()=>runD1("all")} disabled={d1Stats.pending===0&&d1Stats.invalid===0}
+                  style={{padding:"10px 22px",borderRadius:"8px",border:"none",cursor:(d1Stats.pending>0||d1Stats.invalid>0)?"pointer":"not-allowed",background:(d1Stats.pending>0||d1Stats.invalid>0)?dimColor:"#334155",color:(d1Stats.pending>0||d1Stats.invalid>0)?"white":"#64748b",fontSize:"13px",fontWeight:"700"}}>
+                  {d1Stats.pending+d1Stats.invalid>0?`▶ הפעל AI על ${d1Stats.pending+d1Stats.invalid} יחידות שלא רצו/נכשלו`:"✓ הכל רץ בהצלחה"}
+                </button>
+              </div>
+            )}
+            {d1Error&&<div style={{marginTop:"10px",padding:"8px 12px",background:"#7f1d1d44",color:"#fca5a5",borderRadius:"6px",fontSize:"11px"}}>⚠ {d1Error}</div>}
+
+            {/* רשימת יחידות */}
+            {d1Stats.total>0&&(
+              <div style={{marginTop:"18px"}}>
+                <div style={{fontSize:"12px",fontWeight:"700",color:"#cbd5e1",marginBottom:"8px"}}>רשימת יחידות ({d1Stats.total})</div>
+                <div style={{maxHeight:"400px",overflowY:"auto",border:"1px solid #334155",borderRadius:"7px"}}>
+                  <table style={{fontSize:"11px",width:"100%"}}>
+                    <thead><tr style={{background:"#0f172a",position:"sticky",top:0}}>
+                      <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px"}}>יחידה</th>
+                      <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px",width:"60px"}}>אינדיק'</th>
+                      <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px",width:"50px"}}>מושגים</th>
+                      <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px",width:"180px"}}>סטטוס</th>
+                      <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px",width:"100px"}}>פרטים</th>
+                    </tr></thead>
+                    <tbody>
+                      {unitsToProcess.map(({unit,findings,uniqueConcepts})=>{
+                        const uid=String(unit.id);
+                        const st=unitStatus(uid);
+                        const ai=d1State[uid]&&d1State[uid].ai_proposal;
+                        const color=st.status==="approved"?"#34d399":st.status==="ai-valid"?"#60a5fa":st.status==="ai-invalid"?"#ef4444":"#94a3b8";
+                        return(<tr key={uid} style={{borderBottom:"1px solid #334155"}}>
+                          <td style={{color:"#cbd5e1",padding:"5px 10px",fontWeight:"600"}} title={unit.chapter}>{unit.name||unit.label||uid}</td>
+                          <td style={{color:"#94a3b8",padding:"5px 10px"}}>{findings.length}</td>
+                          <td style={{color:"#94a3b8",padding:"5px 10px"}}>{uniqueConcepts.length}</td>
+                          <td style={{color,padding:"5px 10px",fontSize:"10px"}}>{st.label}
+                            {ai&&ai.phenomena&&<span style={{color:"#64748b"}}> · {ai.phenomena.length} תופעות{ai.needsReview&&ai.needsReview.length>0?`, ${ai.needsReview.length} לבדיקה`:""}</span>}
+                            {ai&&ai.error&&<span style={{color:"#ef4444"}}> · שגיאה</span>}
+                            {ai&&!ai.validatedByCode&&!ai.error&&ai.validationReport&&(
+                              <div style={{color:"#f59e0b",fontSize:"9px",marginTop:"2px"}}>
+                                {ai.validationReport.missing&&ai.validationReport.missing.length>0&&<div>חסרים: {ai.validationReport.missing.length}</div>}
+                                {ai.validationReport.foreign&&ai.validationReport.foreign.length>0&&<div>זרים: {ai.validationReport.foreign.length}</div>}
+                                {ai.validationReport.evidenceMismatch&&ai.validationReport.evidenceMismatch.length>0&&<div>אי-התאמה: {ai.validationReport.evidenceMismatch.length}</div>}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{padding:"5px 10px"}}>
+                            {!d1Loading&&st.status!=="approved"&&<button onClick={()=>runD1(`unit:${uid}`)} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"9px"}}>▶ הרץ</button>}
+                          </td>
+                        </tr>);
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
