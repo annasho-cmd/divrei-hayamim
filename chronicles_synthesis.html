@@ -234,6 +234,49 @@ function parseCh(u){
   catch{ return [999,999]; }
 }
 
+// ─ קריאה ישירה ל-Anthropic — מודול level (זמין לכל רכיב) ─
+async function aiCallDirect_module(apiKey,prompt,maxTokens){
+  if(!apiKey) throw new Error("חסר מפתח API. הזן אותו דרך סמל ה-🔑 בסרגל העליון.");
+  const res=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "x-api-key":apiKey,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true"
+    },
+    body:JSON.stringify({
+      model:"claude-sonnet-4-5-20250929",
+      max_tokens:maxTokens,
+      messages:[{role:"user",content:prompt}]
+    })
+  });
+  if(!res.ok){
+    let errMsg=`שגיאת API (${res.status})`;
+    try{const d=await res.json(); if(d.error&&d.error.message) errMsg+=`: ${d.error.message}`;}catch{}
+    throw new Error(errMsg);
+  }
+  const data=await res.json();
+  if(!data.content||!data.content.length) throw new Error("תשובה ריקה מ-API");
+  if(data.stop_reason==="max_tokens"){
+    console.warn("aiCallDirect: תשובה נקטעה במגבלת max_tokens");
+    throw new Error(`התשובה נקטעה במגבלת ${maxTokens} טוקנים (stop_reason=max_tokens). נסי שוב — המערכת תמשיך מהקבוצה הזאת, או דווחי לי להעלות את המגבלה.`);
+  }
+  return data.content.map(b=>b.text||"").join("");
+}
+
+function parseJSON_module(text){
+  const clean=String(text||"").replace(/```json|```/g,"").trim();
+  try{ return JSON.parse(clean); }
+  catch(e){
+    const first=clean.indexOf("{"); const last=clean.lastIndexOf("}");
+    if(first>=0&&last>first){
+      try{ return JSON.parse(clean.substring(first,last+1)); }catch{}
+    }
+    throw new Error("התשובה אינה בפורמט JSON תקין: "+clean.substring(0,120));
+  }
+}
+
 function validParams(params){ return (params||[]).filter(p=>p&&(typeof p==="object"?p.q:p).toString().trim()); }
 
 function dim4concept(name,raw){
@@ -812,8 +855,8 @@ ${indicatorsBlock}
 
 ודאי: (1) כל מזהה ב-textualEvidence מופיע גם ב-assignedSourceIds של אותה תופעה; (2) כל assignedSourceId קיים בקלט; (3) כל sourceId בקלט מופיע לפחות פעם אחת ב-assignedSourceIds או ב-needsReview.`;
 
-    const resp=await aiCallDirect(prompt,16000);
-    const parsed=parseJSON(resp);
+    const resp=await aiCallDirect_module(apiKey,prompt,16000);
+    const parsed=parseJSON_module(resp);
     return {parsed,prompt};
   }
 
