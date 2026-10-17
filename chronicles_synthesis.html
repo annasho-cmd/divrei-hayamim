@@ -768,7 +768,7 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
 1. שם התופעה חייב להיות תיאורי בלבד — אסור שיכיל את המילה "${concept}" או נגזרת שלה (${concept==="רוח/ריח"?"כולל רוח או ריח":""}${concept==="אחד/יחד"?"כולל אחד או יחד":""}${concept==="נצח"?"כולל נצח, לנצח, תמיד":""}${concept==="עולם"?"כולל עולם, לעולם, לעולמים":""}). דוגמאות ראויות: "ייחוס תכונה למספר דמויות משנה", "פעולות הכנה למקדש", "אנשים שרוח ה' לבשה אותם".
 2. הקיבוץ מתבצע לפי דפוס טקסטואלי מתוך הטקסטים — לא לפי הגדרה תאולוגית של המושג.
 3. 3-6 תופעות הוא הטווח הרצוי. אם מעט אינדיקטורים — אפשר פחות; אם מגוון גדול — אפשר יותר.
-4. **חובה**: כל אינדיקטור (1 עד ${rows.length}) חייב להיות משויך לפחות לתופעה אחת. אל תשמיטי אינדיקטור.
+4. **חובה מוחלטת**: כל ${rows.length} האינדיקטורים (1 עד ${rows.length}) חייבים להופיע בלפחות אחת מרשימות ה-indicatorIndices. **לא תשמיטי שום מספר**. לפני ההחזרה, בדקי שהאיחוד של כל ה-indicatorIndices מכסה את המספרים 1,2,3...${rows.length} ללא פערים. אם אינדיקטור מסוים לא מתאים לאף דפוס מהותי — הוסיפי תופעה שבעה נקראת "אינדיקטורים פזורים או ייחודיים" והכניסי אותו שם, עם הסבר קצר ב-description.
 5. אינדיקטור יכול להופיע ביותר מתופעה אחת אם הוא תורם לכמה דפוסים שונים.
 6. **חובה חדשה — indicatorIndices**: לכל תופעה החזירי מערך של מספרי האינדיקטורים (1-${rows.length}) ששייכים לה. זה מאפשר למשתמשת לפתוח כל תופעה ולראות את האינדיקטורים המקוריים והפסוקים התומכים בה — דרישה של ד"ר עמר.
 7. נושא דומיננטי — הקטגוריה שהכי הרבה אינדיקטורים באותה תופעה שייכים אליה.
@@ -795,14 +795,17 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
     const nameUsesConcept=phenomena.filter(p=>conceptWords.some(w=>(p.name||"").includes(w))).length;
     const mappedSet=new Set();
     phenomenaMeta.forEach(m=>m.indicatorIndices.forEach(i=>mappedSet.add(i)));
-    const unmappedCount=rows.length-mappedSet.size;
+    const missingIndices=[];
+    for(let i=1;i<=rows.length;i++){ if(!mappedSet.has(i)) missingIndices.push(i); }
+    const unmappedCount=missingIndices.length;
+    const missingList=missingIndices.length?` [חסרים: ${missingIndices.join(", ")}]`:"";
     return{
       status:"מוכן לאישור",hasTable:true,
       tableHeaders:["שם התופעה","תיאור","יחידות","נושא דומיננטי","פרשנים"],
       tableRows,
       phenomenaMeta, // חדש: מאפשר drill-down לאינדיקטורים משלב 3
-      summary:`זוהו ${phenomena.length} תופעות טקסטואליות מתוך ${rows.length} אינדיקטורים (${mappedSet.size} אינדיקטורים משויכים לפחות לתופעה אחת, ${unmappedCount} לא משויכים).${parsed.methodNote?` | הערת שיטה: ${parsed.methodNote}`:""}`,
-      selfCheck:`בדיקה עצמית: 1) שמות התופעות ללא המושג "${concept}"? ${nameUsesConcept===0?"✓ כולן נייטרליות.":`⚠ ${nameUsesConcept} תופעות עדיין מכילות את המושג — דחי והרץ שוב עם הנחיה למחוק מהשמות.`} 2) מספר התופעות (${phenomena.length}) בטווח 3-6? ${phenomena.length>=3&&phenomena.length<=6?"✓":"⚠ מחוץ לטווח — ייתכן ונחוץ איחוד או פיצול."} 3) כיסוי אינדיקטורים: ${unmappedCount===0?`✓ כל ${rows.length} האינדיקטורים משויכים לתופעה.`:`⚠ ${unmappedCount} אינדיקטורים לא שויכו לאף תופעה — דחי והריצי שוב עם הנחיה לכסות את כולם.`} 4) לחצי "▼ פרט" ליד כל תופעה כדי לוודא שהאינדיקטורים ששויכו אליה אכן מתאימים לדפוס. 5) האם שמות התופעות ישמשו ככותרות-משנה בפרק של התזה?`
+      summary:`זוהו ${phenomena.length} תופעות טקסטואליות מתוך ${rows.length} אינדיקטורים (${mappedSet.size} משויכים, ${unmappedCount} לא משויכים${missingList}).${parsed.methodNote?` | הערת שיטה: ${parsed.methodNote}`:""}`,
+      selfCheck:`בדיקה עצמית: 1) שמות התופעות ללא המושג "${concept}"? ${nameUsesConcept===0?"✓ כולן נייטרליות.":`⚠ ${nameUsesConcept} תופעות עדיין מכילות את המושג — דחי והרץ שוב עם הנחיה למחוק מהשמות.`} 2) מספר התופעות (${phenomena.length}) בטווח 3-6? ${phenomena.length>=3&&phenomena.length<=6?"✓":"⚠ מחוץ לטווח — ייתכן ונחוץ איחוד או פיצול."} 3) כיסוי אינדיקטורים: ${unmappedCount===0?`✓ כל ${rows.length} האינדיקטורים משויכים לתופעה.`:`⚠ ${unmappedCount} אינדיקטורים לא שויכו: ${missingIndices.join(", ")}. פתחי את טבלת "אינדיקטורים לא משויכים" מתחת לטבלת התופעות — זו הצגה אוטומטית של השורות החסרות משלב 3. דחי והריצי שוב עם הנחיה לכסות את כולם, או ערכי ידנית.`} 4) לחצי "▼ פרט" ליד כל תופעה כדי לוודא שהאינדיקטורים ששויכו אליה אכן מתאימים לדפוס. 5) האם שמות התופעות ישמשו ככותרות-משנה בפרק של התזה?`
     };
   }
 
@@ -984,6 +987,43 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         </table>
                       </div>
                     )}
+                    {/* שלב 4: הצגה אוטומטית של אינדיקטורים לא משויכים לאף תופעה */}
+                    {n===4&&hasResult.phenomenaMeta&&(()=>{
+                      const mSet=new Set();
+                      hasResult.phenomenaMeta.forEach(m=>(m.indicatorIndices||[]).forEach(i=>mSet.add(i)));
+                      const s3r=(stageData.stage3&&stageData.stage3.tableRows)||[];
+                      const missing=[];
+                      for(let i=1;i<=s3r.length;i++){ if(!mSet.has(i)) missing.push(i); }
+                      if(missing.length===0) return null;
+                      return (
+                        <div style={{marginBottom:"12px",padding:"12px 14px",background:"#78350f22",border:"1px solid #f59e0b",borderRadius:"6px"}}>
+                          <div style={{fontSize:"12px",color:"#fcd34d",fontWeight:"700",marginBottom:"8px"}}>⚠ אינדיקטורים לא משויכים ({missing.length} מתוך {s3r.length}): {missing.join(", ")}</div>
+                          <div style={{fontSize:"10px",color:"#fde68a",marginBottom:"10px"}}>אלה אינדיקטורים משלב 3 שלא נכנסו לאף תופעה. אפשרויות: (א) להריץ את שלב 4 שוב עם הנחיה לכסות אותם; (ב) להיכנס למצב עריכה ולהוסיף אותם ידנית לתופעה קיימת (עדכני את עמודת "יחידות") או ליצור תופעה חדשה.</div>
+                          <table style={{fontSize:"11px",width:"100%"}}>
+                            <thead><tr style={{background:"#1e293b"}}>
+                              <th style={{textAlign:"right",color:"#fcd34d",padding:"4px 8px",width:"30px"}}>#</th>
+                              <th style={{textAlign:"right",color:"#fcd34d",padding:"4px 8px"}}>יחידה</th>
+                              <th style={{textAlign:"right",color:"#fcd34d",padding:"4px 8px"}}>בסיס טקסטואלי</th>
+                              <th style={{textAlign:"right",color:"#fcd34d",padding:"4px 8px"}}>נושא</th>
+                              <th style={{textAlign:"right",color:"#fcd34d",padding:"4px 8px"}}>פרשנים</th>
+                            </tr></thead>
+                            <tbody>
+                              {missing.map(idx=>{
+                                const r=s3r[idx-1];
+                                if(!r) return (<tr key={idx}><td colSpan={5} style={{color:"#ef4444",padding:"4px 8px"}}>אינדיקטור #{idx} לא נמצא בשלב 3</td></tr>);
+                                return (<tr key={idx} style={{borderBottom:"1px solid #1e293b"}}>
+                                  <td style={{color:"#fcd34d",padding:"4px 8px",verticalAlign:"top"}}>{idx}</td>
+                                  <td style={{color:"#fef3c7",padding:"4px 8px",verticalAlign:"top",fontWeight:"600"}}>{r[0]||""}</td>
+                                  <td style={{color:"#fef3c7",padding:"4px 8px",verticalAlign:"top"}}>{r[1]||""}</td>
+                                  <td style={{color:"#fde68a",padding:"4px 8px",verticalAlign:"top"}}>{r[2]||""}</td>
+                                  <td style={{color:"#fde68a",padding:"4px 8px",verticalAlign:"top",fontSize:"10px"}}>{r[3]||"—"}</td>
+                                </tr>);
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })()}
                     {hasResult.summary&&(
                       <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${dimColor}`}}>
                         <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"4px"}}>סיכום השלב</div>
