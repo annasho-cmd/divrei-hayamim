@@ -689,18 +689,30 @@ ${compareNote||"(טרם נכתבה)"}`;
         summary:`לא נמצאו יחידות עם אינדיקטורים חיוביים למושג "${concept}" ב${who}.`,
         selfCheck:"אין נתונים לניתוח."};
     }
-    const BATCH=8;
+    const BATCH=4; // קטן יותר מ-8 כדי להימנע ממגבלת טוקנים ולאפשר שמירות ביניים תכופות
     const batches=[];
     for(let i=0;i<withIndic.length;i+=BATCH) batches.push(withIndic.slice(i,i+BATCH));
-    const allRows=[]; const batchSummaries=[];
-    for(let i=0;i<batches.length;i++){
-      setProgressNote(`עובד על קבוצה ${i+1}/${batches.length} (${batches[i].length} יחידות)...`);
-      const batch=batches[i];
-      const blocks=batch.map(buildUnitBlock).join("\n\n");
-      const batchInfo=batches.length>1?`\nזוהי קבוצה ${i+1} מתוך ${batches.length}. טפל רק ביחידות שבקבוצה הנוכחית.`:"";
-      const notRelMention=(i===0&&notRelCount.length)?`\n\nהערה: ${notRelCount.length} יחידות סומנו "לא רלוונטי" ואינן נכללות.`:"";
-      const eternalNote=isEternal?`\n\nהוראה: "${concept}" הוא פרמטר תחת "ברית". הסתמך רק על השדה הגלוי — הופעת המילים "נצח/לנצח/עולם/לעולם/לעולמים/עד עולם/לדור ודור". אין פרמטרים.`:"";
-      const prompt=`אתה עוזר מחקר לתזה בתנ"ך. אנו מנתחים את עיצוב המושג "${concept}" בדמות ${who} בכרוניסט.${batchInfo}
+
+    // ─ המשכיות: אם יש תוצאות חלקיות מהרצה קודמת, המשיכי מאותה נקודה ─
+    const existing=stageData.stage3;
+    let allRows=[], batchSummaries=[], startIdx=0;
+    if(existing && typeof existing.completedBatches==="number" && existing.completedBatches>0 && existing.completedBatches<batches.length){
+      allRows=[...(existing.tableRows||[])];
+      batchSummaries=[...(existing.batchSummaries||[])];
+      startIdx=existing.completedBatches;
+    }
+
+    let errorInfo=null;
+    for(let i=startIdx;i<batches.length;i++){
+      try{
+        const resumeNote=startIdx>0?` (המשכה מקבוצה ${startIdx+1})`:"";
+        setProgressNote(`⏳ עובד על קבוצה ${i+1}/${batches.length} (${batches[i].length} יחידות, ${allRows.length} אינדיקטורים נאספו)${resumeNote}...`);
+        const batch=batches[i];
+        const blocks=batch.map(buildUnitBlock).join("\n\n");
+        const batchInfo=batches.length>1?`\nזוהי קבוצה ${i+1} מתוך ${batches.length}. טפל רק ביחידות שבקבוצה הנוכחית.`:"";
+        const notRelMention=(i===0&&notRelCount.length)?`\n\nהערה: ${notRelCount.length} יחידות סומנו "לא רלוונטי" ואינן נכללות.`:"";
+        const eternalNote=isEternal?`\n\nהוראה: "${concept}" הוא פרמטר תחת "ברית". הסתמך רק על השדה הגלוי — הופעת המילים "נצח/לנצח/עולם/לעולם/לעולמים/עד עולם/לדור ודור". אין פרמטרים.`:"";
+        const prompt=`אתה עוזר מחקר לתזה בתנ"ך. אנו מנתחים את עיצוב המושג "${concept}" בדמות ${who} בכרוניסט.${batchInfo}
 
 שלב 3: בסיס טקסטואלי + נושא הממצא.
 
@@ -724,10 +736,34 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
 
 החזר JSON בלבד (ללא markdown):
 {"tableRows":[["שם היחידה (פרק)","בסיס טקסטואלי קצר 2-3 משפטים","קטגוריית נושא + הסבר קצר","פרשן עמ' X; פרשן עמ' Y"]],"batchSummary":"סיכום 1-2 שורות של הקבוצה"}`;
-      const resp=await aiCallDirect(prompt,4000);
-      const parsed=parseJSON(resp);
-      (parsed.tableRows||[]).forEach(r=>allRows.push(r));
-      if(parsed.batchSummary) batchSummaries.push(parsed.batchSummary);
+        const resp=await aiCallDirect(prompt,8000); // הועלה מ-4000
+        const parsed=parseJSON(resp);
+        (parsed.tableRows||[]).forEach(r=>allRows.push(r));
+        if(parsed.batchSummary) batchSummaries.push(parsed.batchSummary);
+        // ─ שמירה אחרי כל קבוצה שהושלמה בהצלחה ─
+        const completed=i+1;
+        const isFinal=completed===batches.length;
+        saveNow({...stageData,stage3:{
+          status:isFinal?"מוכן לאישור":"ממשיך... (בביצוע)",
+          hasTable:true,
+          tableHeaders:["יחידה","בסיס טקסטואלי","נושא הממצא","פרשנים"],
+          tableRows:[...allRows],
+          batchSummaries:[...batchSummaries],
+          completedBatches:completed,
+          totalBatches:batches.length,
+          summary:`${allRows.length} אינדיקטורים נאספו ב-${completed}/${batches.length} קבוצות${isFinal?".":" (בביצוע)"}`,
+          selfCheck:isFinal?"":`בביצוע: ${completed}/${batches.length} קבוצות הושלמו. אם תעצרי כעת, לחיצה על 'הפעל שוב' תמשיך מהקבוצה ${completed+1}.`
+        }});
+      }catch(e){
+        errorInfo={batchFailed:i+1,message:e.message||String(e)};
+        break; // עצירה — ננסה שוב בהרצה הבאה
+      }
+    }
+
+    const completedBatches=errorInfo?errorInfo.batchFailed-1:batches.length;
+    // אם לא הצלחנו אפילו קבוצה אחת — זרוק שגיאה
+    if(completedBatches===0&&!allRows.length){
+      throw new Error(`כשל כבר בקבוצה ראשונה: ${errorInfo?errorInfo.message:"שגיאה לא ידועה"}`);
     }
     // ספירה גסה של נושאי ממצא
     let cD=0,cN=0,cO=0,cE=0;
@@ -738,12 +774,21 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
       else if(sub.includes("אחרת")) cO++;
       else if(sub.includes("סביבה")) cE++;
     });
+    const isComplete=!errorInfo;
     return{
-      status:"מוכן לאישור",hasTable:true,
+      status:isComplete?"מוכן לאישור":"חלקי - שגיאה",
+      hasTable:true,
       tableHeaders:["יחידה","בסיס טקסטואלי","נושא הממצא","פרשנים"],
       tableRows:allRows,
-      summary:`${allRows.length} יחידות נותחו ב-${batches.length} קבוצות. התפלגות נושאי הממצא: ${cD} דוד עצמו, ${cN} המספר, ${cO} דמויות אחרות, ${cE} הסביבה המלכותית.${batchSummaries.length>1?" | סיכומי קבוצות: "+batchSummaries.join(" || "):""}`,
-      selfCheck:`בדיקה עצמית: 1) טופלו ${allRows.length} יחידות בפיצול לקבוצות של עד ${BATCH}. 2) בכל יחידה סווג נושא הממצא לאחת מ-4 קטגוריות. 3) האם אינדיקטורים ששייכים לדמויות אחרות (עמשי, בני יששכר, יואב, לויים) סווגו נכון ולא יוחסו לדוד? זו הבדיקה הקריטית — אם לא, לחצי "דחה והרץ שוב" עם הנחיות ממוקדות.`
+      batchSummaries,
+      completedBatches,
+      totalBatches:batches.length,
+      summary:isComplete
+        ?`${allRows.length} אינדיקטורים נאספו מ-${batches.length} קבוצות (${BATCH} יחידות בקבוצה). התפלגות: ${cD} דוד עצמו, ${cN} המספר, ${cO} דמויות אחרות, ${cE} הסביבה המלכותית.${batchSummaries.length>1?" | סיכומי קבוצות: "+batchSummaries.join(" || "):""}`
+        :`⚠ ${allRows.length} אינדיקטורים נשמרו מ-${completedBatches}/${batches.length} קבוצות. שגיאה בקבוצה ${errorInfo.batchFailed}: ${errorInfo.message}. לחצי 'הפעל שוב' כדי להמשיך מהקבוצה ${errorInfo.batchFailed}.`,
+      selfCheck:isComplete
+        ?`בדיקה עצמית: 1) טופלו ${allRows.length} אינדיקטורים ב-${batches.length} קבוצות של עד ${BATCH} יחידות. 2) בכל יחידה סווג נושא הממצא לאחת מ-4 קטגוריות. 3) האם אינדיקטורים ששייכים לדמויות אחרות (עמשי, בני יששכר, יואב, לויים) סווגו נכון ולא יוחסו לדוד? זו הבדיקה הקריטית — אם לא, לחצי "דחה והרץ שוב" עם הנחיות ממוקדות.`
+        :`ההרצה נעצרה בקבוצה ${errorInfo.batchFailed}. ${completedBatches} קבוצות (${allRows.length} אינדיקטורים) נשמרו ב-Firebase. 'הפעל שוב' ימשיך מהקבוצה ${errorInfo.batchFailed} ולא יתחיל מההתחלה.`
     };
   }
 
