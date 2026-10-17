@@ -505,15 +505,17 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
   const charName=character==="solomon"?"שלמה":"דוד";
   const concepts=dim.concepts||[];
 
-  // ─ קליטה דטרמיניסטית: סורק את כל שורות שלב 3 מכל המושגים בממד ─
-  const ingest=useMemo(()=>{
-    const findings=[]; // רשימה שטוחה של כל האינדיקטורים
-    const perConcept={}; // {concept: {total, hasSourceIds, missingSourceIds}}
-    const unitGroups={}; // {unitName: [sourceIds]}
-    const unitByConcept={}; // {unitName: {concept: count}} — לדוח כפילות ברמת יחידה
-    const verseGroups={}; // {verses: [sourceIds]} למועמדי כפילות
-    const missingConcepts=[]; // מושגים ללא stage3 גמור
+  // ─ יחידות גולמיות של הדמות מהכלי האנליטי (מקור האמת ליחידות המחקר) ─
+  const rawUnits=useMemo(()=>{
+    if(!raw||!Array.isArray(raw.units)) return [];
+    return raw.units.filter(u=>(u.character||"david")===character);
+  },[raw,character]);
 
+  // ─ קליטה דטרמיניסטית + התאמה לממצאים מהמאגר ─
+  const ingest=useMemo(()=>{
+    const findings=[];
+    const perConcept={};
+    const missingConcepts=[];
     concepts.forEach(c=>{
       const key=`${character}__${dimId}__${c}`;
       const sd=(stageResults||{})[key];
@@ -532,57 +534,80 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
         const commentators=row[3]||"";
         const sidObj=sids[i];
         if(sidObj&&sidObj.sid) hasIds++; else missIds++;
-        const finding={
+        findings.push({
           sid:sidObj?sidObj.sid:`tmp_${c}_${i}`,
           label:sidObj?sidObj.label:`${c}.${unit}.${i+1}`,
-          concept:c,
-          unit,basis,subject,commentators,
-          rowIdx:i
-        };
-        findings.push(finding);
-        // קיבוץ לפי יחידה
-        if(!unitGroups[unit]) unitGroups[unit]=[];
-        unitGroups[unit].push(finding.sid);
-        // מעקב מושג-ליחידה (לדוח כפילות ברמת יחידה)
-        if(!unitByConcept[unit]) unitByConcept[unit]={};
-        unitByConcept[unit][c]=(unitByConcept[unit][c]||0)+1;
-        // קיבוץ לפי basis דומה (כפילות טכנית - אותו טקסט)
-        const basisKey=basis.trim().slice(0,80);
-        if(basisKey.length>20){
-          if(!verseGroups[basisKey]) verseGroups[basisKey]=[];
-          verseGroups[basisKey].push(finding.sid);
-        }
+          concept:c,unit,basis,subject,commentators,rowIdx:i
+        });
       });
-      perConcept[c]={
-        total:rows.length,
-        hasSourceIds:hasIds,
-        missingSourceIds:missIds,
-        approved:(sd.approvedStages||[]).includes(3)
-      };
+      perConcept[c]={total:rows.length,hasSourceIds:hasIds,missingSourceIds:missIds,approved:(sd.approvedStages||[]).includes(3)};
     });
-    // זיהוי מועמדי כפילות: קבוצות שבהן יש יותר מ-1 מזהה
-    const duplicateCandidates=[];
-    Object.entries(verseGroups).forEach(([basis,sids])=>{
-      if(sids.length>1){
-        duplicateCandidates.push({basis,sids,count:sids.length});
+
+    // ─ התאמת כל finding ל-u.id מתוך raw.units (בדיקה דטרמיניסטית) ─
+    const unitIndex={}; rawUnits.forEach(u=>{ unitIndex[String(u.id)]=u; });
+    const idList=rawUnits.map(u=>String(u.id)).sort((a,b)=>b.length-a.length); // ארוך לפני קצר
+    const matchedFindings=[]; const unmatchedFindings=[];
+    const unitHits={}; const unitByConcept={};
+    findings.forEach(f=>{
+      const text=f.unit||"";
+      let matchedUid=null;
+      // ניסיון 1: id נמצא בטקסט
+      for(const uid of idList){ if(text.includes(uid)){ matchedUid=uid; break; } }
+      // ניסיון 2: שם יחידה בטקסט
+      if(!matchedUid){
+        for(const u of rawUnits){
+          const nm=u.name||u.label||"";
+          if(nm&&nm.length>2&&text.includes(nm)){ matchedUid=String(u.id); break; }
+        }
+      }
+      if(matchedUid){
+        f.matchedUnitId=matchedUid;
+        matchedFindings.push({finding:f,unitId:matchedUid});
+        if(!unitHits[matchedUid]) unitHits[matchedUid]=[];
+        unitHits[matchedUid].push(f.sid);
+        if(!unitByConcept[matchedUid]) unitByConcept[matchedUid]={};
+        unitByConcept[matchedUid][f.concept]=(unitByConcept[matchedUid][f.concept]||0)+1;
+      }else{
+        unmatchedFindings.push(f);
       }
     });
-    // דוח יחידות שחוזרות במספר מושגים (unit-level cross-concept)
+
+    // יחידות יתומות (ב-raw אבל ללא אינדיקטור בממד)
+    const orphanUnits=rawUnits.filter(u=>!unitHits[String(u.id)]);
+
+    // כפילות טקסט
+    const verseGroups={};
+    findings.forEach(f=>{
+      const basisKey=(f.basis||"").trim().slice(0,80);
+      if(basisKey.length>20){ if(!verseGroups[basisKey]) verseGroups[basisKey]=[]; verseGroups[basisKey].push(f.sid); }
+    });
+    const duplicateCandidates=[];
+    Object.entries(verseGroups).forEach(([basis,sids])=>{ if(sids.length>1) duplicateCandidates.push({basis,sids,count:sids.length}); });
+
+    // יחידות חוזרות בכמה מושגים (לפי u.id מהמאגר)
     const unitRepeats=Object.entries(unitByConcept)
-      .map(([unit,byC])=>({unit,concepts:Object.keys(byC),totalIndicators:Object.values(byC).reduce((a,b)=>a+b,0)}))
+      .map(([uid,byC])=>{
+        const u=unitIndex[uid];
+        return {unitId:uid,unitName:u?(u.name||u.label||uid):uid,concepts:Object.keys(byC),totalIndicators:Object.values(byC).reduce((a,b)=>a+b,0)};
+      })
       .filter(x=>x.concepts.length>1)
       .sort((a,b)=>b.concepts.length-a.concepts.length||b.totalIndicators-a.totalIndicators);
-    const unitsInOneConcept=Object.keys(unitByConcept).filter(u=>Object.keys(unitByConcept[u]).length===1).length;
-    const uniqueUnits=Object.keys(unitGroups).length;
+    const unitsInOneConcept=Object.keys(unitByConcept).filter(uid=>Object.keys(unitByConcept[uid]).length===1).length;
+
     return {
-      findings,perConcept,unitGroups,duplicateCandidates,missingConcepts,
+      findings,perConcept,missingConcepts,duplicateCandidates,
+      matchedFindings,unmatchedFindings,unitHits,orphanUnits,
+      totalRawUnits:rawUnits.length,
+      unitsWithFindings:Object.keys(unitHits).length,
+      matchedCount:matchedFindings.length,
+      unmatchedCount:unmatchedFindings.length,
       unitRepeats,unitsInOneConcept,
-      uniqueUnits,totalFindings:findings.length,
+      totalFindings:findings.length,
       totalMissingSids:findings.filter(f=>f.sid.startsWith("tmp_")).length
     };
-  },[character,dimId,stageResults]);
+  },[character,dimId,stageResults,rawUnits]);
 
-  const canProceed=ingest.missingConcepts.length===0&&ingest.totalMissingSids===0;
+  const canProceed=ingest.missingConcepts.length===0&&ingest.totalMissingSids===0&&ingest.unmatchedCount===0;
 
   // ─ מיגרציית מזהים חסרים בבת אחת לכל הממד ─
   function migrateAllMissingIds(){
@@ -630,7 +655,11 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
           <StatBox label="מושגים בממד" value={concepts.length} color={dimColor}/>
           <StatBox label="מושגים מוכנים" value={`${concepts.length-ingest.missingConcepts.length}/${concepts.length}`} color={ingest.missingConcepts.length===0?"#34d399":"#f59e0b"}/>
           <StatBox label="סה״כ אינדיקטורים" value={ingest.totalFindings} color="#60a5fa"/>
-          <StatBox label="יחידות ייחודיות" value={ingest.uniqueUnits} color="#a78bfa"/>
+          <StatBox label="יחידות במאגר (raw)" value={ingest.totalRawUnits} color="#a78bfa"/>
+          <StatBox label="יחידות שאותרו" value={`${ingest.unitsWithFindings}/${ingest.totalRawUnits}`} color={ingest.unitsWithFindings===ingest.totalRawUnits?"#34d399":ingest.unitsWithFindings>0?"#fbbf24":"#64748b"}/>
+          <StatBox label="אינדיקטורים מותאמים" value={`${ingest.matchedCount}/${ingest.totalFindings}`} color={ingest.unmatchedCount===0?"#34d399":"#ef4444"}/>
+          <StatBox label="אינדיקטורים לא מותאמים" value={ingest.unmatchedCount} color={ingest.unmatchedCount===0?"#34d399":"#ef4444"}/>
+          <StatBox label="יחידות יתומות (ללא ממצא)" value={ingest.orphanUnits.length} color={ingest.orphanUnits.length===0?"#34d399":"#94a3b8"}/>
           <StatBox label="מועמדי כפילות" value={ingest.duplicateCandidates.length} color={ingest.duplicateCandidates.length>0?"#fbbf24":"#64748b"}/>
           <StatBox label="מזהים חסרים" value={ingest.totalMissingSids} color={ingest.totalMissingSids===0?"#34d399":"#ef4444"}/>
         </div>
@@ -672,6 +701,46 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
         </table>
       </div>
 
+      {/* אינדיקטורים שלא זוהו ל-u.id — בעיה דטרמיניסטית */}
+      {ingest.unmatchedCount>0&&(
+        <div style={{padding:"14px 18px",background:"#7f1d1d22",borderRadius:"10px",border:"1px solid #ef4444",marginBottom:"18px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#fca5a5",marginBottom:"8px"}}>
+            ⚠ {ingest.unmatchedCount} אינדיקטורים לא זוהו ל-u.id במאגר
+          </div>
+          <div style={{fontSize:"11px",color:"#fecaca",marginBottom:"10px",lineHeight:"1.6"}}>
+            אלה אינדיקטורים ששם היחידה שה-AI החזיר אינו מכיל את מזהה היחידה (u.id) או את שם היחידה כפי שמופיע ב-raw.units. יש לפתור לפני המעבר לד'1 — אחרת לא נדע ליחידה הספרותית האמיתית אנחנו מתייחסים.
+          </div>
+          <div style={{maxHeight:"200px",overflowY:"auto",fontSize:"10px",fontFamily:"monospace",color:"#fef3c7"}}>
+            {ingest.unmatchedFindings.slice(0,20).map((f,i)=>(
+              <div key={i} style={{padding:"4px 0",borderBottom:"1px solid #7f1d1d66"}}>
+                <span style={{color:"#fca5a5"}}>[{f.label}]</span> <span style={{color:"#fecaca"}}>יחידה (AI):</span> "{f.unit}" <span style={{color:"#64748b"}}>· מושג: {f.concept}</span>
+              </div>
+            ))}
+            {ingest.unmatchedFindings.length>20&&<div style={{color:"#fca5a5",marginTop:"6px"}}>...ועוד {ingest.unmatchedFindings.length-20}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* יחידות יתומות — ב-raw אך ללא אינדיקטור בממד */}
+      {ingest.orphanUnits.length>0&&(
+        <div style={{padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"1px solid #475569",marginBottom:"18px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#cbd5e1",marginBottom:"8px"}}>
+            ℹ {ingest.orphanUnits.length} יחידות ב-raw שלא מופיע להן אינדיקטור בממד זה
+          </div>
+          <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.6"}}>
+            אלה יחידות שאת הוספת לכלי האנליטי, אבל אין להן אף אינדיקטור חיובי לממד "{dimLabel}" באף מושג. זה **לא בהכרח בעיה** — פשוט אומר שהממד הזה לא נמצא בהן. (ייתכן שהן יהיו רלוונטיות לממדים אחרים.)
+          </div>
+          <div style={{maxHeight:"150px",overflowY:"auto",fontSize:"10px"}}>
+            {ingest.orphanUnits.slice(0,20).map((u,i)=>(
+              <span key={i} style={{display:"inline-block",padding:"3px 7px",margin:"2px",background:"#0f172a",color:"#94a3b8",borderRadius:"4px"}}>
+                {u.name||u.label||u.id} ({u.id})
+              </span>
+            ))}
+            {ingest.orphanUnits.length>20&&<span style={{color:"#64748b",marginRight:"6px"}}>...ועוד {ingest.orphanUnits.length-20}</span>}
+          </div>
+        </div>
+      )}
+
       {/* יחידות שחוזרות בכמה מושגים (הכפילות המחקרית האמיתית) */}
       {ingest.unitRepeats.length>0&&(
         <div style={{padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`1px solid ${dimColor}44`,marginBottom:"18px"}}>
@@ -692,7 +761,7 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
               <tbody>
                 {ingest.unitRepeats.map((ur,i)=>(
                   <tr key={i} style={{borderBottom:"1px solid #334155"}}>
-                    <td style={{color:"#cbd5e1",padding:"5px 10px",fontWeight:"600"}}>{ur.unit}</td>
+                    <td style={{color:"#cbd5e1",padding:"5px 10px",fontWeight:"600"}} title={`u.id: ${ur.unitId}`}>{ur.unitName} <span style={{fontSize:"9px",color:"#64748b"}}>({ur.unitId})</span></td>
                     <td style={{color:ur.concepts.length>=5?"#34d399":"#cbd5e1",padding:"5px 10px",fontWeight:"700"}}>{ur.concepts.length}</td>
                     <td style={{color:"#94a3b8",padding:"5px 10px"}}>{ur.totalIndicators}</td>
                     <td style={{color:"#94a3b8",padding:"5px 10px",fontSize:"10px"}}>{ur.concepts.join(", ")}</td>
@@ -733,10 +802,15 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
             <button disabled style={{padding:"14px 36px",borderRadius:"10px",border:"none",cursor:"not-allowed",background:"#334155",color:"#64748b",fontSize:"14px",fontWeight:"700"}}>
               → המשך לד'1 (זיהוי תופעות) — בפיתוח
             </button>
-            <div style={{marginTop:"10px",fontSize:"11px",color:"#64748b"}}>✓ הקליטה תקינה. השלב הבא (ד'1 — זיהוי תופעות באמצעות AI) יתווסף בסיבוב הבנייה הבא.</div>
+            <div style={{marginTop:"10px",fontSize:"11px",color:"#34d399"}}>✓ הקליטה תקינה: כל האינדיקטורים זוהו ליחידות אמיתיות מהמאגר. השלב הבא (ד'1 — זיהוי תופעות באמצעות AI) יתווסף בסיבוב הבא.</div>
           </div>
         ):(
-          <div style={{fontSize:"12px",color:"#f59e0b"}}>⚠ לא ניתן להמשיך — יש לפתור את הבעיות המסומנות למעלה.</div>
+          <div style={{fontSize:"12px",color:"#f59e0b"}}>
+            ⚠ לא ניתן להמשיך — יש לפתור:
+            {ingest.missingConcepts.length>0&&<div style={{marginTop:"4px"}}>• {ingest.missingConcepts.length} מושגים חסרים/לא מאושרים</div>}
+            {ingest.totalMissingSids>0&&<div style={{marginTop:"4px"}}>• {ingest.totalMissingSids} אינדיקטורים ללא מזהה קבוע</div>}
+            {ingest.unmatchedCount>0&&<div style={{marginTop:"4px"}}>• {ingest.unmatchedCount} אינדיקטורים לא זוהו ליחידה מהמאגר</div>}
+          </div>
         )}
       </div>
     </div>
