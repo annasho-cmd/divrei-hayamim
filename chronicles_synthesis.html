@@ -543,25 +543,63 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
       perConcept[c]={total:rows.length,hasSourceIds:hasIds,missingSourceIds:missIds,approved:(sd.approvedStages||[]).includes(3)};
     });
 
-    // ─ התאמת כל finding ל-u.id מתוך raw.units (בדיקה דטרמיניסטית) ─
+    // ─ התאמת כל finding ל-u.id מתוך raw.units (בדיקה דטרמיניסטית מורחבת) ─
+    // ה-AI כותב את u.chapter (למשל "11_1_3") או וריאציות כגון "11:1-3", "11-1:3".
+    // u.id עצמו הוא מספר ארוך (timestamp) שה-AI לא משתמש בו.
     const unitIndex={}; rawUnits.forEach(u=>{ unitIndex[String(u.id)]=u; });
-    const idList=rawUnits.map(u=>String(u.id)).sort((a,b)=>b.length-a.length); // ארוך לפני קצר
+    // נירמול: מחליף :, -, ., רווחים → _, מורידים כפולים
+    const normalize=s=>String(s||"").replace(/[:\-.\s]+/g,"_").replace(/_+/g,"_").replace(/^_|_$/g,"");
+    // אינדקס לפי chapter מנורמל (יכול להיות כמה יחידות עם אותו chapter — נדיר)
+    const chapterIndex={};
+    rawUnits.forEach(u=>{
+      const key=normalize(u.chapter);
+      if(key){ if(!chapterIndex[key]) chapterIndex[key]=[]; chapterIndex[key].push(u); }
+    });
+    const sortedChapters=Object.keys(chapterIndex).sort((a,b)=>b.length-a.length);
+    // חילוץ טקסט בתוך סוגריים
+    const extractParen=t=>{ const m=String(t||"").match(/\(([^)]+)\)/); return m?m[1].trim():""; };
+
     const matchedFindings=[]; const unmatchedFindings=[];
     const unitHits={}; const unitByConcept={};
     findings.forEach(f=>{
       const text=f.unit||"";
-      let matchedUid=null;
-      // ניסיון 1: id נמצא בטקסט
-      for(const uid of idList){ if(text.includes(uid)){ matchedUid=uid; break; } }
-      // ניסיון 2: שם יחידה בטקסט
+      let matchedUid=null, matchStrategy="";
+      const paren=extractParen(text);
+      const parenNorm=normalize(paren);
+      // אסטרטגיה 1: בתוך סוגריים → chapter מנורמל
+      if(parenNorm&&chapterIndex[parenNorm]){
+        const candidates=chapterIndex[parenNorm];
+        if(candidates.length===1){
+          matchedUid=String(candidates[0].id); matchStrategy="paren-chapter";
+        }else{
+          // כמה מועמדים עם אותו chapter — מתאימים לפי שם
+          for(const u of candidates){
+            const nm=u.name||u.label||"";
+            if(nm&&text.includes(nm)){ matchedUid=String(u.id); matchStrategy="paren-chapter+name"; break; }
+          }
+          if(!matchedUid){ matchedUid=String(candidates[0].id); matchStrategy="paren-chapter-first"; }
+        }
+      }
+      // אסטרטגיה 2: chapter כלשהו בטקסט המנורמל (לא בסוגריים)
       if(!matchedUid){
-        for(const u of rawUnits){
+        const textNorm=normalize(text);
+        for(const chap of sortedChapters){
+          if(textNorm.includes(chap)){ matchedUid=String(chapterIndex[chap][0].id); matchStrategy="text-chapter"; break; }
+        }
+      }
+      // אסטרטגיה 3: התאמה לפי שם יחידה (ארוך לפני קצר להימנע מהתאמה חלקית)
+      if(!matchedUid){
+        const sortedByName=[...rawUnits].filter(u=>u.name||u.label).sort((a,b)=>{
+          const la=(a.name||a.label||"").length, lb=(b.name||b.label||"").length; return lb-la;
+        });
+        for(const u of sortedByName){
           const nm=u.name||u.label||"";
-          if(nm&&nm.length>2&&text.includes(nm)){ matchedUid=String(u.id); break; }
+          if(nm&&nm.length>3&&text.includes(nm)){ matchedUid=String(u.id); matchStrategy="name"; break; }
         }
       }
       if(matchedUid){
         f.matchedUnitId=matchedUid;
+        f.matchStrategy=matchStrategy;
         matchedFindings.push({finding:f,unitId:matchedUid});
         if(!unitHits[matchedUid]) unitHits[matchedUid]=[];
         unitHits[matchedUid].push(f.sid);
