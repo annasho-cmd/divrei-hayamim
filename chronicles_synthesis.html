@@ -100,6 +100,7 @@ const SEMANTIC_FALLBACK={
 // ═══════════════════════════════════════════════════════════════════════
 function LS_get(k,def){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):def;}catch{return def;} }
 function LS_set(k,v){ try{localStorage.setItem(k,JSON.stringify(v));}catch(e){console.warn("LS save failed",e);} }
+function escapeHtml(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
 
 // ── Firebase ─────────────────────────────────────────────────────────────
 // הכלי האנליטי שומר ב-"research2" (sharded + lz-string). הסינתזה קוראת משם ל-raw,
@@ -429,6 +430,70 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,sta
   });
   const [loading,setLoading]=useState(false);
   const [progressNote,setProgressNote]=useState("");
+  // expandedStages — שלבים שאושרו אבל המשתמשת פתחה אותם מחדש לעיון/ביקורת
+  const [expandedStages,setExpandedStages]=useState(new Set());
+  function toggleExpanded(n){
+    setExpandedStages(prev=>{ const s=new Set(prev); if(s.has(n)) s.delete(n); else s.add(n); return s; });
+  }
+  // editMode[n]==true כאשר שלב n במצב עריכה. editDraft[n] מכיל טיוטה שלא נשמרה עדיין.
+  const [editMode,setEditMode]=useState({});
+  const [editDraft,setEditDraft]=useState({});
+  function startEdit(n,res){
+    setEditDraft(p=>({...p,[n]:{tableRows:JSON.parse(JSON.stringify(res.tableRows||[])),summary:res.summary||"",selfCheck:res.selfCheck||""}}));
+    setEditMode(p=>({...p,[n]:true}));
+  }
+  function cancelEdit(n){ setEditMode(p=>({...p,[n]:false})); }
+  function saveEdit(n){
+    const d=editDraft[n]; if(!d) return;
+    const cur=stageData[`stage${n}`]||{};
+    const updated={...cur,tableRows:d.tableRows,summary:d.summary,selfCheck:d.selfCheck,manuallyEdited:true,editedAt:new Date().toISOString()};
+    saveNow({...stageData,[`stage${n}`]:updated});
+    setEditMode(p=>({...p,[n]:false}));
+  }
+  function updateCell(n,r,c,v){ setEditDraft(p=>{ const d=JSON.parse(JSON.stringify(p[n])); if(!d.tableRows[r]) d.tableRows[r]=[]; d.tableRows[r][c]=v; return{...p,[n]:d}; }); }
+  function updateField(n,f,v){ setEditDraft(p=>({...p,[n]:{...p[n],[f]:v}})); }
+
+  // יצוא שלב כקובץ Word (.doc שנפתח ישירות ב-Word)
+  function downloadStageAsWord(n,result){
+    const dimLbl=(DIMS.find(d=>d.id===dimId)||{}).label||"";
+    const chN=character==="solomon"?"שלמה":"דוד";
+    const now=new Date().toLocaleString("he-IL");
+    const headers=result.tableHeaders||[];
+    const rows=result.tableRows||[];
+    const html=`<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head><meta charset="UTF-8"><title>${escapeHtml(concept)} ${escapeHtml(chN)} שלב ${n}</title>
+<style>
+body{font-family:"David","Times New Roman",serif;font-size:12pt;direction:rtl;padding:20px;}
+h1{font-size:18pt;margin:0 0 6pt;}
+.sub{font-size:11pt;color:#555;margin-bottom:14pt;}
+h2{font-size:14pt;color:#1a365d;margin:14pt 0 6pt;}
+.desc{font-size:11pt;color:#444;margin-bottom:10pt;font-style:italic;}
+table{border-collapse:collapse;width:100%;margin:10pt 0;}
+th{background:#e2e8f0;border:1px solid #475569;padding:7px 9px;text-align:right;font-weight:bold;font-size:11pt;}
+td{border:1px solid #94a3b8;padding:6px 9px;text-align:right;vertical-align:top;font-size:11pt;line-height:1.5;}
+.summary{background:#f1f5f9;padding:10pt 12pt;border-right:4px solid #818cf8;margin:12pt 0;}
+.selfcheck{background:#fef3c7;padding:10pt 12pt;border:1px dashed #d97706;margin:12pt 0;font-size:11pt;}
+.footer{color:#64748b;font-size:9pt;margin-top:20pt;border-top:1px solid #ccc;padding-top:8pt;}
+</style></head>
+<body>
+<h1>${escapeHtml(concept)} · ב${escapeHtml(chN)}</h1>
+<div class="sub">ממד: ${escapeHtml(dimLbl)}</div>
+<h2>שלב ${n}: ${escapeHtml(STAGE_LABELS[n]||"")}</h2>
+<div class="desc">${escapeHtml(STAGE_DESC[n]||"")}</div>
+${result.hasTable&&rows.length?`<table><thead><tr>${headers.map(h=>`<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${escapeHtml(c).replace(/\n/g,"<br>")}</td>`).join("")}</tr>`).join("")}</tbody></table>`:""}
+${result.summary?`<div class="summary"><b>סיכום השלב:</b><br>${escapeHtml(result.summary).replace(/\n/g,"<br>")}</div>`:""}
+${result.selfCheck?`<div class="selfcheck"><b>🔍 בדיקה עצמית:</b><br>${escapeHtml(result.selfCheck).replace(/\n/g,"<br>")}</div>`:""}
+${result.manuallyEdited?`<div style="font-size:9pt;color:#92400e;margin-top:8pt;">⚠ שלב זה נערך ידנית ב-${result.editedAt||""}</div>`:""}
+<div class="footer">הופק מכלי הסינתזה · ${now}</div>
+</body></html>`;
+    const blob=new Blob(["﻿"+html],{type:"application/msword"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`${concept.replace(/[\/\\]/g,"_")}_${chN}_שלב${n}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  }
 
   function saveNow(newData){
     setStageData(newData);
@@ -760,36 +825,40 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
       {/* סטטוס בנייה */}
       <div style={{marginBottom:"14px",padding:"10px 14px",background:"#1e3a5f",borderRadius:"7px",border:"1px solid #3b82f6",fontSize:"12px",color:"#bfdbfe",lineHeight:"1.6"}}>
-        <strong>סטטוס בנייה (סבב 1):</strong> שלבים 1-2 מופעלים בחישוב מיידי. שלבים 3-7 יתווספו בסבבים הבאים. לחצי על כותרת שלב כדי לקפוץ אליו.
+        <strong>סטטוס בנייה:</strong> שלבים 1-4 בנויים. שלבים 5-7 בפיתוח. לחצי על כותרת שלב פעיל כדי לקפוץ אליו, או על שלב שאושר כדי לפתוח אותו לעיון/ביקורת.
       </div>
 
       {/* 7 שלבים */}
       {[1,2,3,4,5,6,7].map(n=>{
         const approved=(stageData.approvedStages||[]).includes(n);
         const current=n===currentStage&&!approved;
+        const expanded=expandedStages.has(n);
+        const showContent=current||(approved&&expanded);
         const hasResult=stageData[`stage${n}`];
         const mode=STAGE_MODE[n];
         const badge=mode==="computational"?{text:"חישוב מיידי",color:"#60a5fa",bg:"#1e3a5f44"}
                     :mode==="ai_defs"?{text:"AI + הגדרות",color:"#c084fc",bg:"#581c8744"}
                     :{text:"AI",color:"#fbbf24",bg:"#78350f44"};
-        const icon=approved?"✓":current?"▶":"○";
+        const icon=approved?(expanded?"▼":"✓"):current?"▶":"○";
         const color=approved?"#34d399":current?dimColor:"#475569";
         return(
           <div key={n} style={{marginBottom:"8px"}}>
-            <div onClick={()=>!approved&&setCurrentStage(n)}
-              style={{display:"flex",alignItems:"center",gap:"12px",padding:"10px 14px",borderRadius:"8px",background:current?"#1e293b":"#0f172a",border:`1px solid ${current?color:"#334155"}`,cursor:approved?"default":"pointer"}}>
+            <div onClick={()=>{ if(approved){ toggleExpanded(n); } else { setCurrentStage(n); } }}
+              style={{display:"flex",alignItems:"center",gap:"12px",padding:"10px 14px",borderRadius:"8px",background:(current||expanded)?"#1e293b":"#0f172a",border:`1px solid ${current?color:(expanded?"#34d39944":"#334155")}`,cursor:"pointer"}}>
               <span style={{fontSize:"18px",color,fontWeight:"700",minWidth:"18px"}}>{icon}</span>
               <div style={{flex:1}}>
-                <div style={{fontSize:"13px",fontWeight:"700",color:current?"#f1f5f9":approved?"#cbd5e1":"#64748b",display:"flex",alignItems:"center",gap:"8px"}}>
+                <div style={{fontSize:"13px",fontWeight:"700",color:(current||expanded)?"#f1f5f9":approved?"#cbd5e1":"#64748b",display:"flex",alignItems:"center",gap:"8px"}}>
                   שלב {n}: {STAGE_LABELS[n]}
                   <span style={{fontSize:"10px",color:badge.color,background:badge.bg,padding:"1px 7px",borderRadius:"9px",fontWeight:"700"}}>{badge.text}</span>
+                  {approved&&!expanded&&<span style={{fontSize:"10px",color:"#64748b",fontWeight:"400"}}>· לחצי לפתיחה</span>}
+                  {approved&&expanded&&<span style={{fontSize:"10px",color:"#34d399",fontWeight:"400"}}>· במצב עיון</span>}
                 </div>
                 <div style={{fontSize:"11px",color:"#64748b",marginTop:"2px"}}>{STAGE_DESC[n]}</div>
               </div>
               {approved&&<button onClick={(e)=>{e.stopPropagation();unapproveStage(n);}} style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"10px",fontWeight:"600"}}>בטל אישור</button>}
             </div>
 
-            {current&&(
+            {showContent&&(
               <div style={{marginTop:"8px",marginRight:"30px",padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}33`}}>
                 {!hasResult&&(
                   <div>
@@ -803,6 +872,18 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
                 {hasResult&&(
                   <div>
+                    {/* סרגל פעולות: עריכה / שמירה / ייצוא */}
+                    <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
+                      <button onClick={()=>downloadStageAsWord(n,hasResult)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"#1e293b",color:"#cbd5e1",fontSize:"11px",fontWeight:"600"}}>📄 הורד כ-Word</button>
+                      {!editMode[n]&&(<button onClick={()=>startEdit(n,hasResult)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"#1e293b",color:"#cbd5e1",fontSize:"11px",fontWeight:"600"}}>✏️ עריכה</button>)}
+                      {editMode[n]&&(<>
+                        <button onClick={()=>saveEdit(n)} style={{padding:"6px 14px",borderRadius:"6px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"11px",fontWeight:"700"}}>💾 שמור שינויים</button>
+                        <button onClick={()=>cancelEdit(n)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px",fontWeight:"600"}}>ביטול</button>
+                        <span style={{alignSelf:"center",fontSize:"10px",color:"#fbbf24"}}>במצב עריכה — שינויים לא נשמרו עדיין</span>
+                      </>)}
+                      {hasResult.manuallyEdited&&!editMode[n]&&(<span style={{alignSelf:"center",fontSize:"10px",color:"#fbbf24"}}>⚠ נערך ידנית</span>)}
+                    </div>
+
                     {hasResult.hasTable&&(
                       <div style={{overflowX:"auto",marginBottom:"12px"}}>
                         <table style={{fontSize:"12px"}}>
@@ -812,9 +893,14 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                             </tr>
                           </thead>
                           <tbody>
-                            {(hasResult.tableRows||[]).map((row,i)=>(
+                            {((editMode[n]?(editDraft[n]&&editDraft[n].tableRows):hasResult.tableRows)||[]).map((row,i)=>(
                               <tr key={i} style={{borderBottom:"1px solid #334155"}}>
-                                {row.map((c,j)=>(<td key={j} style={{color:"#cbd5e1"}}>{c}</td>))}
+                                {row.map((c,j)=>(<td key={j} style={{color:"#cbd5e1",verticalAlign:"top"}}>
+                                  {editMode[n]?(
+                                    <textarea value={c||""} onChange={e=>updateCell(n,i,j,e.target.value)}
+                                      style={{width:"100%",minHeight:"60px",padding:"5px",background:"#0f172a",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit",resize:"vertical",direction:"rtl"}}/>
+                                  ):c}
+                                </td>))}
                               </tr>
                             ))}
                           </tbody>
@@ -824,17 +910,29 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                     {hasResult.summary&&(
                       <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${dimColor}`}}>
                         <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"4px"}}>סיכום השלב</div>
-                        <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{hasResult.summary}</div>
+                        {editMode[n]?(
+                          <textarea value={(editDraft[n]&&editDraft[n].summary)||""} onChange={e=>updateField(n,"summary",e.target.value)}
+                            style={{width:"100%",minHeight:"80px",padding:"6px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit",resize:"vertical",direction:"rtl"}}/>
+                        ):(
+                          <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{hasResult.summary}</div>
+                        )}
                       </div>
                     )}
                     {hasResult.selfCheck&&(
                       <div style={{marginBottom:"12px",padding:"9px 12px",background:"#0f172a",borderRadius:"6px",border:"1px dashed #475569"}}>
                         <div style={{fontSize:"10px",color:"#94a3b8",fontWeight:"700",marginBottom:"4px"}}>🔍 בדיקה עצמית</div>
-                        <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6"}}>{hasResult.selfCheck}</div>
+                        {editMode[n]?(
+                          <textarea value={(editDraft[n]&&editDraft[n].selfCheck)||""} onChange={e=>updateField(n,"selfCheck",e.target.value)}
+                            style={{width:"100%",minHeight:"60px",padding:"6px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px",fontFamily:"inherit",resize:"vertical",direction:"rtl"}}/>
+                        ):(
+                          <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6"}}>{hasResult.selfCheck}</div>
+                        )}
                       </div>
                     )}
                     <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                      {hasResult.status==="שגיאה"?(
+                      {approved?(
+                        <div style={{fontSize:"11px",color:"#64748b",padding:"6px 0"}}>👁 מצב עיון בלבד. להרצה מחדש או שינוי — לחצי "בטל אישור" למעלה.</div>
+                      ):hasResult.status==="שגיאה"?(
                         <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 18px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700"}}>🔄 הפעל שוב</button>
                       ):(
                         <>
