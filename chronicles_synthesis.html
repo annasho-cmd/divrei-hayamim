@@ -368,12 +368,14 @@ function ApiKeyModal({currentKey,onSave,onClose}){
 // ═══════════════════════════════════════════════════════════════════════
 // ── מסך בחירת מושג ─────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
-function ConceptSelector({raw,onPick,onBackHome,stageResults}){
+function ConceptSelector({raw,onPick,onPickDimension,onBackHome,stageResults}){
   const [character,setCharacter]=useState(null);
   const [dimId,setDimId]=useState(null);
   const [concept,setConcept]=useState(null);
   const dimsForUI=DIMS.map(d=>({id:d.id,label:d.label,color:d.color,icon:{d1:"🕊",d2:"⚖",d3:"🏛",d4:"🤝"}[d.id]||"◆"}));
   const concepts=dimId?(DIMS.find(d=>d.id===dimId)||{}).concepts||[]:[];
+  const dimColor=dimId?(DIMS.find(d=>d.id===dimId)||{}).color||"#818cf8":"#818cf8";
+  const dimLabel=dimId?(DIMS.find(d=>d.id===dimId)||{}).label||"":"";
 
   function getConceptStats(name){
     const results=stageResults||{};
@@ -382,6 +384,19 @@ function ConceptSelector({raw,onPick,onBackHome,stageResults}){
     if(!r||!r.approvedStages) return 0;
     return r.approvedStages.length;
   }
+  // מספר מושגים שהשלימו שלבים 1-3 (לפחות — יותר זה בסדר)
+  function dimReadyForStage4(){
+    if(!character||!dimId) return {ready:0,total:0,allReady:false};
+    const total=concepts.length;
+    const ready=concepts.filter(c=>{
+      const key=`${character}__${dimId}__${c}`;
+      const r=(stageResults||{})[key];
+      if(!r||!r.approvedStages) return false;
+      return r.approvedStages.includes(1)&&r.approvedStages.includes(2)&&r.approvedStages.includes(3);
+    }).length;
+    return {ready,total,allReady:total>0&&ready===total};
+  }
+  const dim4Status=dimReadyForStage4();
 
   return(
     <div style={{maxWidth:"920px",margin:"0 auto",padding:"28px 20px"}}>
@@ -428,10 +443,32 @@ function ConceptSelector({raw,onPick,onBackHome,stageResults}){
         </div>
       )}
 
+      {/* שלב ד' — ברמת הממד */}
+      {character&&dimId&&(
+        <div style={{marginBottom:"22px",padding:"16px",background:dim4Status.allReady?"#0f1e2e":"#1e293b",borderRadius:"10px",border:`1px solid ${dim4Status.allReady?dimColor+"66":"#334155"}`}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:"12px"}}>
+            <div style={{flex:1,minWidth:"280px"}}>
+              <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>📊 שלב ד': איחוד ממצאים לממד שלם</div>
+              <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6"}}>
+                איחוד האינדיקטורים מכל {concepts.length} המושגים של "{dimLabel}" לתופעות טקסטואליות.
+                {!dim4Status.allReady&&<span style={{color:"#fbbf24"}}><br/>⚠ זמין רק לאחר שכל המושגים השלימו שלבים 1-3</span>}
+              </div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+              <span style={{fontSize:"13px",fontWeight:"700",color:dim4Status.allReady?"#34d399":"#fbbf24"}}>{dim4Status.ready}/{dim4Status.total} מוכנים</span>
+              <button onClick={()=>dim4Status.allReady&&onPickDimension&&onPickDimension({character,dimId})} disabled={!dim4Status.allReady}
+                style={{padding:"10px 20px",borderRadius:"8px",border:"none",cursor:dim4Status.allReady?"pointer":"not-allowed",background:dim4Status.allReady?dimColor:"#334155",color:dim4Status.allReady?"white":"#64748b",fontSize:"13px",fontWeight:"700"}}>
+                {dim4Status.allReady?"→ הפעל שלב ד'":"🔒 חסום"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* מושג */}
       {character&&dimId&&(
         <div style={{marginBottom:"22px"}}>
-          <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>3. מושג</div>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#94a3b8",marginBottom:"10px"}}>3. מושג (לעבודה בשלבים 1-3)</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:"8px"}}>
             {concepts.map(c=>{
               const sel=concept===c;
@@ -454,6 +491,190 @@ function ConceptSelector({raw,onPick,onBackHome,stageResults}){
             style={{padding:"12px 32px",borderRadius:"10px",border:"none",cursor:"pointer",background:"#818cf8",color:"white",fontSize:"14px",fontWeight:"700"}}>המשך לניתוח ←</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── מסך שלב ד' — ברמת ממד (מלך × ממד) ─────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults}){
+  const dim=DIMS.find(d=>d.id===dimId)||{};
+  const dimLabel=dim.label||dimId;
+  const dimColor=dim.color||"#818cf8";
+  const charName=character==="solomon"?"שלמה":"דוד";
+  const concepts=dim.concepts||[];
+
+  // ─ קליטה דטרמיניסטית: סורק את כל שורות שלב 3 מכל המושגים בממד ─
+  const ingest=useMemo(()=>{
+    const findings=[]; // רשימה שטוחה של כל האינדיקטורים
+    const perConcept={}; // {concept: {total, hasSourceIds, missingSourceIds}}
+    const unitGroups={}; // {unitName: [sourceIds]}
+    const verseGroups={}; // {verses: [sourceIds]} למועמדי כפילות
+    const missingConcepts=[]; // מושגים ללא stage3 גמור
+
+    concepts.forEach(c=>{
+      const key=`${character}__${dimId}__${c}`;
+      const sd=(stageResults||{})[key];
+      if(!sd||!sd.stage3||!Array.isArray(sd.stage3.tableRows)){
+        missingConcepts.push(c);
+        perConcept[c]={total:0,hasSourceIds:0,missingSourceIds:0,approved:false};
+        return;
+      }
+      const rows=sd.stage3.tableRows;
+      const sids=sd.stage3.sourceIds||[];
+      let hasIds=0, missIds=0;
+      rows.forEach((row,i)=>{
+        const unit=row[0]||"?";
+        const basis=row[1]||"";
+        const subject=row[2]||"";
+        const commentators=row[3]||"";
+        const sidObj=sids[i];
+        if(sidObj&&sidObj.sid) hasIds++; else missIds++;
+        const finding={
+          sid:sidObj?sidObj.sid:`tmp_${c}_${i}`,
+          label:sidObj?sidObj.label:`${c}.${unit}.${i+1}`,
+          concept:c,
+          unit,basis,subject,commentators,
+          rowIdx:i
+        };
+        findings.push(finding);
+        // קיבוץ לפי יחידה
+        if(!unitGroups[unit]) unitGroups[unit]=[];
+        unitGroups[unit].push(finding.sid);
+        // קיבוץ לפי basis דומה (כפילות טכנית - אותו טקסט)
+        const basisKey=basis.trim().slice(0,80);
+        if(basisKey.length>20){
+          if(!verseGroups[basisKey]) verseGroups[basisKey]=[];
+          verseGroups[basisKey].push(finding.sid);
+        }
+      });
+      perConcept[c]={
+        total:rows.length,
+        hasSourceIds:hasIds,
+        missingSourceIds:missIds,
+        approved:(sd.approvedStages||[]).includes(3)
+      };
+    });
+    // זיהוי מועמדי כפילות: קבוצות שבהן יש יותר מ-1 מזהה
+    const duplicateCandidates=[];
+    Object.entries(verseGroups).forEach(([basis,sids])=>{
+      if(sids.length>1){
+        duplicateCandidates.push({basis,sids,count:sids.length});
+      }
+    });
+    const uniqueUnits=Object.keys(unitGroups).length;
+    return {
+      findings,perConcept,unitGroups,duplicateCandidates,missingConcepts,
+      uniqueUnits,totalFindings:findings.length,
+      totalMissingSids:findings.filter(f=>f.sid.startsWith("tmp_")).length
+    };
+  },[character,dimId,stageResults]);
+
+  const canProceed=ingest.missingConcepts.length===0&&ingest.totalMissingSids===0;
+
+  return(
+    <div style={{maxWidth:"1100px",margin:"0 auto",padding:"20px 16px"}}>
+      {/* כותרת */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"20px",flexWrap:"wrap",gap:"12px"}}>
+        <div>
+          <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"3px"}}>
+            📊 שלב ד': איחוד ממצאים — <span style={{color:dimColor}}>{dimLabel}</span> · ב{charName}
+          </div>
+          <div style={{fontSize:"12px",color:"#64748b"}}>קליטת כל האינדיקטורים מ-{concepts.length} המושגים של הממד, לקראת זיהוי תופעות טקסטואליות</div>
+        </div>
+        <button onClick={onBack} style={{padding:"7px 14px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ חזרה</button>
+      </div>
+
+      {/* דוח קליטה */}
+      <div style={{padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`1px solid ${canProceed?"#34d39944":"#f59e0b44"}`,marginBottom:"18px"}}>
+        <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"12px"}}>📥 דוח קליטה (דטרמיניסטי — בלי AI)</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))",gap:"12px",marginBottom:"12px"}}>
+          <StatBox label="מושגים בממד" value={concepts.length} color={dimColor}/>
+          <StatBox label="מושגים מוכנים" value={`${concepts.length-ingest.missingConcepts.length}/${concepts.length}`} color={ingest.missingConcepts.length===0?"#34d399":"#f59e0b"}/>
+          <StatBox label="סה״כ אינדיקטורים" value={ingest.totalFindings} color="#60a5fa"/>
+          <StatBox label="יחידות ייחודיות" value={ingest.uniqueUnits} color="#a78bfa"/>
+          <StatBox label="מועמדי כפילות" value={ingest.duplicateCandidates.length} color={ingest.duplicateCandidates.length>0?"#fbbf24":"#64748b"}/>
+          <StatBox label="מזהים חסרים" value={ingest.totalMissingSids} color={ingest.totalMissingSids===0?"#34d399":"#ef4444"}/>
+        </div>
+        {ingest.missingConcepts.length>0&&(
+          <div style={{marginTop:"10px",padding:"10px 12px",background:"#78350f22",border:"1px solid #f59e0b",borderRadius:"6px",fontSize:"11px",color:"#fcd34d"}}>
+            ⚠ מושגים שחסר להם שלב 3 מוכן: {ingest.missingConcepts.join(", ")}. יש להשלים ולאשר קודם.
+          </div>
+        )}
+        {ingest.totalMissingSids>0&&(
+          <div style={{marginTop:"10px",padding:"10px 12px",background:"#7f1d1d22",border:"1px solid #ef4444",borderRadius:"6px",fontSize:"11px",color:"#fca5a5"}}>
+            ⚠ {ingest.totalMissingSids} אינדיקטורים ללא מזהה קבוע. נסי לפתוח את המושגים הרלוונטיים לאחור — המיגרציה תפעל אוטומטית.
+          </div>
+        )}
+      </div>
+
+      {/* פירוט פר-מושג */}
+      <div style={{padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:"1px solid #334155",marginBottom:"18px"}}>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"10px"}}>פירוט לפי מושג</div>
+        <table style={{fontSize:"12px",width:"100%"}}>
+          <thead><tr style={{background:"#0f172a"}}>
+            <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px"}}>מושג</th>
+            <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px"}}>אינדיקטורים</th>
+            <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px"}}>עם מזהה</th>
+            <th style={{textAlign:"right",color:"#94a3b8",padding:"6px 10px"}}>סטטוס</th>
+          </tr></thead>
+          <tbody>
+            {concepts.map(c=>{
+              const pc=ingest.perConcept[c]||{};
+              const okIds=pc.hasSourceIds===pc.total&&pc.total>0;
+              return(<tr key={c} style={{borderBottom:"1px solid #334155"}}>
+                <td style={{color:"#cbd5e1",padding:"6px 10px",fontWeight:"600"}}>{c}</td>
+                <td style={{color:"#cbd5e1",padding:"6px 10px"}}>{pc.total||0}</td>
+                <td style={{color:okIds?"#34d399":(pc.missingSourceIds>0?"#f59e0b":"#64748b"),padding:"6px 10px"}}>{pc.hasSourceIds||0}/{pc.total||0}</td>
+                <td style={{color:pc.approved?"#34d399":"#f59e0b",padding:"6px 10px",fontSize:"11px"}}>{pc.approved?"✓ מאושר":pc.total>0?"⚠ לא מאושר":"✗ אין נתונים"}</td>
+              </tr>);
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* מועמדי כפילות (אם יש) */}
+      {ingest.duplicateCandidates.length>0&&(
+        <div style={{padding:"14px 18px",background:"#78350f22",borderRadius:"10px",border:"1px solid #fbbf2466",marginBottom:"18px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#fcd34d",marginBottom:"8px"}}>⚠ מועמדי כפילות טכנית ({ingest.duplicateCandidates.length}) — אותו טקסט מופיע ביותר ממזהה אחד</div>
+          <div style={{fontSize:"11px",color:"#fde68a",lineHeight:"1.6",marginBottom:"8px"}}>
+            אלה **מועמדים** בלבד. ה-AI (בשלב הבא) יבדוק אם זו באמת אותה תופעה או ממצאים שונים באותו טקסט.
+          </div>
+          <div style={{maxHeight:"200px",overflowY:"auto",fontSize:"10px",fontFamily:"monospace",color:"#fef3c7"}}>
+            {ingest.duplicateCandidates.slice(0,10).map((dc,i)=>(
+              <div key={i} style={{padding:"4px 0",borderBottom:"1px solid #78350f66"}}>
+                <div style={{color:"#fcd34d",fontWeight:"700"}}>({dc.count} מופעים): {dc.basis}...</div>
+                <div style={{color:"#fde68a"}}>sids: {dc.sids.join(", ")}</div>
+              </div>
+            ))}
+            {ingest.duplicateCandidates.length>10&&<div style={{color:"#fcd34d",marginTop:"4px"}}>...ועוד {ingest.duplicateCandidates.length-10}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* כפתור המשך */}
+      <div style={{marginTop:"24px",textAlign:"center"}}>
+        {canProceed?(
+          <div>
+            <button disabled style={{padding:"14px 36px",borderRadius:"10px",border:"none",cursor:"not-allowed",background:"#334155",color:"#64748b",fontSize:"14px",fontWeight:"700"}}>
+              → המשך לד'1 (זיהוי תופעות) — בפיתוח
+            </button>
+            <div style={{marginTop:"10px",fontSize:"11px",color:"#64748b"}}>✓ הקליטה תקינה. השלב הבא (ד'1 — זיהוי תופעות באמצעות AI) יתווסף בסיבוב הבנייה הבא.</div>
+          </div>
+        ):(
+          <div style={{fontSize:"12px",color:"#f59e0b"}}>⚠ לא ניתן להמשיך — יש לפתור את הבעיות המסומנות למעלה.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatBox({label,value,color}){
+  return(
+    <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",borderRight:`3px solid ${color}`}}>
+      <div style={{fontSize:"18px",fontWeight:"700",color}}>{value}</div>
+      <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>{label}</div>
     </div>
   );
 }
@@ -1088,11 +1309,11 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
       {/* סטטוס בנייה */}
       <div style={{marginBottom:"14px",padding:"10px 14px",background:"#1e3a5f",borderRadius:"7px",border:"1px solid #3b82f6",fontSize:"12px",color:"#bfdbfe",lineHeight:"1.6"}}>
-        <strong>סטטוס בנייה:</strong> שלבים 1-4 בנויים. שלבים 5-7 בפיתוח. לחצי על כותרת שלב פעיל כדי לקפוץ אליו, או על שלב שאושר כדי לפתוח אותו לעיון/ביקורת.
+        <strong>סטטוס:</strong> במסך זה — שלבים 1-3 פר-מושג. <strong>שלב 4+ עברו לרמת ממד</strong> — חזרי למסך בחירת מושג ולחצי על כפתור "📊 שלב ד': איחוד ממצאים לממד שלם".
       </div>
 
-      {/* 7 שלבים */}
-      {[1,2,3,4,5,6,7].map(n=>{
+      {/* שלבים 1-3 (4-7 עברו לרמת ממד) */}
+      {[1,2,3].map(n=>{
         const approved=(stageData.approvedStages||[]).includes(n);
         const current=n===currentStage&&!approved;
         const expanded=expandedStages.has(n);
@@ -1440,8 +1661,12 @@ function App(){
           </div>
         </div>
       )}
-      {screen==="selector"&&raw&&<ConceptSelector raw={raw} onPick={sel=>{setSelection(sel);setScreen("analyze");}} onBackHome={()=>setScreen("home")} stageResults={stageResults}/>}
-      {screen==="analyze"&&selection&&<AnalysisScreen raw={raw} character={selection.character} dimId={selection.dimId} concept={selection.concept} apiKey={apiKey} onBackToSelector={()=>setScreen("selector")} stageResults={stageResults} setStageResults={setStageResults}/>}
+      {screen==="selector"&&raw&&<ConceptSelector raw={raw}
+        onPick={sel=>{setSelection(sel);setScreen("analyze");}}
+        onPickDimension={sel=>{setSelection(sel);setScreen("dim4");}}
+        onBackHome={()=>setScreen("home")} stageResults={stageResults}/>}
+      {screen==="analyze"&&selection&&selection.concept&&<AnalysisScreen raw={raw} character={selection.character} dimId={selection.dimId} concept={selection.concept} apiKey={apiKey} onBackToSelector={()=>setScreen("selector")} stageResults={stageResults} setStageResults={setStageResults}/>}
+      {screen==="dim4"&&selection&&<DimensionStage4Screen raw={raw} character={selection.character} dimId={selection.dimId} apiKey={apiKey} onBack={()=>setScreen("selector")} stageResults={stageResults}/>}
 
       {showApiModal&&<ApiKeyModal currentKey={apiKey} onSave={handleApiKey} onClose={()=>setShowApiModal(false)}/>}
     </div>
