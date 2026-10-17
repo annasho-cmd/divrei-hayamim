@@ -650,6 +650,57 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
     };
   }
 
+  // ─────── שלב 4: איחוד אינדיקטורים לתופעות טקסטואליות ───────
+  async function runStage4(extra=""){
+    const s3=stageData.stage3;
+    if(!s3||!s3.tableRows||!s3.tableRows.length){
+      return{status:"אין נתונים",hasTable:false,
+        summary:"לא ניתן להריץ שלב 4 — אין תוצאות משלב 3. הריצי ואשרי קודם את שלב 3.",
+        selfCheck:"יש להריץ ואשרי קודם את שלב 3."};
+    }
+    const who=character==="solomon"?"שלמה":"דוד";
+    const rows=s3.tableRows;
+    // בניית בלוק קלט מתוצאות שלב 3
+    const stage3Block=rows.map((r,i)=>`${i+1}. יחידה: ${r[0]||""}\n   בסיס טקסטואלי: ${r[1]||""}\n   נושא: ${r[2]||""}\n   פרשנים: ${r[3]||"—"}`).join("\n\n");
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דמות ${who} בכרוניסט. המושג הנחקר: "${concept}".
+
+שלב 4: איחוד האינדיקטורים ל-3 עד 6 תופעות טקסטואליות.
+
+לפניך ${rows.length} אינדיקטורים מכל היחידות הרלוונטיות — פלט שלב 3. יש לקבץ אותם לתופעות טקסטואליות. כל תופעה תהפוך לכותרת-משנה בפרק של התזה.
+
+כללים מתודולוגיים קריטיים:
+1. שם התופעה חייב להיות תיאורי בלבד — אסור שיכיל את המילה "${concept}" או נגזרת שלה (${concept==="רוח/ריח"?"כולל רוח או ריח":""}${concept==="אחד/יחד"?"כולל אחד או יחד":""}${concept==="נצח"?"כולל נצח, לנצח, תמיד":""}${concept==="עולם"?"כולל עולם, לעולם, לעולמים":""}). דוגמאות ראויות: "ייחוס תכונה למספר דמויות משנה", "פעולות הכנה למקדש", "אנשים שרוח ה' לבשה אותם".
+2. הקיבוץ מתבצע לפי דפוס טקסטואלי מתוך הטקסטים — לא לפי הגדרה תאולוגית של המושג.
+3. 3-6 תופעות הוא הטווח הרצוי. אם מעט אינדיקטורים — אפשר פחות; אם מגוון גדול — אפשר יותר.
+4. כל יחידה חייבת להיות משויכת לפחות לתופעה אחת (אל תשמיטי יחידה).
+5. יחידה עם אינדיקטורים מגוונים יכולה להופיע ביותר מתופעה אחת.
+6. נושא דומיננטי — הקטגוריה שהכי הרבה יחידות באותה תופעה שייכות אליה (דוד עצמו / המספר / דמות אחרת / סביבה / מעורב).
+
+נתוני שלב 3 (${rows.length} יחידות):
+
+${stage3Block}
+
+${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
+
+החזר JSON בלבד (ללא markdown):
+{"phenomena":[{"name":"שם תיאורי קצר של התופעה (ללא המושג)","description":"2-3 משפטים — מה המכנה המשותף של היחידות בתופעה","units":"יח1, יח2, יח3 (רשימה מופרדת בפסיקים)","subject":"דוד עצמו | המספר | דמות אחרת | סביבה | מעורב","commentators":"פרשן עמ' X; פרשן עמ' Y (אם צוטטו) או —"}],"methodNote":"הערת שיטה 1-2 משפטים על אופן הקיבוץ, בפרט אם היה קושי"}`;
+    const resp=await aiCallDirect(prompt,4000);
+    const parsed=parseJSON(resp);
+    const phenomena=parsed.phenomena||[];
+    const tableRows=phenomena.map(p=>[p.name||"",p.description||"",p.units||"",p.subject||"",p.commentators||"—"]);
+    // בדיקות בדיעבד
+    const conceptWords=(concept.split("/")||[concept]).map(w=>w.trim()).filter(Boolean);
+    const nameUsesConcept=phenomena.filter(p=>conceptWords.some(w=>(p.name||"").includes(w))).length;
+    const unitsCount=phenomena.reduce((n,p)=>n+((p.units||"").split(",").filter(x=>x.trim()).length),0);
+    return{
+      status:"מוכן לאישור",hasTable:true,
+      tableHeaders:["שם התופעה","תיאור","יחידות","נושא דומיננטי","פרשנים"],
+      tableRows,
+      summary:`זוהו ${phenomena.length} תופעות טקסטואליות מתוך ${rows.length} אינדיקטורים (סה"כ ${unitsCount} הופעות יחידה בתופעות).${parsed.methodNote?` | הערת שיטה: ${parsed.methodNote}`:""}`,
+      selfCheck:`בדיקה עצמית: 1) שמות התופעות ללא המושג "${concept}"? ${nameUsesConcept===0?"✓ כולן נייטרליות.":`⚠ ${nameUsesConcept} תופעות עדיין מכילות את המושג — דחי והרץ שוב עם הנחיה למחוק מהשמות.`} 2) מספר התופעות (${phenomena.length}) בטווח 3-6? ${phenomena.length>=3&&phenomena.length<=6?"✓":"⚠ מחוץ לטווח — ייתכן ונחוץ איחוד או פיצול."} 3) האם כל יחידה משלב 3 מופיעה בלפחות תופעה אחת? ציינו ${unitsCount} הופעות עבור ${rows.length} יחידות — בדקי שאין יחידות מושמטות (אם המספר נמוך משמעותית, יש להריץ שוב). 4) האם שמות התופעות ישמשו כותרות-משנה בפרק של התזה? — זו החלטה שלך.`
+    };
+  }
+
   async function runStage(n,extra=""){
     setLoading(true); setProgressNote("");
     try{
@@ -657,8 +708,9 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
       if(n===1) result=runStage1();
       else if(n===2) result=runStage2();
       else if(n===3) result=await runStage3(extra);
+      else if(n===4) result=await runStage4(extra);
       else {
-        // שלבים 4-7 — יבואו בסבבים הבאים
+        // שלבים 5-7 — יבואו בסבבים הבאים
         await new Promise(r=>setTimeout(r,500));
         result={
           status:"בפיתוח",hasTable:true,
