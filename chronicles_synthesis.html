@@ -98,6 +98,35 @@ const SEMANTIC_FALLBACK={
 // ═══════════════════════════════════════════════════════════════════════
 // ── עזרים ─────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
+// ─ מערכת מזהים קבועים לשורות שלב 3 (שלב 1 של ד') ─
+// sourceId: מזהה פנימי יציב — נוצר פעם אחת ונשמר, לא תלוי בסדר
+// sourceLabel: מזהה קריא לתצוגה — concept.unit.n
+function newSourceId(){
+  try{ if(window.crypto&&window.crypto.randomUUID) return "s_"+crypto.randomUUID().slice(0,13); }catch(e){}
+  return "s_"+Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
+}
+function makeSourceLabel(concept,unitName,ordinal){
+  // ordinal: המספר הסידורי של השורה בתוך היחידה (למרבית: 1)
+  const unitSafe=String(unitName||"?").replace(/[^֐-׿\w_-]/g,"").slice(0,40);
+  const conceptSafe=String(concept||"?").replace(/[^֐-׿\w_-]/g,"").slice(0,20);
+  return `${conceptSafe}.${unitSafe}.${ordinal||1}`;
+}
+// מילוי מזהים חסרים לנתוני שלב 3 ישנים (מיגרציה בעת קריאה)
+function ensureSourceIds(stage3Data,concept){
+  if(!stage3Data||!Array.isArray(stage3Data.tableRows)) return stage3Data;
+  const existing=Array.isArray(stage3Data.sourceIds)?stage3Data.sourceIds:[];
+  if(existing.length===stage3Data.tableRows.length) return stage3Data;
+  // מספר לפי יחידה (לטיפול בכמה שורות לאותה יחידה)
+  const unitCounters={};
+  const filled=stage3Data.tableRows.map((row,i)=>{
+    if(existing[i]&&existing[i].sid) return existing[i];
+    const unit=row&&row[0]?row[0]:"?";
+    unitCounters[unit]=(unitCounters[unit]||0)+1;
+    return{sid:newSourceId(),label:makeSourceLabel(concept,unit,unitCounters[unit])};
+  });
+  return{...stage3Data,sourceIds:filled};
+}
+
 function LS_get(k,def){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):def;}catch{return def;} }
 function LS_set(k,v){
   try{ localStorage.setItem(k,JSON.stringify(v)); return true; }
@@ -444,6 +473,26 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,sta
       setStageData(r);
     }
   },[stageResults,resultsKey]);
+
+  // מיגרציה חד-פעמית: אם שלב 3 טעון אבל אין sourceIds, יוצרים ושומרים.
+  // קורה אוטומטית בכניסה למושג עם נתונים ישנים (לפני שלב 1 של ד').
+  useEffect(()=>{
+    const s3=stageData&&stageData.stage3;
+    if(!s3||!Array.isArray(s3.tableRows)||!s3.tableRows.length) return;
+    if(Array.isArray(s3.sourceIds)&&s3.sourceIds.length===s3.tableRows.length) return;
+    // חסרים מזהים — יוצרים
+    const migrated=ensureSourceIds(s3,concept);
+    if(migrated!==s3){
+      const newStageData={...stageData,stage3:migrated};
+      setStageData(newStageData);
+      const current=stageResults||LS_get("stageResults",{});
+      const all={...current,[resultsKey]:{...newStageData,lastUpdated:Date.now()}};
+      if(setStageResults) setStageResults(all);
+      LS_set("stageResults",all);
+      fbSaveStageResults(all);
+      console.log(`✓ מזהי מקור נוצרו ונשמרו ל-${s3.tableRows.length} שורות של '${concept}'`);
+    }
+  },[stageData&&stageData.stage3&&stageData.stage3.tableRows,concept,resultsKey]);
   const [currentStage,setCurrentStage]=useState(()=>{
     const sd=stageData;
     const approved=sd.approvedStages||[];
@@ -698,12 +747,21 @@ ${compareNote||"(טרם נכתבה)"}`;
 
     // ─ המשכיות: אם יש תוצאות חלקיות מהרצה קודמת, המשיכי מאותה נקודה ─
     const existing=stageData.stage3;
-    let allRows=[], batchSummaries=[], startIdx=0;
+    let allRows=[], allSourceIds=[], batchSummaries=[], startIdx=0;
     if(existing && typeof existing.completedBatches==="number" && existing.completedBatches>0 && existing.completedBatches<batches.length){
       allRows=[...(existing.tableRows||[])];
+      // טעינת מזהים שכבר נוצרו, או מילוי חסרים לנתונים ישנים
+      const seeded=ensureSourceIds(existing,concept);
+      allSourceIds=[...(seeded.sourceIds||[])];
       batchSummaries=[...(existing.batchSummaries||[])];
       startIdx=existing.completedBatches;
     }
+    // מונה פר-יחידה למזהי label (כולל הקיימים)
+    const unitCounters={};
+    allRows.forEach((r,i)=>{
+      const u=r&&r[0]?r[0]:"?";
+      unitCounters[u]=(unitCounters[u]||0)+1;
+    });
 
     let errorInfo=null;
     for(let i=startIdx;i<batches.length;i++){
@@ -743,7 +801,16 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
 {"tableRows":[["שם היחידה (פרק)","בסיס טקסטואלי עד 40 מילים","קטגוריית נושא + הסבר עד 25 מילים","פרשן עמ' X; פרשן עמ' Y"]],"batchSummary":"סיכום 1-2 שורות"}`;
         const resp=await aiCallDirect(prompt,16000); // הועלה מ-8000
         const parsed=parseJSON(resp);
-        (parsed.tableRows||[]).forEach(r=>allRows.push(r));
+        (parsed.tableRows||[]).forEach(r=>{
+          allRows.push(r);
+          // יצירת מזהה קבוע לשורה
+          const u=r&&r[0]?r[0]:"?";
+          unitCounters[u]=(unitCounters[u]||0)+1;
+          allSourceIds.push({
+            sid:newSourceId(),
+            label:makeSourceLabel(concept,u,unitCounters[u])
+          });
+        });
         if(parsed.batchSummary) batchSummaries.push(parsed.batchSummary);
         // ─ שמירה אחרי כל קבוצה שהושלמה בהצלחה ─
         const completed=i+1;
@@ -753,6 +820,7 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
           hasTable:true,
           tableHeaders:["יחידה","בסיס טקסטואלי","נושא הממצא","פרשנים"],
           tableRows:[...allRows],
+          sourceIds:[...allSourceIds], // ← שלב 1 של ד': מזהים קבועים
           batchSummaries:[...batchSummaries],
           completedBatches:completed,
           totalBatches:batches.length,
@@ -785,6 +853,7 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
       hasTable:true,
       tableHeaders:["יחידה","בסיס טקסטואלי","נושא הממצא","פרשנים"],
       tableRows:allRows,
+      sourceIds:allSourceIds, // ← שלב 1 של ד': מזהים קבועים
       batchSummaries,
       completedBatches,
       totalBatches:batches.length,
@@ -1126,8 +1195,9 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                             {meta.indicatorIndices.map(idx=>{
                                               const r=s3rows[idx-1];
                                               if(!r) return (<tr key={idx}><td colSpan={5} style={{color:"#ef4444",padding:"4px 8px"}}>⚠ אינדיקטור #{idx} לא נמצא בשלב 3</td></tr>);
+                                              const sidInfo=(stageData.stage3&&stageData.stage3.sourceIds&&stageData.stage3.sourceIds[idx-1])||null;
                                               return (<tr key={idx} style={{borderBottom:"1px solid #1e293b"}}>
-                                                <td style={{color:"#64748b",padding:"4px 8px",verticalAlign:"top"}}>{idx}</td>
+                                                <td style={{color:"#64748b",padding:"4px 8px",verticalAlign:"top"}} title={sidInfo?`${sidInfo.label} (${sidInfo.sid})`:"אין מזהה"}>{idx}{sidInfo?<sup style={{color:"#3b82f6",fontSize:"8px",marginRight:"3px"}}>✓</sup>:""}</td>
                                                 <td style={{color:"#cbd5e1",padding:"4px 8px",verticalAlign:"top",fontWeight:"600"}}>{r[0]||""}</td>
                                                 <td style={{color:"#cbd5e1",padding:"4px 8px",verticalAlign:"top"}}>{r[1]||""}</td>
                                                 <td style={{color:"#94a3b8",padding:"4px 8px",verticalAlign:"top"}}>{r[2]||""}</td>
