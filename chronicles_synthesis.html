@@ -6,6 +6,22 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBGFYQ5KQciHGqlsSqFW8F1-CLI6O-C9ys",
+      authDomain: "divrei-hayamim.firebaseapp.com",
+      databaseURL: "https://divrei-hayamim-default-rtdb.firebaseio.com",
+      projectId: "divrei-hayamim",
+      storageBucket: "divrei-hayamim.firebasestorage.app",
+      messagingSenderId: "102317276528",
+      appId: "1:102317276528:web:4b121eec9e51f5a0c263b5"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+  </script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:"Segoe UI",Arial,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;}
@@ -85,6 +101,47 @@ const SEMANTIC_FALLBACK={
 function LS_get(k,def){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):def;}catch{return def;} }
 function LS_set(k,v){ try{localStorage.setItem(k,JSON.stringify(v));}catch(e){console.warn("LS save failed",e);} }
 
+// ── Firebase ─────────────────────────────────────────────────────────────
+// הכלי האנליטי שומר ב-"research2" (sharded + lz-string). הסינתזה קוראת משם ל-raw,
+// ושומרת את תוצאות השלבים ב-"synthesis_v1" הנפרד (בלי להתנגש עם האנליטי).
+const FB_RESEARCH_PATH = "research2";
+const FB_SYNTH_PATH    = "synthesis_v1";
+const PER_UNIT_KEYS = ["analysis","analysis_chronicles","analysis_source","unitSummary","compareNotes","compareFactual","commentary"];
+
+function __packJson(data){ const s=JSON.stringify(data); try{ return (window.LZString)?("z:"+LZString.compressToBase64(s)):s; }catch(e){ return s; } }
+function __unpackJson(str){ if(str==null) return null; try{ if(typeof str==="string" && str.slice(0,2)==="z:" && window.LZString){ const d=LZString.decompressFromBase64(str.slice(2)); if(d) return JSON.parse(d); } }catch(e){} try{ return JSON.parse(str); }catch{ return null; } }
+function __unshard(sh){ if(!sh) return null; const data=__unpackJson(sh.meta)||{}; for(const k of PER_UNIT_KEYS){ if(data[k]===undefined) data[k]={}; } const u=sh.u||{}; for(const uid of Object.keys(u)){ const slice=__unpackJson(u[uid])||{}; for(const k of PER_UNIT_KEYS){ if(slice[k]!==undefined) data[k][uid]=slice[k]; } } return data; }
+
+// טעינת המחקר (raw) מהכלי האנליטי. מחזיר null אם אין נתונים או שגיאה.
+function fbLoadResearch(cb){
+  db.ref(FB_RESEARCH_PATH).once("value").then(snap=>{
+    const sh=snap.val();
+    if(sh && (sh.meta || (sh.u && Object.keys(sh.u||{}).length))){ cb(__unshard(sh)); return; }
+    cb(null);
+  }).catch(e=>{ console.error("fbLoadResearch",e); cb(null); });
+}
+
+// טעינת תוצאות הסינתזה
+function fbLoadStageResults(cb){
+  db.ref(FB_SYNTH_PATH+"/stageResults").once("value").then(snap=>{
+    const v=snap.val();
+    if(!v){ cb({}); return; }
+    const parsed=__unpackJson(v); cb(parsed||{});
+  }).catch(e=>{ console.error("fbLoadStageResults",e); cb({}); });
+}
+
+// שמירה דחויה (debounced) כדי לא להציף את Firebase
+let _synthSaveTimer=null, _synthSavePending=null;
+function fbSaveStageResults(stageResults){
+  _synthSavePending=stageResults;
+  if(_synthSaveTimer) clearTimeout(_synthSaveTimer);
+  _synthSaveTimer=setTimeout(()=>{
+    const payload=__packJson(_synthSavePending);
+    db.ref(FB_SYNTH_PATH+"/stageResults").set(payload).catch(e=>console.error("fbSaveStageResults",e));
+    _synthSavePending=null; _synthSaveTimer=null;
+  },800);
+}
+
 function parseCh(u){
   try{ const p=String(u.chapter||"").split("_"); return [parseInt(p[0]||"999",10),parseInt(p[1]||"999",10)]; }
   catch{ return [999,999]; }
@@ -136,8 +193,10 @@ function getUnitSummary(uid,raw){
 // ═══════════════════════════════════════════════════════════════════════
 // ── מסך 1: ברוך הבא / העלאת גיבוי ──────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
-function WelcomeScreen({onBackupLoaded,hasBackup,hasApiKey,onOpenApiKey,backupStats}){
+function WelcomeScreen({onBackupLoaded,hasBackup,hasApiKey,onOpenApiKey,backupStats,fbStatus,rawSource,onDownloadSynth,onUploadSynth}){
   const fileRef=useRef(null);
+  const synthRef=useRef(null);
+  const [showFallback,setShowFallback]=useState(false);
   function handleFile(e){
     const f=e.target.files&&e.target.files[0]; if(!f) return;
     const reader=new FileReader();
@@ -147,6 +206,7 @@ function WelcomeScreen({onBackupLoaded,hasBackup,hasApiKey,onOpenApiKey,backupSt
     };
     reader.readAsText(f);
   }
+  const fromFirebase = hasBackup && rawSource==="firebase";
   return(
     <div style={{maxWidth:"880px",margin:"0 auto",padding:"38px 20px"}}>
       <div style={{textAlign:"center",marginBottom:"34px"}}>
@@ -154,24 +214,42 @@ function WelcomeScreen({onBackupLoaded,hasBackup,hasApiKey,onOpenApiKey,backupSt
         <div style={{fontSize:"15px",color:"#94a3b8",lineHeight:"1.7"}}>סינתזה פרקית של מושגים לרוחב יחידות דוד/שלמה בדברי הימים<br/>7 שלבים מדורגים לכל מושג, בהתאם למתודולוגיה שבנינו</div>
       </div>
 
-      {/* תיבת העלאת גיבוי */}
-      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",border:`1px solid ${hasBackup?"#34d399":"#334155"}`,marginBottom:"18px"}}>
+      {/* תיבת מקור הנתונים — Firebase או קובץ */}
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",border:`1px solid ${hasBackup?"#34d399":(fbStatus==="loading"?"#fbbf24":"#334155")}`,marginBottom:"18px"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"10px"}}>
           <div>
-            <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>📥 1. גיבוי מהכלי האנליטי</div>
-            <div style={{fontSize:"12px",color:"#94a3b8"}}>העלי קובץ JSON מהכלי האנליטי (הגיבוי מכיל את כל המסקנות, הפרמטרים והטקסטים)</div>
+            <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>🔥 1. נתוני המחקר</div>
+            <div style={{fontSize:"12px",color:"#94a3b8"}}>
+              {fbStatus==="loading" && "מתחבר ל-Firebase וטוען את הנתונים מהכלי האנליטי..."}
+              {fbStatus==="loaded" && fromFirebase && "הנתונים נטענו אוטומטית מ-Firebase. אין צורך להעלות גיבוי."}
+              {fbStatus==="loaded" && !fromFirebase && "משתמשת בגיבוי מקומי. Firebase נטען גם — אפשר להסתמך עליו."}
+              {fbStatus==="empty" && "ה-Firebase ריק. העלי גיבוי JSON מהכלי האנליטי."}
+              {fbStatus==="error" && "שגיאה בחיבור ל-Firebase. העלי גיבוי JSON כגיבוי זמני."}
+            </div>
           </div>
-          <span style={{fontSize:"24px",color:hasBackup?"#34d399":"#475569"}}>{hasBackup?"✓":"○"}</span>
+          <span style={{fontSize:"24px",color:hasBackup?"#34d399":(fbStatus==="loading"?"#fbbf24":"#475569")}}>{hasBackup?"✓":(fbStatus==="loading"?"⏳":"○")}</span>
         </div>
-        <input ref={fileRef} type="file" accept=".json" onChange={handleFile} style={{display:"none"}}/>
-        <button onClick={()=>fileRef.current.click()} style={{padding:"10px 18px",borderRadius:"8px",border:"none",cursor:"pointer",background:hasBackup?"#065f46":"#818cf8",color:"white",fontSize:"13px",fontWeight:"700"}}>
-          {hasBackup?"🔄 החלף גיבוי":"📂 בחרי קובץ JSON"}
-        </button>
         {hasBackup&&backupStats&&(
-          <div style={{marginTop:"12px",fontSize:"11px",color:"#94a3b8",lineHeight:"1.7"}}>
-            <strong style={{color:"#34d399"}}>גיבוי נטען:</strong> {backupStats.units} יחידות ({backupStats.davidCount} דוד, {backupStats.solomonCount} שלמה), {backupStats.notes} מסקנות מחקריות, {backupStats.concepts} מושגים
+          <div style={{marginTop:"8px",fontSize:"11px",color:"#94a3b8",lineHeight:"1.7"}}>
+            <strong style={{color:"#34d399"}}>נטען:</strong> {backupStats.units} יחידות ({backupStats.davidCount} דוד, {backupStats.solomonCount} שלמה), {backupStats.notes} מסקנות מחקריות, {backupStats.concepts} מושגים
+            {fromFirebase && <span style={{color:"#64748b"}}> — מקור: Firebase (מתעדכן אוטומטית מהכלי האנליטי)</span>}
           </div>
         )}
+
+        {/* אפשרות החלפה — מוסתרת כברירת מחדל כאשר Firebase עובד */}
+        <div style={{marginTop:"14px"}}>
+          <input ref={fileRef} type="file" accept=".json" onChange={handleFile} style={{display:"none"}}/>
+          {!showFallback && fbStatus==="loaded" && fromFirebase && (
+            <button onClick={()=>setShowFallback(true)} style={{padding:"6px 10px",borderRadius:"6px",border:"1px solid #334155",cursor:"pointer",background:"transparent",color:"#64748b",fontSize:"10px"}}>
+              החלפה בגיבוי מקומי (אופציונלי)
+            </button>
+          )}
+          {(showFallback || fbStatus==="empty" || fbStatus==="error" || (fbStatus==="loaded" && !fromFirebase)) && (
+            <button onClick={()=>fileRef.current.click()} style={{padding:"10px 18px",borderRadius:"8px",border:"none",cursor:"pointer",background:hasBackup?"#334155":"#818cf8",color:"white",fontSize:"13px",fontWeight:"700"}}>
+              {hasBackup?"🔄 החלף במקומי":"📂 העלאת גיבוי JSON"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* תיבת מפתח API */}
@@ -179,13 +257,26 @@ function WelcomeScreen({onBackupLoaded,hasBackup,hasApiKey,onOpenApiKey,backupSt
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"10px"}}>
           <div>
             <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>🔑 2. מפתח API של Anthropic</div>
-            <div style={{fontSize:"12px",color:"#94a3b8"}}>נדרש לשלבים 3-7 שמשתמשים ב-AI. הקוד שלך נשמר רק ב-localStorage של הדפדפן, לא עובר לשום שרת אחר</div>
+            <div style={{fontSize:"12px",color:"#94a3b8"}}>נדרש לשלבים 3-7 שמשתמשים ב-AI. נשמר אוטומטית ולא תצטרכי להזין שוב</div>
           </div>
           <span style={{fontSize:"24px",color:hasApiKey?"#34d399":"#475569"}}>{hasApiKey?"✓":"○"}</span>
         </div>
         <button onClick={onOpenApiKey} style={{padding:"10px 18px",borderRadius:"8px",border:"none",cursor:"pointer",background:hasApiKey?"#065f46":"#818cf8",color:"white",fontSize:"13px",fontWeight:"700"}}>
           {hasApiKey?"🔄 שנה מפתח":"🔑 הזן מפתח"}
         </button>
+      </div>
+
+      {/* תיבת גיבוי ושחזור של עבודת הסינתזה */}
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",border:"1px solid #334155",marginBottom:"18px"}}>
+        <div style={{marginBottom:"10px"}}>
+          <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>💾 3. גיבוי עבודת הסינתזה</div>
+          <div style={{fontSize:"12px",color:"#94a3b8"}}>תוצאות השלבים נשמרות אוטומטית ב-Firebase (ו-localStorage כמטמון). הורדת גיבוי מקומי אופציונלית כגיבוי כפול</div>
+        </div>
+        <input ref={synthRef} type="file" accept=".json" onChange={onUploadSynth} style={{display:"none"}}/>
+        <div style={{display:"flex",gap:"8px"}}>
+          <button onClick={onDownloadSynth} style={{padding:"10px 16px",borderRadius:"8px",border:"none",cursor:"pointer",background:"#818cf8",color:"white",fontSize:"12px",fontWeight:"700"}}>📥 הורד גיבוי</button>
+          <button onClick={()=>synthRef.current.click()} style={{padding:"10px 16px",borderRadius:"8px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"12px",fontWeight:"700"}}>📤 שחזר מגיבוי</button>
+        </div>
       </div>
 
       {/* הסבר על הכלי */}
@@ -337,6 +428,7 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector}){
     const all=LS_get("stageResults",{});
     all[resultsKey]={...newData,lastUpdated:Date.now()};
     LS_set("stageResults",all);
+    fbSaveStageResults(all); // סנכרון ל-Firebase (debounced 800ms)
   }
 
   const dimLabel=(DIMS.find(d=>d.id===dimId)||{}).label||dimId;
@@ -707,15 +799,68 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
 // ═══════════════════════════════════════════════════════════════════════
 function App(){
   const [screen,setScreen]=useState("home");
-  const [raw,setRaw]=useState(()=>LS_get("backupData",null));
-  const [backupName,setBackupName]=useState(()=>LS_get("backupName",""));
+  // ה-raw נטען אוטומטית מ-Firebase מהכלי האנליטי (אין צורך להעלות גיבוי).
+  // גיבוי JSON מהמחשב נשאר כאופציה חלופית.
+  const [raw,setRaw]=useState(null);
+  const [rawSource,setRawSource]=useState(""); // "firebase" | "file" | ""
+  const [fbStatus,setFbStatus]=useState("loading"); // "loading" | "loaded" | "empty" | "error"
   const [apiKey,setApiKey]=useState(()=>LS_get("apiKey",""));
   const [showApiModal,setShowApiModal]=useState(false);
   const [selection,setSelection]=useState(null);
 
+  // טעינה חד-פעמית מ-Firebase: גם ה-raw (research2) וגם תוצאות הסינתזה (synthesis_v1).
+  useEffect(()=>{
+    fbLoadResearch(data=>{
+      if(data){
+        setRaw(data);
+        setRawSource("firebase");
+        setFbStatus("loaded");
+      }else{
+        setFbStatus("empty");
+      }
+    });
+    fbLoadStageResults(sr=>{
+      // Firebase הוא המקור הסמכותי; מעתיק ל-LS כמטמון לקריאה מהירה בכלי.
+      if(sr && Object.keys(sr).length){ LS_set("stageResults",sr); }
+    });
+  },[]);
+
   function handleBackup(data,name){
-    setRaw(data); setBackupName(name);
-    LS_set("backupData",data); LS_set("backupName",name);
+    // העלאת גיבוי מקומי (fallback) — דורס את מה שהגיע מ-Firebase.
+    setRaw(data);
+    setRawSource("file");
+  }
+
+  // גיבוי ושחזור של עבודת הסינתזה — נשארים כאופציה למשתמשת (למקרה שצריך קובץ חיצוני).
+  function downloadSynthBackup(){
+    const stageResults=LS_get("stageResults",{});
+    const payload={
+      version:"synthesis-v1",
+      exportedAt:new Date().toISOString(),
+      stageResults:stageResults,
+    };
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`synthesis_backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+  }
+  function uploadSynthBackup(e){
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    const r=new FileReader();
+    r.onload=ev=>{
+      try{
+        const data=JSON.parse(ev.target.result);
+        if(!data.stageResults){ alert("קובץ לא תקין — לא נמצא stageResults"); return; }
+        const current=LS_get("stageResults",{});
+        const merged={...current,...data.stageResults};
+        LS_set("stageResults",merged);
+        fbSaveStageResults(merged); // סנכרון מיידי ל-Firebase
+        alert(`✓ שוחזרו ${Object.keys(data.stageResults).length} מושגים (סה"כ כעת: ${Object.keys(merged).length}). סונכרן ל-Firebase.`);
+        e.target.value=""; // reset
+      }catch(err){ alert("שגיאה בטעינה: "+err.message); }
+    };
+    r.readAsText(f);
   }
 
   function handleApiKey(key){
@@ -751,14 +896,18 @@ function App(){
           )}
         </div>
         <div style={{display:"flex",gap:"8px",alignItems:"center",fontSize:"10px"}}>
-          <span style={{color:raw?"#34d399":"#64748b"}}>📥 {raw?"גיבוי":"אין גיבוי"}</span>
+          <span style={{color:fbStatus==="loading"?"#fbbf24":(fbStatus==="loaded"?"#34d399":(fbStatus==="empty"?"#94a3b8":"#f87171"))}}>
+            🔥 {fbStatus==="loading"?"מתחבר...":(fbStatus==="loaded"?"Firebase":(fbStatus==="empty"?"ריק":"שגיאה"))}
+          </span>
+          <span style={{color:"#475569"}}>·</span>
+          <span style={{color:raw?"#34d399":"#64748b"}}>📥 {raw?(rawSource==="firebase"?"נתונים":"מקומי"):"ללא"}</span>
           <span style={{color:"#475569"}}>·</span>
           <span style={{color:apiKey?"#34d399":"#64748b",cursor:"pointer"}} onClick={()=>setShowApiModal(true)}>🔑 {apiKey?"API":"ללא מפתח"}</span>
         </div>
       </div>
 
       {/* תוכן */}
-      {screen==="home"&&<WelcomeScreen onBackupLoaded={handleBackup} hasBackup={!!raw} hasApiKey={!!apiKey} onOpenApiKey={()=>setShowApiModal(true)} backupStats={backupStats}/>}
+      {screen==="home"&&<WelcomeScreen onBackupLoaded={handleBackup} hasBackup={!!raw} hasApiKey={!!apiKey} onOpenApiKey={()=>setShowApiModal(true)} backupStats={backupStats} fbStatus={fbStatus} rawSource={rawSource} onDownloadSynth={downloadSynthBackup} onUploadSynth={uploadSynthBackup}/>}
       {screen==="home"&&canStart&&(
         <div style={{textAlign:"center",marginTop:"-20px",paddingBottom:"30px"}}>
           <button onClick={()=>setScreen("selector")} style={{padding:"14px 36px",borderRadius:"10px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"15px",fontWeight:"700"}}>
