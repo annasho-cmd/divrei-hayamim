@@ -415,20 +415,164 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector}){
     };
   }
 
+  // ─────── קריאה ישירה ל-Anthropic (בלי worker) ───────
+  async function aiCallDirect(prompt,maxTokens){
+    if(!apiKey) throw new Error("חסר מפתח API. הזן אותו דרך סמל ה-🔑 בסרגל העליון.");
+    const res=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "x-api-key":apiKey,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true"
+      },
+      body:JSON.stringify({
+        model:"claude-sonnet-4-5-20250929",
+        max_tokens:maxTokens,
+        messages:[{role:"user",content:prompt}]
+      })
+    });
+    if(!res.ok){
+      let errMsg=`שגיאת API (${res.status})`;
+      try{const d=await res.json(); if(d.error&&d.error.message) errMsg+=`: ${d.error.message}`;}catch{}
+      throw new Error(errMsg);
+    }
+    const data=await res.json();
+    if(!data.content||!data.content.length) throw new Error("תשובה ריקה מ-API");
+    if(data.stop_reason==="max_tokens") console.warn("aiCallDirect: תשובה נקטעה במגבלת max_tokens");
+    return data.content.map(b=>b.text||"").join("");
+  }
+
+  function parseJSON(text){
+    const clean=text.replace(/```json|```/g,"").trim();
+    try{ return JSON.parse(clean); }
+    catch(e){
+      // ניסיון לחלץ אובייקט שלם
+      const first=clean.indexOf("{"); const last=clean.lastIndexOf("}");
+      if(first>=0&&last>first){
+        try{ return JSON.parse(clean.substring(first,last+1)); }catch{}
+      }
+      throw new Error("התשובה אינה בפורמט JSON תקין: "+clean.substring(0,120));
+    }
+  }
+
+  // ─────── בניית בלוק נתונים ליחידה ───────
+  function buildUnitBlock(u){
+    const uid=String(u.id);
+    const ec=getEntry(uid,concept,"chronicles",raw)||{};
+    const params=validParams(getParams(concept,raw));
+    const foundParams=(ec.params||[]).map((p,i)=>({...p,def:params[i]})).filter(x=>x&&x.found===true);
+    const paramList=foundParams.map((p,i)=>`  פרמטר ${i+1} (${(p.def&&p.def.paramLabel)||""}): ${(p.def&&p.def.q)||""}${p.verse?` [פסוק ${p.verse}]`:""}`).join("\n");
+    const explicitNote=ec.explicit_note?`\nהערת שדה גלוי: ${ec.explicit_note}`:"";
+    const compareNote=getCompareNote(uid,concept,raw);
+    const sourceInfo=u.sourceRef?`מקבילה: ${u.sourceRef}`:"יחידת סונדרגוט";
+    return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### ${u.name||"?"} (${u.chapter||"?"}) — ${sourceInfo}
+
+טקסט דה"י: ${(u.chroniclesText||"—").substring(0,750)}
+${u.sourceText?`טקסט המקבילה: ${u.sourceText.substring(0,750)}`:""}
+
+אינדיקטורים חיוביים (${foundParams.length}):
+${paramList||"—"}${explicitNote}
+
+מסקנה מחקרית של הכותבת:
+${compareNote||"(טרם נכתבה)"}`;
+  }
+
+  // ─────── שלב 3: בסיס טקסטואלי + נושא ממצא, בפיצול לקבוצות ───────
+  async function runStage3(extra=""){
+    const isEternal=(concept==="נצח"||concept==="עולם");
+    const who=character==="solomon"?"שלמה":"דוד";
+    const units=collectRelevant();
+    const withIndic=[]; const notRelCount=[];
+    units.forEach(u=>{
+      const uid=String(u.id);
+      const s=getUnitSummary(uid,raw);
+      const nrList=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
+      if(nrList.includes(concept)){ notRelCount.push(u.name||u.label); return; }
+      const ec=getEntry(uid,concept,"chronicles",raw)||{};
+      const hasP=(ec.params||[]).some(p=>p&&p.found===true);
+      const hasE=!!(ec.explicit_note&&ec.explicit_note.trim());
+      if(hasP||hasE) withIndic.push(u);
+    });
+    if(!withIndic.length){
+      return{status:"אין נתונים",hasTable:false,
+        summary:`לא נמצאו יחידות עם אינדיקטורים חיוביים למושג "${concept}" ב${who}.`,
+        selfCheck:"אין נתונים לניתוח."};
+    }
+    const BATCH=8;
+    const batches=[];
+    for(let i=0;i<withIndic.length;i+=BATCH) batches.push(withIndic.slice(i,i+BATCH));
+    const allRows=[]; const batchSummaries=[];
+    for(let i=0;i<batches.length;i++){
+      setProgressNote(`עובד על קבוצה ${i+1}/${batches.length} (${batches[i].length} יחידות)...`);
+      const batch=batches[i];
+      const blocks=batch.map(buildUnitBlock).join("\n\n");
+      const batchInfo=batches.length>1?`\nזוהי קבוצה ${i+1} מתוך ${batches.length}. טפל רק ביחידות שבקבוצה הנוכחית.`:"";
+      const notRelMention=(i===0&&notRelCount.length)?`\n\nהערה: ${notRelCount.length} יחידות סומנו "לא רלוונטי" ואינן נכללות.`:"";
+      const eternalNote=isEternal?`\n\nהוראה: "${concept}" הוא פרמטר תחת "ברית". הסתמך רק על השדה הגלוי — הופעת המילים "נצח/לנצח/עולם/לעולם/לעולמים/עד עולם/לדור ודור". אין פרמטרים.`:"";
+      const prompt=`אתה עוזר מחקר לתזה בתנ"ך. אנו מנתחים את עיצוב המושג "${concept}" בדמות ${who} בכרוניסט.${batchInfo}
+
+שלב 3: בסיס טקסטואלי + נושא הממצא.
+
+לכל יחידה — קבע שני דברים:
+1. בסיס טקסטואלי: מה בפועל נאמר/קורה בטקסט שגרם לסימון
+2. נושא הממצא: מי נושא התופעה (4 קטגוריות אפשריות):
+   א) דוד עצמו — הפועל/האומר
+   ב) המספר בעיצוב דוד — תיאור/מסגור של המספר
+   ג) דמות אחרת ביחס לדוד — עמשי, יואב, בני יששכר, לויים וכו'
+   ד) הסביבה המלכותית — מערכת/מוסד/קבוצה סביב דוד
+
+כלל חמור: אל תייחס לדוד ממצא ששייך לדמות אחרת. "רוח לבשה את עמשי" → נושא הממצא עמשי. "יודעי בינה לעתים" → נושא הממצא בני יששכר.
+
+חובת ציטוט: לכל ממצא, צטט פרשן ועמוד מתוך המסקנה המחקרית. אסור להמציא. אם אין פרשן ציטטת — "—".${eternalNote}
+
+נתונים — ${batch.length} יחידות:
+
+${blocks}${notRelMention}
+
+${extra?`\nהנחיות נוספות: ${extra}\n`:""}
+
+החזר JSON בלבד (ללא markdown):
+{"tableRows":[["שם היחידה (פרק)","בסיס טקסטואלי קצר 2-3 משפטים","קטגוריית נושא + הסבר קצר","פרשן עמ' X; פרשן עמ' Y"]],"batchSummary":"סיכום 1-2 שורות של הקבוצה"}`;
+      const resp=await aiCallDirect(prompt,4000);
+      const parsed=parseJSON(resp);
+      (parsed.tableRows||[]).forEach(r=>allRows.push(r));
+      if(parsed.batchSummary) batchSummaries.push(parsed.batchSummary);
+    }
+    // ספירה גסה של נושאי ממצא
+    let cD=0,cN=0,cO=0,cE=0;
+    allRows.forEach(r=>{
+      const sub=((r[2]||"")+"").toLowerCase();
+      if(sub.includes("דוד עצמו")) cD++;
+      else if(sub.includes("מספר")) cN++;
+      else if(sub.includes("אחרת")) cO++;
+      else if(sub.includes("סביבה")) cE++;
+    });
+    return{
+      status:"מוכן לאישור",hasTable:true,
+      tableHeaders:["יחידה","בסיס טקסטואלי","נושא הממצא","פרשנים"],
+      tableRows:allRows,
+      summary:`${allRows.length} יחידות נותחו ב-${batches.length} קבוצות. התפלגות נושאי הממצא: ${cD} דוד עצמו, ${cN} המספר, ${cO} דמויות אחרות, ${cE} הסביבה המלכותית.${batchSummaries.length>1?" | סיכומי קבוצות: "+batchSummaries.join(" || "):""}`,
+      selfCheck:`בדיקה עצמית: 1) טופלו ${allRows.length} יחידות בפיצול לקבוצות של עד ${BATCH}. 2) בכל יחידה סווג נושא הממצא לאחת מ-4 קטגוריות. 3) האם אינדיקטורים ששייכים לדמויות אחרות (עמשי, בני יששכר, יואב, לויים) סווגו נכון ולא יוחסו לדוד? זו הבדיקה הקריטית — אם לא, לחצי "דחה והרץ שוב" עם הנחיות ממוקדות.`
+    };
+  }
+
   async function runStage(n,extra=""){
     setLoading(true); setProgressNote("");
     try{
       let result;
       if(n===1) result=runStage1();
       else if(n===2) result=runStage2();
+      else if(n===3) result=await runStage3(extra);
       else {
-        // שלבים 3-7 — יבואו בסבבים הבאים
+        // שלבים 4-7 — יבואו בסבבים הבאים
         await new Promise(r=>setTimeout(r,500));
         result={
           status:"בפיתוח",hasTable:true,
           tableHeaders:["עמודה 1","עמודה 2","עמודה 3"],
           tableRows:[["שלב "+n,"יתווסף בסבב הבא","—"]],
-          summary:`שלב ${n} (${STAGE_LABELS[n]}) — טרם נבנה. סבב הבנייה הבא יוסיף את הקריאה ל-AI.`,
+          summary:`שלב ${n} (${STAGE_LABELS[n]}) — טרם נבנה. סבב בנייה הבא יוסיף אותו.`,
           selfCheck:"בפיתוח."
         };
       }
