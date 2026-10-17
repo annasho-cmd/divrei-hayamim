@@ -498,7 +498,7 @@ function ConceptSelector({raw,onPick,onPickDimension,onBackHome,stageResults}){
 // ═══════════════════════════════════════════════════════════════════════
 // ── מסך שלב ד' — ברמת ממד (מלך × ממד) ─────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
-function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults}){
+function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,setStageResults}){
   const dim=DIMS.find(d=>d.id===dimId)||{};
   const dimLabel=dim.label||dimId;
   const dimColor=dim.color||"#818cf8";
@@ -510,6 +510,7 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults})
     const findings=[]; // רשימה שטוחה של כל האינדיקטורים
     const perConcept={}; // {concept: {total, hasSourceIds, missingSourceIds}}
     const unitGroups={}; // {unitName: [sourceIds]}
+    const unitByConcept={}; // {unitName: {concept: count}} — לדוח כפילות ברמת יחידה
     const verseGroups={}; // {verses: [sourceIds]} למועמדי כפילות
     const missingConcepts=[]; // מושגים ללא stage3 גמור
 
@@ -542,6 +543,9 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults})
         // קיבוץ לפי יחידה
         if(!unitGroups[unit]) unitGroups[unit]=[];
         unitGroups[unit].push(finding.sid);
+        // מעקב מושג-ליחידה (לדוח כפילות ברמת יחידה)
+        if(!unitByConcept[unit]) unitByConcept[unit]={};
+        unitByConcept[unit][c]=(unitByConcept[unit][c]||0)+1;
         // קיבוץ לפי basis דומה (כפילות טכנית - אותו טקסט)
         const basisKey=basis.trim().slice(0,80);
         if(basisKey.length>20){
@@ -563,15 +567,48 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults})
         duplicateCandidates.push({basis,sids,count:sids.length});
       }
     });
+    // דוח יחידות שחוזרות במספר מושגים (unit-level cross-concept)
+    const unitRepeats=Object.entries(unitByConcept)
+      .map(([unit,byC])=>({unit,concepts:Object.keys(byC),totalIndicators:Object.values(byC).reduce((a,b)=>a+b,0)}))
+      .filter(x=>x.concepts.length>1)
+      .sort((a,b)=>b.concepts.length-a.concepts.length||b.totalIndicators-a.totalIndicators);
+    const unitsInOneConcept=Object.keys(unitByConcept).filter(u=>Object.keys(unitByConcept[u]).length===1).length;
     const uniqueUnits=Object.keys(unitGroups).length;
     return {
       findings,perConcept,unitGroups,duplicateCandidates,missingConcepts,
+      unitRepeats,unitsInOneConcept,
       uniqueUnits,totalFindings:findings.length,
       totalMissingSids:findings.filter(f=>f.sid.startsWith("tmp_")).length
     };
   },[character,dimId,stageResults]);
 
   const canProceed=ingest.missingConcepts.length===0&&ingest.totalMissingSids===0;
+
+  // ─ מיגרציית מזהים חסרים בבת אחת לכל הממד ─
+  function migrateAllMissingIds(){
+    const current=stageResults||LS_get("stageResults",{});
+    const updated={...current};
+    let changedConcepts=0, totalRows=0;
+    concepts.forEach(c=>{
+      const key=`${character}__${dimId}__${c}`;
+      const sd=current[key];
+      if(!sd||!sd.stage3||!Array.isArray(sd.stage3.tableRows)) return;
+      const migrated=ensureSourceIds(sd.stage3,c);
+      if(migrated!==sd.stage3){
+        updated[key]={...sd,stage3:migrated,lastUpdated:Date.now()};
+        changedConcepts++;
+        totalRows+=sd.stage3.tableRows.length;
+      }
+    });
+    if(changedConcepts>0){
+      if(setStageResults) setStageResults(updated);
+      LS_set("stageResults",updated);
+      fbSaveStageResults(updated);
+      alert(`✓ נוצרו מזהים ל-${totalRows} אינדיקטורים ב-${changedConcepts} מושגים. נשמרו ב-Firebase.`);
+    }else{
+      alert("אין צורך — כל המושגים כבר כוללים מזהים.");
+    }
+  }
 
   return(
     <div style={{maxWidth:"1100px",margin:"0 auto",padding:"20px 16px"}}>
@@ -603,8 +640,9 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults})
           </div>
         )}
         {ingest.totalMissingSids>0&&(
-          <div style={{marginTop:"10px",padding:"10px 12px",background:"#7f1d1d22",border:"1px solid #ef4444",borderRadius:"6px",fontSize:"11px",color:"#fca5a5"}}>
-            ⚠ {ingest.totalMissingSids} אינדיקטורים ללא מזהה קבוע. נסי לפתוח את המושגים הרלוונטיים לאחור — המיגרציה תפעל אוטומטית.
+          <div style={{marginTop:"10px",padding:"10px 12px",background:"#7f1d1d22",border:"1px solid #ef4444",borderRadius:"6px",fontSize:"11px",color:"#fca5a5",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px",flexWrap:"wrap"}}>
+            <span>⚠ {ingest.totalMissingSids} אינדיקטורים ללא מזהה קבוע. אפשר לפתוח כל מושג ידנית, או ללחוץ כאן →</span>
+            <button onClick={migrateAllMissingIds} style={{padding:"6px 12px",borderRadius:"6px",border:"none",cursor:"pointer",background:"#f59e0b",color:"white",fontSize:"11px",fontWeight:"700"}}>🔧 יצור מזהים חסרים</button>
           </div>
         )}
       </div>
@@ -634,7 +672,42 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults})
         </table>
       </div>
 
-      {/* מועמדי כפילות (אם יש) */}
+      {/* יחידות שחוזרות בכמה מושגים (הכפילות המחקרית האמיתית) */}
+      {ingest.unitRepeats.length>0&&(
+        <div style={{padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`1px solid ${dimColor}44`,marginBottom:"18px"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"4px"}}>
+            🔗 יחידות חוזרות בכמה מושגים ({ingest.unitRepeats.length} יחידות מתוך {ingest.uniqueUnits})
+          </div>
+          <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"12px",lineHeight:"1.6"}}>
+            זהו הגרעין המחקרי של ד'1 — כל יחידה כזו תעובד כקבוצת-מנה אחת, שבה ה-AI מקבל את כל האינדיקטורים שלה מכל המושגים כדי לזהות תופעות משותפות. {ingest.unitsInOneConcept} יחידות נוספות מופיעות רק במושג אחד.
+          </div>
+          <div style={{maxHeight:"400px",overflowY:"auto"}}>
+            <table style={{fontSize:"11px",width:"100%"}}>
+              <thead><tr style={{background:"#0f172a",position:"sticky",top:0}}>
+                <th style={{textAlign:"right",color:dimColor,padding:"6px 10px"}}>יחידה</th>
+                <th style={{textAlign:"right",color:dimColor,padding:"6px 10px",width:"80px"}}>במושגים</th>
+                <th style={{textAlign:"right",color:dimColor,padding:"6px 10px",width:"80px"}}>אינדיקטורים</th>
+                <th style={{textAlign:"right",color:dimColor,padding:"6px 10px"}}>מושגים</th>
+              </tr></thead>
+              <tbody>
+                {ingest.unitRepeats.map((ur,i)=>(
+                  <tr key={i} style={{borderBottom:"1px solid #334155"}}>
+                    <td style={{color:"#cbd5e1",padding:"5px 10px",fontWeight:"600"}}>{ur.unit}</td>
+                    <td style={{color:ur.concepts.length>=5?"#34d399":"#cbd5e1",padding:"5px 10px",fontWeight:"700"}}>{ur.concepts.length}</td>
+                    <td style={{color:"#94a3b8",padding:"5px 10px"}}>{ur.totalIndicators}</td>
+                    <td style={{color:"#94a3b8",padding:"5px 10px",fontSize:"10px"}}>{ur.concepts.join(", ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:"10px",fontSize:"10px",color:"#64748b"}}>
+            💡 יחידה המופיעה ב-5+ מושגים — מודגשת בירוק. אלו הן היחידות ה"עשירות" ביותר, הסביר שה-AI יזהה בהן תופעה משותפת חזקה.
+          </div>
+        </div>
+      )}
+
+      {/* מועמדי כפילות טקסט (אם יש) */}
       {ingest.duplicateCandidates.length>0&&(
         <div style={{padding:"14px 18px",background:"#78350f22",borderRadius:"10px",border:"1px solid #fbbf2466",marginBottom:"18px"}}>
           <div style={{fontSize:"13px",fontWeight:"700",color:"#fcd34d",marginBottom:"8px"}}>⚠ מועמדי כפילות טכנית ({ingest.duplicateCandidates.length}) — אותו טקסט מופיע ביותר ממזהה אחד</div>
@@ -1666,7 +1739,7 @@ function App(){
         onPickDimension={sel=>{setSelection(sel);setScreen("dim4");}}
         onBackHome={()=>setScreen("home")} stageResults={stageResults}/>}
       {screen==="analyze"&&selection&&selection.concept&&<AnalysisScreen raw={raw} character={selection.character} dimId={selection.dimId} concept={selection.concept} apiKey={apiKey} onBackToSelector={()=>setScreen("selector")} stageResults={stageResults} setStageResults={setStageResults}/>}
-      {screen==="dim4"&&selection&&<DimensionStage4Screen raw={raw} character={selection.character} dimId={selection.dimId} apiKey={apiKey} onBack={()=>setScreen("selector")} stageResults={stageResults}/>}
+      {screen==="dim4"&&selection&&<DimensionStage4Screen raw={raw} character={selection.character} dimId={selection.dimId} apiKey={apiKey} onBack={()=>setScreen("selector")} stageResults={stageResults} setStageResults={setStageResults}/>}
 
       {showApiModal&&<ApiKeyModal currentKey={apiKey} onSave={handleApiKey} onClose={()=>setShowApiModal(false)}/>}
     </div>
