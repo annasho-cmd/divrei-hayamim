@@ -317,7 +317,7 @@ function ApiKeyModal({currentKey,onSave,onClose}){
 // ═══════════════════════════════════════════════════════════════════════
 // ── מסך בחירת מושג ─────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
-function ConceptSelector({raw,onPick,onBackHome}){
+function ConceptSelector({raw,onPick,onBackHome,stageResults}){
   const [character,setCharacter]=useState(null);
   const [dimId,setDimId]=useState(null);
   const [concept,setConcept]=useState(null);
@@ -325,7 +325,7 @@ function ConceptSelector({raw,onPick,onBackHome}){
   const concepts=dimId?(DIMS.find(d=>d.id===dimId)||{}).concepts||[]:[];
 
   function getConceptStats(name){
-    const results=LS_get("stageResults",{});
+    const results=stageResults||{};
     const key=`${character}__${dimId}__${name}`;
     const r=results[key];
     if(!r||!r.approvedStages) return 0;
@@ -410,11 +410,18 @@ function ConceptSelector({raw,onPick,onBackHome}){
 // ═══════════════════════════════════════════════════════════════════════
 // ── מסך ניתוח המושג — 7 שלבים ─────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
-function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector}){
+function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,stageResults,setStageResults}){
   const resultsKey=`${character}__${dimId}__${concept}`;
   const [stageData,setStageData]=useState(()=>{
-    const all=LS_get("stageResults",{}); return all[resultsKey]||{approvedStages:[]};
+    const all=stageResults||LS_get("stageResults",{}); return all[resultsKey]||{approvedStages:[]};
   });
+  // סנכרון חוזר כש-stageResults מתעדכן ברמת האפליקציה (למשל אחרי טעינת Firebase)
+  useEffect(()=>{
+    const r=(stageResults||{})[resultsKey];
+    if(r && r.lastUpdated !== stageData.lastUpdated){
+      setStageData(r);
+    }
+  },[stageResults,resultsKey]);
   const [currentStage,setCurrentStage]=useState(()=>{
     const sd=stageData;
     const approved=sd.approvedStages||[];
@@ -425,10 +432,11 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector}){
 
   function saveNow(newData){
     setStageData(newData);
-    const all=LS_get("stageResults",{});
-    all[resultsKey]={...newData,lastUpdated:Date.now()};
-    LS_set("stageResults",all);
-    fbSaveStageResults(all); // סנכרון ל-Firebase (debounced 800ms)
+    const current=stageResults||LS_get("stageResults",{});
+    const all={...current,[resultsKey]:{...newData,lastUpdated:Date.now()}};
+    if(setStageResults) setStageResults(all); // סנכרון ל-React state (האפליקציה)
+    LS_set("stageResults",all);                 // סנכרון למטמון מקומי
+    fbSaveStageResults(all);                     // סנכרון ל-Firebase (debounced 800ms)
   }
 
   const dimLabel=(DIMS.find(d=>d.id===dimId)||{}).label||dimId;
@@ -856,12 +864,18 @@ function App(){
   const [raw,setRaw]=useState(null);
   const [rawSource,setRawSource]=useState(""); // "firebase" | "file" | ""
   const [fbStatus,setFbStatus]=useState("loading"); // "loading" | "loaded" | "empty" | "error"
+  // stageResults — מקור האמת לתוצאות השלבים (נטען מ-Firebase, נמשך ללוקאל ולפיירבייס בכל שמירה)
+  const [stageResults,setStageResults]=useState(()=>LS_get("stageResults",{}));
+  // bootDone — דגל שחוסם את הכניסה לניתוח עד שהטעינה מ-Firebase הסתיימה
+  const [bootDone,setBootDone]=useState(false);
   const [apiKey,setApiKey]=useState(()=>LS_get("apiKey",""));
   const [showApiModal,setShowApiModal]=useState(false);
   const [selection,setSelection]=useState(null);
 
   // טעינה חד-פעמית מ-Firebase: גם ה-raw (research2) וגם תוצאות הסינתזה (synthesis_v1).
   useEffect(()=>{
+    let rawDone=false, srDone=false;
+    const check=()=>{ if(rawDone&&srDone) setBootDone(true); };
     fbLoadResearch(data=>{
       if(data){
         setRaw(data);
@@ -870,10 +884,15 @@ function App(){
       }else{
         setFbStatus("empty");
       }
+      rawDone=true; check();
     });
     fbLoadStageResults(sr=>{
-      // Firebase הוא המקור הסמכותי; מעתיק ל-LS כמטמון לקריאה מהירה בכלי.
-      if(sr && Object.keys(sr).length){ LS_set("stageResults",sr); }
+      // Firebase הוא המקור הסמכותי; מעדכן את ה-React state ואת ה-LS כמטמון מקומי.
+      if(sr && Object.keys(sr).length){
+        LS_set("stageResults",sr);
+        setStageResults(sr);
+      }
+      srDone=true; check();
     });
   },[]);
 
@@ -960,15 +979,25 @@ function App(){
 
       {/* תוכן */}
       {screen==="home"&&<WelcomeScreen onBackupLoaded={handleBackup} hasBackup={!!raw} hasApiKey={!!apiKey} onOpenApiKey={()=>setShowApiModal(true)} backupStats={backupStats} fbStatus={fbStatus} rawSource={rawSource} onDownloadSynth={downloadSynthBackup} onUploadSynth={uploadSynthBackup}/>}
-      {screen==="home"&&canStart&&(
+      {screen==="home"&&canStart&&bootDone&&(
         <div style={{textAlign:"center",marginTop:"-20px",paddingBottom:"30px"}}>
           <button onClick={()=>setScreen("selector")} style={{padding:"14px 36px",borderRadius:"10px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"15px",fontWeight:"700"}}>
             🚀 התחלת ניתוח
           </button>
+          <div style={{marginTop:"10px",fontSize:"11px",color:"#64748b"}}>
+            {Object.keys(stageResults).length>0 ? `✓ נטענו ${Object.keys(stageResults).length} מושגים עם תוצאות שלבים מ-Firebase` : "ללא תוצאות שלבים שמורות — נתחיל מאפס"}
+          </div>
         </div>
       )}
-      {screen==="selector"&&raw&&<ConceptSelector raw={raw} onPick={sel=>{setSelection(sel);setScreen("analyze");}} onBackHome={()=>setScreen("home")}/>}
-      {screen==="analyze"&&selection&&<AnalysisScreen raw={raw} character={selection.character} dimId={selection.dimId} concept={selection.concept} apiKey={apiKey} onBackToSelector={()=>setScreen("selector")}/>}
+      {screen==="home"&&canStart&&!bootDone&&(
+        <div style={{textAlign:"center",marginTop:"-20px",paddingBottom:"30px"}}>
+          <div className="pulse" style={{display:"inline-block",padding:"12px 30px",borderRadius:"10px",background:"#334155",color:"#cbd5e1",fontSize:"14px"}}>
+            ⏳ טוען תוצאות שלבים מ-Firebase... (יתעדכן לכפתור ברגע שנסיים)
+          </div>
+        </div>
+      )}
+      {screen==="selector"&&raw&&<ConceptSelector raw={raw} onPick={sel=>{setSelection(sel);setScreen("analyze");}} onBackHome={()=>setScreen("home")} stageResults={stageResults}/>}
+      {screen==="analyze"&&selection&&<AnalysisScreen raw={raw} character={selection.character} dimId={selection.dimId} concept={selection.concept} apiKey={apiKey} onBackToSelector={()=>setScreen("selector")} stageResults={stageResults} setStageResults={setStageResults}/>}
 
       {showApiModal&&<ApiKeyModal currentKey={apiKey} onSave={handleApiKey} onClose={()=>setShowApiModal(false)}/>}
     </div>
