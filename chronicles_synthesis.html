@@ -1638,6 +1638,12 @@ ${indicatorsBlock}
           validatedByCode:validation.valid,
           validationReport:validation
         };
+        // גיבוי אוטומטי של ai_proposal הקיים לפני דריסה — שומר את גרסאות ה-AI הקודמות
+        const existingAi=localState[uid]&&localState[uid].ai_proposal;
+        if(existingAi&&existingAi.promptVersion&&existingAi.promptVersion!==PROMPT_VERSION_D1){
+          await fbSaveStage4Unit(characterDimKey,uid,"previous_ai_proposal",existingAi);
+          localState[uid]={...(localState[uid]||{}),previous_ai_proposal:existingAi};
+        }
         await fbSaveStage4Unit(characterDimKey,uid,"ai_proposal",proposal);
         localState[uid]={...(localState[uid]||{}),ai_proposal:proposal};
         setD1State({...localState});
