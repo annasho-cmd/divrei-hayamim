@@ -52,8 +52,8 @@ const DIMS=[
 const STAGE_LABELS={
   1:"מיפוי גלוי/נרמז",
   2:"פירוט אינדיקטורים לפי קטגוריות",
-  3:"בסיס טקסטואלי + נושא הממצא",
-  4:"איחוד לתופעות טקסטואליות",
+  3:"ריכוז מסקנות מחקריות משלב ב׳ (מהכלי האנליטי)",
+  4:"איחוד לתופעות טקסטואליות (אופציונלי)",
   5:"זיהוי דפוסים חוזרים",
   6:"השוואה לשמואל-מלכים",
   7:"חזרה למושג הנבואי"
@@ -61,13 +61,13 @@ const STAGE_LABELS={
 const STAGE_DESC={
   1:"מיפוי לכל יחידה: ס (סמנטי גלוי), נ (נרמז), ס+נ, או —",
   2:"פירוט האינדיקטורים החיוביים בכל יחידה לפי קטגוריות הפרמטרים",
-  3:"לכל יחידה: מה בטקסט + מי נושא הממצא (דוד/המספר/אחר/סביבה)",
-  4:"איחוד האינדיקטורים לתופעות טקסטואליות — בלי לציין שם המושג",
+  3:"ריכוז המסקנות המחקריות שכתבת ב-שלב ב׳ של הכלי האנליטי — ללא AI, ללא שינוי בנתונים",
+  4:"איחוד האינדיקטורים לתופעות טקסטואליות — בלי לציין שם המושג (שלב אופציונלי, לא מתפתח כרגע)",
   5:"זיהוי דפוסים חוזרים ברוב היחידות",
   6:"לכל דפוס: מה הכרוניסט עשה — נשמר/חוזק/שונה/יצירה מלאה",
   7:"בדיקה: אילו דפוסים מתאימים להגדרת המושג מפרק ב' של התזה"
 };
-const STAGE_MODE={1:"computational",2:"computational",3:"ai",4:"ai",5:"ai",6:"ai",7:"ai_defs"};
+const STAGE_MODE={1:"computational",2:"computational",3:"computational",4:"ai",5:"ai",6:"ai",7:"ai_defs"};
 
 // רק מילון הגיבוי לשדה סמנטי — אם אין customSemantic בגיבוי
 const SEMANTIC_FALLBACK={
@@ -2243,8 +2243,12 @@ td{border:1px solid #94a3b8;padding:6px 9px;text-align:right;vertical-align:top;
 <div class="sub">ממד: ${escapeHtml(dimLbl)}</div>
 <h2>שלב ${n}: ${escapeHtml(STAGE_LABELS[n]||"")}</h2>
 <div class="desc">${escapeHtml(STAGE_DESC[n]||"")}</div>
-${result.hasTable&&rows.length?`<table><thead><tr>${headers.map(h=>`<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${escapeHtml(c).replace(/\n/g,"<br>")}</td>`).join("")}</tr>`).join("")}</tbody></table>`:""}
+${result.hasTable&&rows.length&&!(n===3&&result.source==="compareNotes")?`<table><thead><tr>${headers.map(h=>`<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${escapeHtml(c).replace(/\n/g,"<br>")}</td>`).join("")}</tr>`).join("")}</tbody></table>`:""}
 ${n===2&&Array.isArray(result.indicatorDetails)&&result.indicatorDetails.length?`<h2 style="margin-top:16pt;">פירוט אינדיקטורים חיוביים לפי יחידה</h2>${result.indicatorDetails.map(ud=>`<div style="margin:10pt 0;padding:8pt 10pt;background:#f8fafc;border-right:3pt solid #475569;"><div style="font-weight:bold;font-size:12pt;color:#1a365d;margin-bottom:6pt;">${escapeHtml(ud.unitName)} (${escapeHtml(ud.chapter)}) — ${ud.totalFound} אינדיקטורים חיוביים</div><table style="margin:4pt 0;"><thead><tr><th style="width:160pt;">קטגוריה</th><th>אינדיקטור</th><th style="width:60pt;">פסוק</th><th>הסבר מהכלי האנליטי</th></tr></thead><tbody>${ud.indicators.map(ind=>`<tr><td>${escapeHtml(ind.paramLabel)}</td><td>${escapeHtml(ind.q)}</td><td>${escapeHtml(ind.verse||"—")}</td><td>${escapeHtml(ind.note||"—")}</td></tr>`).join("")}</tbody></table></div>`).join("")}`:""}
+${n===3&&result.source==="compareNotes"&&Array.isArray(result.detailedConclusions)&&result.detailedConclusions.length?`
+${result.coverage?`<div style="margin:8pt 0;padding:8pt 10pt;background:#f1f5f9;border-right:4pt solid #475569;font-size:11pt;"><b>ספירת כיסוי:</b> נבדקו ${result.coverage.unitsChecked} יחידות · ${result.coverage.conclusionsCollected} מסקנות נאספו · ${result.coverage.withoutConclusion} ללא מסקנה · ${result.coverage.noParallel} ללא מקבילה.${result.coverage.missingList&&result.coverage.missingList.length?`<br><b>יחידות ללא מסקנה:</b> ${escapeHtml(result.coverage.missingList.join(" · "))}`:""}</div>`:""}
+<h2 style="margin-top:16pt;">מסקנות מחקריות מפורטות</h2>
+${result.detailedConclusions.map(ud=>`<div style="margin:12pt 0;padding:10pt 12pt;background:${ud.hasConclusion?"#f0fdf4":"#fef3c7"};border-right:4pt solid ${ud.hasConclusion?"#059669":"#d97706"};page-break-inside:avoid;"><div style="font-weight:bold;font-size:13pt;color:#1a365d;margin-bottom:4pt;">${escapeHtml(ud.unitName)} <span style="font-weight:normal;color:#64748b;">(${escapeHtml(ud.chapter)})</span></div><div style="font-size:10pt;color:#475569;margin-bottom:8pt;">${ud.hasParallel?`מקבילה: ${escapeHtml(ud.sourceRef)}`:"סונדרגוט — אין מקבילה בשמואל/מלכים"}</div>${ud.hasConclusion?`<div style="font-size:11pt;line-height:1.6;white-space:pre-wrap;">${escapeHtml(ud.conclusion).replace(/\n/g,"<br>")}</div>`:`<div style="font-size:11pt;color:#92400e;font-style:italic;">— טרם נכתבה מסקנה מחקרית בשלב ב׳ של הכלי האנליטי</div>`}</div>`).join("")}`:""}
 ${result.summary?`<div class="summary"><b>סיכום השלב:</b><br>${escapeHtml(result.summary).replace(/\n/g,"<br>")}</div>`:""}
 ${result.selfCheck?`<div class="selfcheck"><b>🔍 בדיקה עצמית:</b><br>${escapeHtml(result.selfCheck).replace(/\n/g,"<br>")}</div>`:""}
 ${result.manuallyEdited?`<div style="font-size:9pt;color:#92400e;margin-top:8pt;">⚠ שלב זה נערך ידנית ב-${result.editedAt||""}</div>`:""}
@@ -2434,7 +2438,67 @@ ${compareNote||"(טרם נכתבה)"}`;
   }
 
   // ─────── שלב 3: בסיס טקסטואלי + נושא ממצא, בפיצול לקבוצות ───────
-  async function runStage3(extra=""){
+  // ─────── שלב 3 חדש: ריכוז מסקנות מחקריות משלב ב׳ של הכלי האנליטי ───────
+  // קורא ישירות מ-compareNotes, ללא AI, ללא שינוי בנתוני המקור.
+  function runStage3(){
+    const units=collectRelevant(); // כל היחידות של הדמות
+    const headers=["יחידה","פרק","מקבילה","מסקנה מחקרית משלב ב׳"];
+    const rows=[]; const sourceIds=[]; const detailed=[];
+    let withConclusion=0, withoutConclusion=0, noParallel=0;
+    const missingList=[];
+    units.forEach(u=>{
+      const uid=String(u.id);
+      const noteRaw=getCompareNote(uid,concept,raw);
+      const note=(noteRaw||"").trim();
+      const unitLabel=u.name||u.label||"?";
+      const chapterLabel=u.chapter||"?";
+      const parallelLabel=u.sourceRef?u.sourceRef:"סונדרגוט (אין מקבילה)";
+      if(!u.sourceRef) noParallel++;
+      let statusCell;
+      if(note){
+        withConclusion++;
+        statusCell=note;
+      }else{
+        withoutConclusion++;
+        statusCell="— (לא נכתבה מסקנה בשלב ב׳)";
+        missingList.push(`${unitLabel} (${chapterLabel})`);
+      }
+      rows.push([`${unitLabel} (${chapterLabel})`,chapterLabel,parallelLabel,statusCell]);
+      // sourceId יציב ליחידה (לתאימות אפשרית עם שלב 4)
+      const sid=`s3cn_${uid}_${concept.replace(/\s+/g,"_")}`;
+      sourceIds.push({sid,label:`${concept}.${unitLabel}.${chapterLabel}`});
+      detailed.push({
+        uid,unitName:unitLabel,chapter:chapterLabel,
+        sourceRef:u.sourceRef||"",hasParallel:!!u.sourceRef,
+        conclusion:note,hasConclusion:!!note
+      });
+    });
+    const coverage={
+      unitsChecked:units.length,
+      conclusionsCollected:withConclusion,
+      withoutConclusion,
+      noParallel,
+      missingList
+    };
+    const summary=`נבדקו ${units.length} יחידות של ${character==="solomon"?"שלמה":"דוד"} עבור המושג "${concept}". נאספו ${withConclusion} מסקנות מחקריות (נכתבו ידנית ב-שלב ב׳ של הכלי האנליטי). ${withoutConclusion} יחידות ללא מסקנה. מתוכן, ${noParallel} ללא מקבילה בשמואל/מלכים.`;
+    const selfCheck=`קריאה דטרמיניסטית מתוך compareNotes בנתוני הכלי האנליטי (Firebase). אין שינוי בנתוני המקור, אין AI, אין קיצור. ${withoutConclusion>0?`יחידות ללא מסקנה: ${missingList.slice(0,8).join("; ")}${missingList.length>8?` ועוד ${missingList.length-8}`:""}.`:"כל היחידות הוכסו."}`;
+    return{
+      status:"חישוב מיידי — מוכן לאישור",
+      hasTable:true,
+      tableHeaders:headers,
+      tableRows:rows,
+      sourceIds,
+      detailedConclusions:detailed,
+      coverage,
+      summary,
+      selfCheck,
+      source:"compareNotes",
+      computedAt:new Date().toISOString()
+    };
+  }
+
+  // ─────── שלב 3 ישן: ניתוח AI (נשמר כארכיון, לא נקרא כברירת מחדל) ───────
+  async function runStage3LegacyAI(extra=""){
     const isEternal=(concept==="נצח"||concept==="עולם");
     const who=character==="solomon"?"שלמה":"דוד";
     const units=collectRelevant();
@@ -2751,12 +2815,22 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
   async function runStage(n,extra=""){
     setLoading(true);
-    setProgressNote(n>=3?`⏳ שלב ${n} רץ... (קריאה ל-AI, יכול לקחת 30-120 שניות)`:`⏳ שלב ${n} רץ...`);
+    setProgressNote(n>=4?`⏳ שלב ${n} רץ... (קריאה ל-AI, יכול לקחת 30-120 שניות)`:`⏳ שלב ${n} רץ...`);
     try{
+      // גיבוי שלב 3 הישן (ניתוח AI) כאשר מריצים את החדש
+      if(n===3){
+        const existing=stageData.stage3;
+        if(existing&&existing.promptVersion&&!existing.source){
+          // זו תוצאת AI ישנה — העבר ל-stage3_legacy_ai כדי לא לדרוס
+          const curData={...stageData};
+          curData.stage3_legacy_ai={...existing,archivedAt:new Date().toISOString(),archivedReason:"החלפת שלב 3 בריכוז מסקנות מחקריות משלב ב׳"};
+          setStageData(curData);
+        }
+      }
       let result;
       if(n===1) result=runStage1();
       else if(n===2) result=runStage2();
-      else if(n===3) result=await runStage3(extra);
+      else if(n===3) result=runStage3(); // סינכרוני — ללא AI
       else if(n===4) result=await runStage4(extra);
       else {
         // שלבים 5-7 — יבואו בסבבים הבאים
@@ -2966,6 +3040,69 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         </div>
                       );
                     })()}
+                    {/* ─ שלב 3 חדש: תצוגת מסקנות מפורטת לפי יחידה ─ */}
+                    {n===3&&hasResult.source==="compareNotes"&&Array.isArray(hasResult.detailedConclusions)&&hasResult.detailedConclusions.length>0&&(
+                      <div style={{marginBottom:"12px",padding:"12px 14px",background:"#0f172a",borderRadius:"7px",border:`1px solid ${dimColor}44`}}>
+                        <div style={{fontSize:"11px",color:dimColor,fontWeight:"700",marginBottom:"8px"}}>📚 מסקנות מחקריות מפורטות (מהכלי האנליטי — ללא AI, ללא שינוי)</div>
+                        {hasResult.coverage&&(
+                          <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"10px",fontSize:"10px"}}>
+                            <span style={{padding:"4px 8px",background:"#1e293b",borderRadius:"5px",color:"#cbd5e1"}}>נבדקו: <strong>{hasResult.coverage.unitsChecked}</strong></span>
+                            <span style={{padding:"4px 8px",background:"#064e3b44",borderRadius:"5px",color:"#86efac"}}>מסקנות: <strong>{hasResult.coverage.conclusionsCollected}</strong></span>
+                            <span style={{padding:"4px 8px",background:hasResult.coverage.withoutConclusion?"#78350f44":"#1e293b",borderRadius:"5px",color:hasResult.coverage.withoutConclusion?"#fcd34d":"#64748b"}}>ללא מסקנה: <strong>{hasResult.coverage.withoutConclusion}</strong></span>
+                            <span style={{padding:"4px 8px",background:"#1e3a8a44",borderRadius:"5px",color:"#93c5fd"}}>ללא מקבילה: <strong>{hasResult.coverage.noParallel}</strong></span>
+                          </div>
+                        )}
+                        <div style={{maxHeight:"600px",overflowY:"auto",display:"flex",flexDirection:"column",gap:"10px"}}>
+                          {hasResult.detailedConclusions.map((ud,ui)=>(
+                            <div key={ui} style={{padding:"10px 12px",background:"#1e293b",borderRadius:"6px",borderRight:`3px solid ${ud.hasConclusion?dimColor:"#64748b"}`}}>
+                              <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:"8px",marginBottom:"6px"}}>
+                                <div style={{fontSize:"12px",fontWeight:"700",color:"#f1f5f9"}}>{ud.unitName} <span style={{color:"#64748b",fontWeight:"400"}}>({ud.chapter})</span></div>
+                                <div style={{fontSize:"10px",color:ud.hasParallel?"#93c5fd":"#f59e0b"}}>{ud.hasParallel?`📖 מקבילה: ${ud.sourceRef}`:"⚫ סונדרגוט (אין מקבילה)"}</div>
+                              </div>
+                              {ud.hasConclusion?(
+                                <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.7",whiteSpace:"pre-wrap",background:"#0f172a",padding:"8px 10px",borderRadius:"5px"}}>{ud.conclusion}</div>
+                              ):(
+                                <div style={{fontSize:"11px",color:"#fcd34d",fontStyle:"italic",padding:"6px 10px",background:"#78350f22",borderRadius:"5px"}}>⚠ טרם נכתבה מסקנה מחקרית בשלב ב׳ של הכלי האנליטי</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ─ ארכיון: שלב 3 — ניתוח AI קודם (נשמר) ─ */}
+                    {n===3&&stageData.stage3_legacy_ai&&(
+                      <details style={{marginBottom:"12px",padding:"10px 14px",background:"#1e1b4b22",borderRadius:"7px",border:"1px dashed #818cf855"}}>
+                        <summary style={{cursor:"pointer",fontSize:"11px",color:"#a5b4fc",fontWeight:"700"}}>📜 ארכיון: שלב 3 — ניתוח AI קודם (נשמר אוטומטית, לא נדרס) — לחצי להרחבה</summary>
+                        <div style={{marginTop:"10px",fontSize:"11px",color:"#94a3b8"}}>
+                          <div style={{marginBottom:"8px",fontStyle:"italic"}}>הועבר לארכיון ב-{(stageData.stage3_legacy_ai.archivedAt||"").slice(0,16).replace("T"," ")} · גרסת פרומפט: {stageData.stage3_legacy_ai.promptVersion||"?"} · {Array.isArray(stageData.stage3_legacy_ai.tableRows)?stageData.stage3_legacy_ai.tableRows.length:0} שורות</div>
+                          {stageData.stage3_legacy_ai.summary&&<div style={{padding:"6px 8px",background:"#0f172a",borderRadius:"5px",marginBottom:"6px"}}><strong style={{color:"#cbd5e1"}}>סיכום:</strong> {stageData.stage3_legacy_ai.summary}</div>}
+                          {Array.isArray(stageData.stage3_legacy_ai.tableRows)&&stageData.stage3_legacy_ai.tableRows.length>0&&(
+                            <div style={{overflowX:"auto",maxHeight:"300px",overflowY:"auto"}}>
+                              <table style={{fontSize:"10px",width:"100%",borderCollapse:"collapse"}}>
+                                <thead><tr style={{background:"#0f172a"}}>{(stageData.stage3_legacy_ai.tableHeaders||[]).map((h,i)=>(<th key={i} style={{padding:"4px 6px",textAlign:"right",color:"#64748b",borderBottom:"1px solid #334155"}}>{h}</th>))}</tr></thead>
+                                <tbody>{stageData.stage3_legacy_ai.tableRows.map((r,i)=>(<tr key={i} style={{borderBottom:"1px solid #1e293b"}}>{r.map((c,j)=>(<td key={j} style={{padding:"4px 6px",color:"#94a3b8",verticalAlign:"top"}}>{c}</td>))}</tr>))}</tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )}
+
+                    {/* הודעה: שלב 3 הישן (AI) עדיין מוצג — להציע מעבר לחדש */}
+                    {n===3&&hasResult.promptVersion&&!hasResult.source&&(
+                      <div style={{marginBottom:"12px",padding:"10px 14px",background:"#78350f22",borderRadius:"7px",border:"1px dashed #f59e0b66",fontSize:"11px",color:"#fcd34d"}}>
+                        💡 תוכן זה נוצר ב-AI (שלב 3 הישן). שלב 3 עודכן: הוא כעת מרכז את המסקנות המחקריות שכתבת בשלב ב׳ של הכלי האנליטי, ללא AI. <strong>כדי להחליף:</strong> בטלי אישור ולחצי "הפעל שוב". התוכן הקיים יישמר באופן אוטומטי כארכיון ולא יידרס.
+                      </div>
+                    )}
+
+                    {/* הודעה למקרה שהפירוט חסר (נתונים ישנים לפני עדכון הכלי) */}
+                    {n===2&&hasResult.tableRows&&hasResult.tableRows.length>0&&(!hasResult.indicatorDetails||hasResult.indicatorDetails.length===0)&&(
+                      <div style={{marginBottom:"12px",padding:"10px 14px",background:"#78350f22",borderRadius:"7px",border:"1px dashed #f59e0b66",fontSize:"11px",color:"#fcd34d"}}>
+                        💡 הפירוט המלא לפי אינדיקטורים (עם פסוק והסבר) זמין בגרסה חדשה של הכלי. <strong>כדי לראות אותו:</strong> בטלי אישור לשלב זה (אם מאושר) ולחצי "הפעל שוב". הנתונים הקיימים לא יוחלפו — יתווסף רק הפירוט.
+                      </div>
+                    )}
+
                     {/* פירוט אינדיקטורים חיוביים לפי יחידה (שלב 2) */}
                     {n===2&&hasResult.indicatorDetails&&hasResult.indicatorDetails.length>0&&(
                       <div style={{marginBottom:"12px",padding:"12px 14px",background:"#0f172a",borderRadius:"7px",border:`1px solid ${dimColor}44`}}>
