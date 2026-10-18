@@ -762,23 +762,42 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
     const m={}; findings.forEach(f=>{m[f.sid]=f;}); return m;
   },[findings]);
 
-  // בקרת שלמות דטרמיניסטית לפני אישור
-  const validation=useMemo(()=>{
-    const inputSids=new Set(findings.map(f=>f.sid));
-    const covered=new Set();
-    const foreign=[];
+  // בקרת כיסוי דטרמיניסטית (קוד, לא AI) — לפי מזהי מקור ייחודיים
+  const coverage=useMemo(()=>{
+    const inputSids=[...new Set(findings.map(f=>f.sid))]; // ייחודיים
+    const inputSet=new Set(inputSids);
+    const assignmentCount={}; // sid -> כמה תופעות מכילות אותו
+    const phenomenaBySid={}; // sid -> [{phenomenonIdx, title}]
     const emptyPhen=[];
     (activeData.phenomena||[]).forEach((p,i)=>{
-      const sids=p.assignedSourceIds||[];
+      const sids=[...new Set(p.assignedSourceIds||[])];
       if(!sids.length) emptyPhen.push(i);
       sids.forEach(s=>{
-        if(!inputSids.has(s)) foreign.push(s);
-        covered.add(s);
+        assignmentCount[s]=(assignmentCount[s]||0)+1;
+        if(!phenomenaBySid[s]) phenomenaBySid[s]=[];
+        phenomenaBySid[s].push({phenomenonIdx:i,title:p.title||`תופעה ${i+1}`});
       });
     });
-    (activeData.needsReview||[]).forEach(r=>{ if(r.sourceId){ covered.add(r.sourceId); if(!inputSids.has(r.sourceId)) foreign.push(r.sourceId); } });
-    const missing=[...inputSids].filter(s=>!covered.has(s));
-    return {valid:missing.length===0&&foreign.length===0&&emptyPhen.length===0,missing,foreign,emptyPhen};
+    const needsReviewMap={}; // sid -> reason
+    (activeData.needsReview||[]).forEach(r=>{ if(r.sourceId) needsReviewMap[r.sourceId]=r.reason||""; });
+    const needsReviewSids=new Set(Object.keys(needsReviewMap));
+    const assignedValid=Object.keys(assignmentCount).filter(s=>inputSet.has(s));
+    const needsReviewValid=[...needsReviewSids].filter(s=>inputSet.has(s));
+    const untreated=inputSids.filter(s=>!assignmentCount[s]&&!needsReviewSids.has(s));
+    const invalidIds=[...new Set([...Object.keys(assignmentCount),...needsReviewSids])].filter(s=>!inputSet.has(s));
+    const duplicates=Object.entries(assignmentCount).filter(([s,c])=>c>1&&inputSet.has(s)).map(([s,c])=>({sourceId:s,count:c,phenomena:phenomenaBySid[s]}));
+    const canApprove=untreated.length===0&&invalidIds.length===0&&emptyPhen.length===0;
+    return {
+      inputCount:inputSids.length,
+      assignedCount:assignedValid.length,
+      needsReviewCount:needsReviewValid.length,
+      untreated,
+      invalidIds,
+      duplicates,
+      emptyPhen,
+      canApprove,
+      needsReviewMap
+    };
   },[activeData,findings]);
 
   function openDrill(sid,phenTitle,aspect){
@@ -786,8 +805,42 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
     setDrillDown({finding:f,phenomenonTitle:phenTitle,aspect});
   }
 
+  // ────── טיפול בממצאים לא מטופלים ──────
+  async function assignUntreatedToPhenomenon(sid,phenomenonIdx,aspect){
+    const f=findingBySid[sid]; if(!f) return;
+    const newPhenomena=[...activeData.phenomena];
+    const p={...newPhenomena[phenomenonIdx]};
+    const assigned=[...new Set([...(p.assignedSourceIds||[]),sid])];
+    const evidence=Array.isArray(p.textualEvidence)?[...p.textualEvidence]:[];
+    if(!evidence.find(e=>e.sourceId===sid)){
+      evidence.push({sourceId:sid,reference:f.chapter||"",evidence:f.basis||"",aspect:aspect||f.concept});
+    }
+    newPhenomena[phenomenonIdx]={...p,assignedSourceIds:assigned,textualEvidence:evidence};
+    const entry={at:new Date().toISOString(),type:"assign_untreated",sourceId:sid,sourceLabel:f.label,toPhenomenonIdx:phenomenonIdx,aspect};
+    await onSaveApproved(buildToSave(newPhenomena,null,entry));
+  }
+  async function markUntreatedAsNeedsReview(sid,reason){
+    const f=findingBySid[sid]; if(!f) return;
+    const newNeedsReview=[...(activeData.needsReview||[]),{sourceId:sid,reason:reason||"סומן ידנית ע״י חוקרת"}];
+    const entry={at:new Date().toISOString(),type:"mark_untreated_review",sourceId:sid,sourceLabel:f.label,reason};
+    await onSaveApproved(buildToSave(activeData.phenomena,newNeedsReview,entry));
+  }
+  async function createPhenomenonFromUntreated(sid,title){
+    const f=findingBySid[sid]; if(!f) return;
+    const newPhen={
+      title:title||`תופעה חדשה (${f.concept})`,
+      description:f.basis||"",actor:"",presentation:"",designMeans:"",analyticalClaim:"",
+      justification:`נוצרה ידנית מממצא לא מטופל: ${f.label} (${new Date().toLocaleDateString("he-IL")})`,
+      textualEvidence:[{sourceId:sid,reference:f.chapter||"",evidence:f.basis||"",aspect:f.concept}],
+      assignedSourceIds:[sid]
+    };
+    const newPhenomena=[...activeData.phenomena,newPhen];
+    const entry={at:new Date().toISOString(),type:"new_phen_from_untreated",sourceId:sid,sourceLabel:f.label,title:newPhen.title};
+    await onSaveApproved(buildToSave(newPhenomena,null,entry));
+  }
+
   async function approveUnit(){
-    if(!validation.valid){ alert("לא ניתן לאשר — פתרו את הבעיות המסומנות."); return; }
+    if(!coverage.canApprove){ alert(`לא ניתן לאשר. יש לפתור את הבעיות הבאות:\n${coverage.untreated.length?`• ${coverage.untreated.length} ממצאים ללא טיפול\n`:""}${coverage.invalidIds.length?`• ${coverage.invalidIds.length} מזהים לא תקינים\n`:""}${coverage.emptyPhen.length?`• ${coverage.emptyPhen.length} תופעות ריקות`:""}`); return; }
     setSavingApproval(true);
     const approvedData={
       ...activeData,
@@ -1012,23 +1065,131 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
         </div>
       )}
 
-      {/* דוח בקרה + כפתור אישור */}
-      <div style={{marginTop:"20px",padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`2px solid ${validation.valid?"#34d399":"#f59e0b"}`}}>
-        <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"8px"}}>🔍 בדיקת שלמות לפני אישור</div>
-        {validation.valid?(
-          <div style={{fontSize:"12px",color:"#34d399",marginBottom:"12px"}}>✓ הבדיקה עברה: כל {findings.length} הממצאים טופלו, אין תופעות ריקות, אין שיוכים שבורים.</div>
-        ):(
-          <div style={{fontSize:"12px",color:"#f59e0b",marginBottom:"12px"}}>
-            ⚠ יש לפתור:
-            {validation.missing.length>0&&<div style={{marginTop:"4px"}}>• {validation.missing.length} ממצאים לא טופלו: {validation.missing.join(", ")}</div>}
-            {validation.foreign.length>0&&<div style={{marginTop:"4px"}}>• {validation.foreign.length} שיוכים שבורים (sourceId לא קיים בקלט): {validation.foreign.join(", ")}</div>}
-            {validation.emptyPhen.length>0&&<div style={{marginTop:"4px"}}>• {validation.emptyPhen.length} תופעות ללא ראיות (אינדקסים: {validation.emptyPhen.join(", ")})</div>}
+      {/* ═══ טבלת בדיקת כיסוי ממצאים ═══ */}
+      <div style={{marginTop:"20px",padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`2px solid ${coverage.canApprove?"#34d399":"#f59e0b"}`}}>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"10px"}}>🔍 בדיקת כיסוי ממצאים (לפי מזהי מקור ייחודיים)</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))",gap:"8px",marginBottom:"12px"}}>
+          <div style={{padding:"10px",background:"#0f172a",borderRadius:"6px",textAlign:"center"}}>
+            <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9"}}>{coverage.inputCount}</div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>ממצאים מקוריים (ייחודיים)</div>
+          </div>
+          <div style={{padding:"10px",background:"#0f172a",borderRadius:"6px",textAlign:"center",borderRight:"3px solid #34d399"}}>
+            <div style={{fontSize:"20px",fontWeight:"bold",color:"#34d399"}}>{coverage.assignedCount}</div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>ממצאים משויכים</div>
+          </div>
+          <div style={{padding:"10px",background:"#0f172a",borderRadius:"6px",textAlign:"center",borderRight:"3px solid #f59e0b"}}>
+            <div style={{fontSize:"20px",fontWeight:"bold",color:"#fbbf24"}}>{coverage.needsReviewCount}</div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>טעונים בדיקה</div>
+          </div>
+          <div style={{padding:"10px",background:"#0f172a",borderRadius:"6px",textAlign:"center",borderRight:`3px solid ${coverage.untreated.length?"#ef4444":"#475569"}`}}>
+            <div style={{fontSize:"20px",fontWeight:"bold",color:coverage.untreated.length?"#f87171":"#64748b"}}>{coverage.untreated.length}</div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>ללא טיפול</div>
+          </div>
+          <div style={{padding:"10px",background:"#0f172a",borderRadius:"6px",textAlign:"center",borderRight:`3px solid ${coverage.invalidIds.length?"#ef4444":"#475569"}`}}>
+            <div style={{fontSize:"20px",fontWeight:"bold",color:coverage.invalidIds.length?"#f87171":"#64748b"}}>{coverage.invalidIds.length}</div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>מזהים לא תקינים</div>
+          </div>
+          <div style={{padding:"10px",background:"#0f172a",borderRadius:"6px",textAlign:"center",borderRight:`3px solid ${coverage.duplicates.length?"#60a5fa":"#475569"}`}}>
+            <div style={{fontSize:"20px",fontWeight:"bold",color:coverage.duplicates.length?"#93c5fd":"#64748b"}}>{coverage.duplicates.length}</div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>שיוכים כפולים</div>
+          </div>
+        </div>
+
+        {coverage.canApprove&&coverage.duplicates.length===0?(
+          <div style={{fontSize:"12px",color:"#34d399",marginBottom:"12px",padding:"8px 12px",background:"#064e3b22",borderRadius:"6px"}}>✓ כיסוי טכני מלא: כל {coverage.inputCount} הממצאים טופלו (שיוך או סימון לבדיקה). ניתן לאשר.</div>
+        ):null}
+
+        {/* רשימת ממצאים ללא טיפול + פעולות */}
+        {coverage.untreated.length>0&&(
+          <div style={{marginTop:"8px",padding:"12px",background:"#7f1d1d22",borderRadius:"7px",border:"1px solid #ef444444"}}>
+            <div style={{fontSize:"12px",fontWeight:"700",color:"#fca5a5",marginBottom:"8px"}}>⚠ {coverage.untreated.length} ממצאים ללא טיפול — יש לטפל לפני אישור</div>
+            <div style={{display:"flex",flexDirection:"column",gap:"8px",maxHeight:"300px",overflowY:"auto"}}>
+              {coverage.untreated.map(sid=>{
+                const f=findingBySid[sid];
+                return (
+                  <div key={sid} style={{padding:"10px",background:"#0f172a",borderRadius:"6px",fontSize:"11px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"10px",flexWrap:"wrap"}}>
+                      <div style={{flex:1,minWidth:"250px"}}>
+                        <div style={{color:"#60a5fa",fontFamily:"monospace",fontSize:"10px",marginBottom:"3px"}}>{f?f.label:sid}</div>
+                        {f&&<>
+                          <div style={{color:"#cbd5e1",marginBottom:"3px"}}><strong>מושג:</strong> {f.concept}</div>
+                          <div style={{color:"#94a3b8",fontSize:"10px"}}><strong>בסיס:</strong> {f.basis||"—"}</div>
+                        </>}
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:"4px",minWidth:"160px"}}>
+                        <select onChange={async e=>{
+                          const v=e.target.value;
+                          if(v===""||v==="header")return;
+                          if(v==="__new__"){
+                            const title=prompt("שם התופעה החדשה:",`תופעה חדשה (${f?f.concept:"?"})`);
+                            if(title) await createPhenomenonFromUntreated(sid,title);
+                          }else if(v==="__review__"){
+                            const reason=prompt("סיבה לסימון כדורש בדיקה (אופציונלי):","");
+                            await markUntreatedAsNeedsReview(sid,reason||"");
+                          }else{
+                            const aspect=prompt("היבט שבו הממצא נוגע לתופעה (אופציונלי):",f?f.concept:"");
+                            await assignUntreatedToPhenomenon(sid,parseInt(v,10),aspect||"");
+                          }
+                          e.target.value="";
+                        }} defaultValue="" style={{padding:"5px",fontSize:"10px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9"}}>
+                          <option value="">בחרי פעולה...</option>
+                          <option value="__new__">➕ צור תופעה חדשה</option>
+                          <option value="__review__">⚠ סמן כטעון בדיקה</option>
+                          <option value="header" disabled style={{color:"#64748b"}}>── שיוך לתופעה ──</option>
+                          {activeData.phenomena.map((p,i)=>(
+                            <option key={i} value={i}>{p.title||`תופעה ${i+1}`}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
-        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+
+        {/* מזהים לא תקינים */}
+        {coverage.invalidIds.length>0&&(
+          <div style={{marginTop:"8px",padding:"10px 14px",background:"#7f1d1d33",borderRadius:"7px",border:"1px solid #ef444488"}}>
+            <div style={{fontSize:"11px",color:"#fca5a5",fontWeight:"700",marginBottom:"4px"}}>⛔ {coverage.invalidIds.length} מזהים לא קיימים בקלט (צריכים להימחק מתופעה או מ-needsReview):</div>
+            <div style={{fontSize:"10px",color:"#fecaca",fontFamily:"monospace"}}>{coverage.invalidIds.join(", ")}</div>
+          </div>
+        )}
+
+        {/* תופעות ריקות */}
+        {coverage.emptyPhen.length>0&&(
+          <div style={{marginTop:"8px",padding:"10px 14px",background:"#78350f33",borderRadius:"7px",border:"1px solid #f59e0b88"}}>
+            <div style={{fontSize:"11px",color:"#fcd34d",fontWeight:"700"}}>⚠ {coverage.emptyPhen.length} תופעות ללא ראיות (אינדקסים: {coverage.emptyPhen.join(", ")}) — ערכי או מחקי</div>
+          </div>
+        )}
+
+        {/* שיוכים כפולים (אינפורמטיבי) */}
+        {coverage.duplicates.length>0&&(
+          <div style={{marginTop:"8px",padding:"10px 14px",background:"#1e3a8a22",borderRadius:"7px",border:"1px solid #3b82f688"}}>
+            <div style={{fontSize:"11px",color:"#93c5fd",fontWeight:"700",marginBottom:"4px"}}>ℹ {coverage.duplicates.length} שיוכים כפולים — בדקי שההצדקה חזקה (ממצא בשתי תופעות כאשר יש בו היבטים מובחנים)</div>
+            <div style={{maxHeight:"120px",overflowY:"auto"}}>
+              {coverage.duplicates.map(d=>{
+                const f=findingBySid[d.sourceId];
+                return (
+                  <div key={d.sourceId} style={{fontSize:"10px",color:"#bfdbfe",marginTop:"4px",paddingTop:"4px",borderTop:"1px solid #1e3a8a44"}}>
+                    <strong>{f?f.label:d.sourceId}</strong> → {d.phenomena.map(ph=>`"${ph.title}"`).join(" + ")}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* הבחנה: כיסוי טכני vs אישור מחקרי */}
+        <div style={{marginTop:"12px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"10px",color:"#94a3b8",border:"1px dashed #334155"}}>
+          <strong style={{color:"#cbd5e1"}}>הבחנה חשובה:</strong> <span style={{color:"#86efac"}}>כיסוי טכני</span> — כל ממצא מקורי זכה לשיוך או לסימון לבדיקה (נבדק אוטומטית). <span style={{color:"#86efac"}}>אישור מחקרי</span> — החוקרת בחנה ואישרה את התופעות, השיוכים והטענות (נעשה ידנית בלחיצה על "אשר").
+        </div>
+
+        <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginTop:"12px"}}>
           {!isApproved&&(
-            <button onClick={approveUnit} disabled={!validation.valid||savingApproval}
-              style={{padding:"10px 24px",borderRadius:"8px",border:"none",cursor:validation.valid&&!savingApproval?"pointer":"not-allowed",background:validation.valid?"#34d399":"#334155",color:validation.valid?"white":"#64748b",fontSize:"13px",fontWeight:"700"}}>
+            <button onClick={approveUnit} disabled={!coverage.canApprove||savingApproval}
+              style={{padding:"10px 24px",borderRadius:"8px",border:"none",cursor:coverage.canApprove&&!savingApproval?"pointer":"not-allowed",background:coverage.canApprove?"#34d399":"#334155",color:coverage.canApprove?"white":"#64748b",fontSize:"13px",fontWeight:"700"}}>
               {savingApproval?"⏳ שומר..." :"✓ אשר יחידה"}
             </button>
           )}
@@ -1038,10 +1199,10 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
               {savingApproval?"⏳ שומר..." :"↩ פתח מחדש לעריכה"}
             </button>
           )}
-          <button disabled style={{padding:"10px 20px",borderRadius:"8px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"12px"}} title="בפיתוח — בלוק 2">📄 הורד כ-Word</button>
+          <button disabled style={{padding:"10px 20px",borderRadius:"8px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"12px"}} title="בפיתוח">📄 הורד כ-Word</button>
         </div>
         <div style={{marginTop:"8px",fontSize:"10px",color:"#64748b"}}>
-          💡 בבלוק הזה: תצוגה + אישור בסיסי + drill-down. בבלוק הבא: עריכה / פיצול / איחוד / "דורש בדיקה" / ייצוא.
+          💡 הכיסוי נבדק אוטומטית בכל שינוי. אין צורך לרענן.
         </div>
       </div>
 
