@@ -885,6 +885,24 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
 
               {isEd?(
                 <div style={{marginTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}}>
+                  {/* תצוגת הצעת ה-AI המקורית — ייחוס לפי חפיפת sourceIds מרבית */}
+                  {(()=>{
+                    if(!aiProposal||!Array.isArray(aiProposal.phenomena))return null;
+                    const draftSids=new Set(d.assignedSourceIds||[]);
+                    let bestMatch=null, bestOverlap=0;
+                    aiProposal.phenomena.forEach(ap=>{
+                      const apSids=new Set(ap.assignedSourceIds||[]);
+                      const overlap=[...draftSids].filter(s=>apSids.has(s)).length;
+                      if(overlap>bestOverlap){ bestOverlap=overlap; bestMatch=ap; }
+                    });
+                    if(!bestMatch||!bestMatch.analyticalClaim)return null;
+                    return (
+                      <div style={{padding:"10px 12px",background:"#1e3a5f22",borderRadius:"6px",borderRight:"3px solid #60a5fa"}}>
+                        <div style={{fontSize:"10px",color:"#60a5fa",fontWeight:"700",marginBottom:"3px"}}>🤖 הצעת ה-AI המקורית (לצפייה בלבד — להשוואה)</div>
+                        <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.5",fontStyle:"italic"}}>{bestMatch.analyticalClaim}</div>
+                      </div>
+                    );
+                  })()}
                   <div><div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"3px"}}>📝 תיאור עובדתי</div>
                     <textarea value={d.description} onChange={e=>setDraft({...d,description:e.target.value})} rows={3} style={fieldStyle}/></div>
                   <div><div style={{fontSize:"10px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>💭 טענה אנליטית מצומצמת (ריק = ללא טענה)</div>
@@ -1425,7 +1443,7 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
   // ─ ד'1 — זיהוי תופעות פר-יחידה (עיבוד בטור, שמירות ביניים, המשכיות) ─
   // ═══════════════════════════════════════════════════════════════════════
   const characterDimKey=`${character}__${dimId}`;
-  const PROMPT_VERSION_D1="v2-2026-10-18-tight-claim";
+  const PROMPT_VERSION_D1="v3-2026-10-18-three-levels";
 
   // state של ד'1
   const [d1State,setD1State]=useState({}); // {unitId: {ai_proposal, user_approved}}
@@ -1472,6 +1490,19 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
 11. השתמשי ב-needsReview רק כאשר קיימת בעיה ממשית בזיהוי/שיוך/ביסוס. אין להעביר לשם ממצא רק משום שהוא מתייחס למספר או לדמות אחרת.
 12. אל תתקני בשקט סתירות בין הממצאים. סמני אותן לבדיקה.
 13. **actor — מי שפועל או מדבר בפועל בטקסט**, אם ניתן לזהותו. אם האירוע הוא מסגור של המספר (למשל: "כדבר ה' ביד שמואל"), השאירי actor = "לא רלוונטי" והבהירי בתיאור התופעה שהיא נוגעת למלך. **עדיף שדה שאינו חל במקרה מסוים מאשר שיוך פעולה לדמות הלא נכונה.**
+
+14. **הבחנה בין שינוי טקסטואלי לבין משמעותו המחקרית** — כאשר תופעה מבוססת על שינוי במילה, בביטוי או במבנה משפט, יש להבחין בין שלוש רמות:
+   (א) **השינוי הטקסטואלי:** תיאור מדויק של מה שנוסף, הושמט או הוחלף ביחס למקבילה, **על סמך הנתונים שסופקו בלבד**.
+   (ב) **המשמעות הלשונית הישירה:** מה ניתן ללמוד מן ההבדל עצמו, בלי לייחס לו משמעות שאינה מתחייבת ממנו.
+   (ג) **המשמעות האפשרית לעיצוב דמות המלך:** טענה פרשנית מצומצמת, רק אם קיימת לה הצדקה בטקסט ובהקשרו. יש להבהיר כאשר מדובר בהצעה פרשנית ולא בקביעה מפורשת (למשל: "ייתכן ש...", "הניסוח עשוי להבליט...").
+
+   **אין להסיק** משינוי לשוני יחיד על מניעים, תכונות, כוונות או מגמות אידאולוגיות ללא בסיס נוסף.
+
+   **אין להציג** את המקבילה כחסרת משמעות מסוימת רק משום שנוסחה שונה, ואין ליצור ניגוד בין רכיבים משלימים של הסיפור.
+
+   **אין חובה** להעניק לכל שינוי לשוני משמעות מחקרית חיובית או משמעותית. אם ההבדל ברור אך תרומתו לעיצוב הדמות אינה מבוססת — יש להשאיר את analyticalClaim ריק או לנסח בו הסתייגות מפורשת ("ההבדל הלשוני ברור, אך משמעותו דורשת בדיקה נוספת").
+
+   **כאשר נוסח המקבילה אינו כלול בנתוני הקלט, אין לקבוע שהתרחשה תוספת, השמטה או החלפה על סמך השערה בלבד. יש לסמן את הטענה ההשוואתית כטעונה אימות** (למשל ב-needsReview, או בניסוח "נוסח המקבילה לא נבדק בשלב זה"). שלב ד'1 פועל רק מתוך הממצאים שסופקו — אין להשלים נוסחי מקבילות מידע חיצוני.
 
 ### נתוני היחידה
 שם: ${unitName}
