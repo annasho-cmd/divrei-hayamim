@@ -575,6 +575,281 @@ function ConceptSelector({raw,onPick,onPickDimension,onBackHome,stageResults}){
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// ── מודל drill-down לנתון מקורי משלב 3 ─────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+function SourceDrillDownModal({finding,phenomenonTitle,aiAspect,onClose}){
+  if(!finding) return null;
+  return (
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"#000a",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:"20px"}}>
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",maxWidth:"800px",width:"100%",maxHeight:"85vh",overflowY:"auto",border:"1px solid #475569"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}>
+          <div>
+            <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9"}}>📄 נתון מקורי משלב 3</div>
+            <div style={{fontSize:"11px",color:"#64748b",marginTop:"2px"}}>{finding.label} ({finding.sid})</div>
+          </div>
+          <button onClick={onClose} style={{padding:"6px 14px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px"}}>סגור</button>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"14px"}}>
+          <div style={{padding:"14px",background:"#0f172a",borderRadius:"8px",border:"1px solid #475569"}}>
+            <div style={{fontSize:"11px",fontWeight:"700",color:"#60a5fa",marginBottom:"8px"}}>📊 כפי שנמסר בשלב 3</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"3px"}}>מושג:</div>
+            <div style={{fontSize:"13px",color:"#f1f5f9",marginBottom:"10px"}}>{finding.concept}</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"3px"}}>יחידה:</div>
+            <div style={{fontSize:"13px",color:"#f1f5f9",marginBottom:"10px"}}>{finding.unit}</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"3px"}}>בסיס טקסטואלי (נוסח מקורי):</div>
+            <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"10px",padding:"8px",background:"#1e293b",borderRadius:"5px"}}>{finding.basis||"—"}</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"3px"}}>נושא הממצא:</div>
+            <div style={{fontSize:"12px",color:"#cbd5e1",marginBottom:"10px"}}>{finding.subject||"—"}</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"3px"}}>פרשנים:</div>
+            <div style={{fontSize:"11px",color:"#cbd5e1"}}>{finding.commentators||"—"}</div>
+          </div>
+
+          <div style={{padding:"14px",background:"#0f172a",borderRadius:"8px",border:"1px solid #a78bfa44"}}>
+            <div style={{fontSize:"11px",fontWeight:"700",color:"#a78bfa",marginBottom:"8px"}}>🤖 איך ה-AI השתמש בו ב-ד'1</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"3px"}}>שויך לתופעה:</div>
+            <div style={{fontSize:"13px",color:"#f1f5f9",marginBottom:"10px",fontWeight:"600"}}>{phenomenonTitle||"—"}</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"3px"}}>ההיבט המסוים (aspect):</div>
+            <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6",padding:"8px",background:"#1e293b",borderRadius:"5px"}}>{aiAspect||"— (לא צוין)"}</div>
+            <div style={{fontSize:"10px",color:"#64748b",marginTop:"14px",lineHeight:"1.6",padding:"8px",background:"#1e293b",borderRadius:"5px",fontStyle:"italic"}}>
+              💡 בדקי: האם הביטוי שה-AI זיהה אכן קיים בבסיס הטקסטואלי המקורי? האם נושא הממצא תואם?
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── פאנל סקירת יחידה (Screen 1 של ד"ר עמר) ─────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved,characterDimKey,onBack,onSaveApproved,onReopen,dimColor,dimLabel,character}){
+  const [drillDown,setDrillDown]=useState(null); // {finding, phenomenonTitle, aspect}
+  const [savingApproval,setSavingApproval]=useState(false);
+
+  // מצב התצוגה: מה שאנחנו מציגים? user_approved אם קיים, אחרת ai_proposal
+  const activeData=userApproved||aiProposal||{phenomena:[],needsReview:[]};
+  const isApproved=!!userApproved;
+  const unitName=unit.name||unit.label||unit.id;
+  const chapter=unit.chapter||"?";
+  const uniqueConcepts=[...new Set(findings.map(f=>f.concept))];
+
+  // אינדקס findings לפי sid לדריל-דאון מהיר
+  const findingBySid=useMemo(()=>{
+    const m={}; findings.forEach(f=>{m[f.sid]=f;}); return m;
+  },[findings]);
+
+  // בקרת שלמות דטרמיניסטית לפני אישור
+  const validation=useMemo(()=>{
+    const inputSids=new Set(findings.map(f=>f.sid));
+    const covered=new Set();
+    const foreign=[];
+    const emptyPhen=[];
+    (activeData.phenomena||[]).forEach((p,i)=>{
+      const sids=p.assignedSourceIds||[];
+      if(!sids.length) emptyPhen.push(i);
+      sids.forEach(s=>{
+        if(!inputSids.has(s)) foreign.push(s);
+        covered.add(s);
+      });
+    });
+    (activeData.needsReview||[]).forEach(r=>{ if(r.sourceId){ covered.add(r.sourceId); if(!inputSids.has(r.sourceId)) foreign.push(r.sourceId); } });
+    const missing=[...inputSids].filter(s=>!covered.has(s));
+    return {valid:missing.length===0&&foreign.length===0&&emptyPhen.length===0,missing,foreign,emptyPhen};
+  },[activeData,findings]);
+
+  function openDrill(sid,phenTitle,aspect){
+    const f=findingBySid[sid]; if(!f) return;
+    setDrillDown({finding:f,phenomenonTitle:phenTitle,aspect});
+  }
+
+  async function approveUnit(){
+    if(!validation.valid){ alert("לא ניתן לאשר — פתרו את הבעיות המסומנות."); return; }
+    setSavingApproval(true);
+    const approvedData={
+      ...activeData,
+      approvedAt:new Date().toISOString(),
+      approvedBy:"user",
+      basedOnProposal:aiProposal?aiProposal.runAt:null,
+      editHistory:[...(activeData.editHistory||[]),{at:new Date().toISOString(),type:"approve",description:"אושרה ללא שינויים"}]
+    };
+    await onSaveApproved(approvedData);
+    setSavingApproval(false);
+  }
+
+  async function reopenUnit(){
+    if(!confirm("לפתוח מחדש את היחידה לעריכה? הגרסה הנוכחית תישמר ב-previous_approved.")) return;
+    setSavingApproval(true);
+    await onReopen();
+    setSavingApproval(false);
+  }
+
+  return (
+    <div style={{maxWidth:"1100px",margin:"0 auto",padding:"20px 16px"}}>
+      {/* כותרת */}
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:"16px",flexWrap:"wrap",gap:"12px"}}>
+        <div>
+          <div style={{fontSize:"18px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>📍 {unitName} <span style={{color:dimColor}}>({chapter})</span></div>
+          <div style={{fontSize:"11px",color:"#94a3b8"}}>
+            {unit.sourceRef?`מקבילה: ${unit.sourceRef}`:"סונדרגוט (ללא מקבילה)"}
+            {" · "}{findings.length} אינדיקטורים מ-{uniqueConcepts.length} מושגים
+            {" · "}ממד: <span style={{color:dimColor}}>{dimLabel}</span>
+          </div>
+          <div style={{marginTop:"8px"}}>
+            {isApproved&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#065f46",color:"#86efac",fontWeight:"700"}}>✓ מאושרת ע״י חוקרת</span>}
+            {!isApproved&&aiProposal&&aiProposal.validatedByCode&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#1e3a5f",color:"#93c5fd",fontWeight:"700"}}>🤖 הצעת AI תקינה — ממתינה לאישור</span>}
+            {!isApproved&&aiProposal&&!aiProposal.validatedByCode&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#7f1d1d",color:"#fca5a5",fontWeight:"700"}}>⚠ הצעת AI לא תקינה</span>}
+            {!isApproved&&!aiProposal&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#1e293b",color:"#94a3b8",fontWeight:"700"}}>⏳ טרם רץ</span>}
+            {previousApproved&&!isApproved&&<span style={{fontSize:"10px",color:"#f59e0b",marginRight:"8px"}}>· נפתחה מחדש (יש גרסה קודמת שנשמרה)</span>}
+          </div>
+        </div>
+        <button onClick={onBack} style={{padding:"7px 14px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ חזרה לרשימה</button>
+      </div>
+
+      {/* תופעות */}
+      {!activeData.phenomena||activeData.phenomena.length===0?(
+        <div style={{padding:"24px",background:"#1e293b",borderRadius:"10px",textAlign:"center",color:"#94a3b8",fontSize:"13px"}}>
+          אין תופעות ליחידה הזו. הריצי AI מהרשימה.
+        </div>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:"12px"}}>
+          {activeData.phenomena.map((p,i)=>(
+            <div key={i} style={{padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`1px solid ${p.needsReview?"#f59e0b66":dimColor+"33"}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                <div style={{flex:1,minWidth:"300px"}}>
+                  <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>
+                    תופעה {i+1}: {p.title||"(ללא שם)"}
+                    {p.needsReview&&<span style={{fontSize:"10px",color:"#f59e0b",marginRight:"8px",padding:"2px 7px",background:"#78350f44",borderRadius:"4px"}}>⚠ דורש בדיקה</span>}
+                  </div>
+                  <div style={{fontSize:"11px",color:"#94a3b8"}}>
+                    actor: <span style={{color:"#cbd5e1"}}>{p.actor||"—"}</span>
+                    {" · "}presentation: <span style={{color:"#cbd5e1"}}>{p.presentation||"—"}</span>
+                    {" · "}means: <span style={{color:"#cbd5e1"}}>{p.designMeans||"—"}</span>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:"4px",flexWrap:"wrap"}}>
+                  <button disabled style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"10px"}} title="בפיתוח — בלוק 2">✏ ערוך</button>
+                  <button disabled style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"10px"}} title="בפיתוח — בלוק 2">🔀 פצל</button>
+                  <button disabled style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"10px"}} title="בפיתוח — בלוק 2">🔗 אחד</button>
+                  <button disabled style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"10px"}} title="בפיתוח — בלוק 2">⚠ דורש בדיקה</button>
+                </div>
+              </div>
+
+              {p.description&&(
+                <div style={{marginTop:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${dimColor}`}}>
+                  <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"3px"}}>📝 תיאור עובדתי</div>
+                  <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{p.description}</div>
+                </div>
+              )}
+              {p.analyticalClaim&&p.analyticalClaim.trim()&&(
+                <div style={{marginTop:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:"3px solid #a78bfa"}}>
+                  <div style={{fontSize:"10px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>💭 טענה אנליטית מצומצמת</div>
+                  <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{p.analyticalClaim}</div>
+                </div>
+              )}
+              {p.justification&&(
+                <div style={{marginTop:"8px",padding:"8px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"11px",color:"#94a3b8",fontStyle:"italic"}}>
+                  <strong style={{color:"#cbd5e1"}}>נימוק לאיחוד:</strong> {p.justification}
+                </div>
+              )}
+
+              {/* ראיות */}
+              {Array.isArray(p.textualEvidence)&&p.textualEvidence.length>0&&(
+                <div style={{marginTop:"10px"}}>
+                  <div style={{fontSize:"11px",fontWeight:"700",color:"#60a5fa",marginBottom:"6px"}}>📚 ראיות ({p.textualEvidence.length}) — לחצי על sourceId לצפייה בנתון המקורי משלב 3</div>
+                  <table style={{fontSize:"11px",width:"100%"}}>
+                    <thead><tr style={{background:"#0f172a"}}>
+                      <th style={{textAlign:"right",color:"#64748b",padding:"5px 8px",width:"120px"}}>sourceId</th>
+                      <th style={{textAlign:"right",color:"#64748b",padding:"5px 8px",width:"120px"}}>הפניה</th>
+                      <th style={{textAlign:"right",color:"#64748b",padding:"5px 8px"}}>evidence</th>
+                      <th style={{textAlign:"right",color:"#64748b",padding:"5px 8px"}}>היבט בתופעה</th>
+                    </tr></thead>
+                    <tbody>
+                      {p.textualEvidence.map((ev,j)=>{
+                        const f=findingBySid[ev.sourceId];
+                        return(<tr key={j} style={{borderBottom:"1px solid #334155"}}>
+                          <td style={{padding:"5px 8px"}}>
+                            <button onClick={()=>openDrill(ev.sourceId,p.title,ev.aspect)}
+                              style={{padding:"2px 7px",borderRadius:"4px",border:"1px solid #60a5fa44",cursor:"pointer",background:"transparent",color:"#60a5fa",fontSize:"10px",fontFamily:"monospace"}}>
+                              {f?f.label:ev.sourceId.slice(0,12)}
+                            </button>
+                          </td>
+                          <td style={{color:"#94a3b8",padding:"5px 8px",fontSize:"10px"}}>{ev.reference||"—"}</td>
+                          <td style={{color:"#cbd5e1",padding:"5px 8px"}}>{ev.evidence||"—"}</td>
+                          <td style={{color:"#94a3b8",padding:"5px 8px",fontSize:"10px"}}>{ev.aspect||"—"}</td>
+                        </tr>);
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* needsReview */}
+      {Array.isArray(activeData.needsReview)&&activeData.needsReview.length>0&&(
+        <div style={{marginTop:"18px",padding:"14px 18px",background:"#78350f22",borderRadius:"10px",border:"1px solid #f59e0b"}}>
+          <div style={{fontSize:"13px",fontWeight:"700",color:"#fcd34d",marginBottom:"8px"}}>⚠ ממצאים דורשים בדיקה ({activeData.needsReview.length})</div>
+          <div style={{fontSize:"11px",color:"#fde68a",marginBottom:"10px"}}>ממצאים שה-AI לא הצליח לשייך או סימן כדורשים ביקורת.</div>
+          {activeData.needsReview.map((r,i)=>{
+            const f=findingBySid[r.sourceId];
+            return(<div key={i} style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",marginBottom:"6px",fontSize:"11px"}}>
+              <button onClick={()=>openDrill(r.sourceId,"needsReview","")} style={{padding:"2px 7px",borderRadius:"4px",border:"1px solid #fbbf2466",cursor:"pointer",background:"transparent",color:"#fbbf24",fontSize:"10px",fontFamily:"monospace",marginLeft:"8px"}}>{f?f.label:r.sourceId}</button>
+              <span style={{color:"#fde68a"}}>{r.reason||"(ללא נימוק)"}</span>
+            </div>);
+          })}
+        </div>
+      )}
+
+      {/* methodNote */}
+      {activeData.methodNote&&(
+        <div style={{marginTop:"12px",padding:"10px 14px",background:"#1e293b",borderRadius:"8px",fontSize:"11px",color:"#94a3b8",fontStyle:"italic",border:"1px dashed #475569"}}>
+          <strong style={{color:"#cbd5e1"}}>הערת שיטה (AI):</strong> {activeData.methodNote}
+        </div>
+      )}
+
+      {/* דוח בקרה + כפתור אישור */}
+      <div style={{marginTop:"20px",padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`2px solid ${validation.valid?"#34d399":"#f59e0b"}`}}>
+        <div style={{fontSize:"13px",fontWeight:"700",color:"#f1f5f9",marginBottom:"8px"}}>🔍 בדיקת שלמות לפני אישור</div>
+        {validation.valid?(
+          <div style={{fontSize:"12px",color:"#34d399",marginBottom:"12px"}}>✓ הבדיקה עברה: כל {findings.length} הממצאים טופלו, אין תופעות ריקות, אין שיוכים שבורים.</div>
+        ):(
+          <div style={{fontSize:"12px",color:"#f59e0b",marginBottom:"12px"}}>
+            ⚠ יש לפתור:
+            {validation.missing.length>0&&<div style={{marginTop:"4px"}}>• {validation.missing.length} ממצאים לא טופלו: {validation.missing.join(", ")}</div>}
+            {validation.foreign.length>0&&<div style={{marginTop:"4px"}}>• {validation.foreign.length} שיוכים שבורים (sourceId לא קיים בקלט): {validation.foreign.join(", ")}</div>}
+            {validation.emptyPhen.length>0&&<div style={{marginTop:"4px"}}>• {validation.emptyPhen.length} תופעות ללא ראיות (אינדקסים: {validation.emptyPhen.join(", ")})</div>}
+          </div>
+        )}
+        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+          {!isApproved&&(
+            <button onClick={approveUnit} disabled={!validation.valid||savingApproval}
+              style={{padding:"10px 24px",borderRadius:"8px",border:"none",cursor:validation.valid&&!savingApproval?"pointer":"not-allowed",background:validation.valid?"#34d399":"#334155",color:validation.valid?"white":"#64748b",fontSize:"13px",fontWeight:"700"}}>
+              {savingApproval?"⏳ שומר..." :"✓ אשר יחידה"}
+            </button>
+          )}
+          {isApproved&&(
+            <button onClick={reopenUnit} disabled={savingApproval}
+              style={{padding:"10px 20px",borderRadius:"8px",border:"1px solid #f59e0b",cursor:savingApproval?"wait":"pointer",background:"transparent",color:"#f59e0b",fontSize:"12px",fontWeight:"700"}}>
+              {savingApproval?"⏳ שומר..." :"↩ פתח מחדש לעריכה"}
+            </button>
+          )}
+          <button disabled style={{padding:"10px 20px",borderRadius:"8px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"12px"}} title="בפיתוח — בלוק 2">📄 הורד כ-Word</button>
+        </div>
+        <div style={{marginTop:"8px",fontSize:"10px",color:"#64748b"}}>
+          💡 בבלוק הזה: תצוגה + אישור בסיסי + drill-down. בבלוק הבא: עריכה / פיצול / איחוד / "דורש בדיקה" / ייצוא.
+        </div>
+      </div>
+
+      {drillDown&&<SourceDrillDownModal finding={drillDown.finding} phenomenonTitle={drillDown.phenomenonTitle} aiAspect={drillDown.aspect} onClose={()=>setDrillDown(null)}/>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // ── מסך שלב ד' — ברמת ממד (מלך × ממד) ─────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
 function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,setStageResults}){
@@ -980,6 +1255,50 @@ ${indicatorsBlock}
     return {approved,valid,invalid,pending,total:unitsToProcess.length};
   },[unitsToProcess,d1State]);
 
+  // ─ ניווט לפאנל סקירה פר-יחידה ─
+  const [reviewingUid,setReviewingUid]=useState(null);
+  const reviewingData=useMemo(()=>{
+    if(!reviewingUid) return null;
+    const entry=unitsToProcess.find(x=>String(x.unit.id)===reviewingUid);
+    if(!entry) return null;
+    const st=d1State[reviewingUid]||{};
+    return {...entry,aiProposal:st.ai_proposal||null,userApproved:st.user_approved||null,previousApproved:st.previous_approved||null};
+  },[reviewingUid,unitsToProcess,d1State]);
+
+  async function saveUserApproved(uid,approvedData){
+    const prev=(d1State[uid]&&d1State[uid].user_approved)||null;
+    const newState={...(d1State[uid]||{}),user_approved:approvedData};
+    if(prev) newState.previous_approved=prev;
+    await fbSaveStage4Unit(characterDimKey,uid,"user_approved",approvedData);
+    if(prev) await fbSaveStage4Unit(characterDimKey,uid,"previous_approved",prev);
+    setD1State({...d1State,[uid]:newState});
+  }
+  async function reopenApproved(uid){
+    const cur=(d1State[uid]&&d1State[uid].user_approved)||null;
+    if(!cur) return;
+    // מעבירים את הגרסה הנוכחית ל-previous_approved ומוחקים את user_approved
+    await fbSaveStage4Unit(characterDimKey,uid,"previous_approved",cur);
+    await db.ref(_stage4UnitPath(characterDimKey,uid,"user_approved")).remove();
+    const newEntry={...(d1State[uid]||{}),previous_approved:cur,user_approved:null};
+    setD1State({...d1State,[uid]:newEntry});
+  }
+
+  // אם במצב סקירה — החזר את הפאנל במקום הרשימה
+  if(reviewingData){
+    return (<UnitReviewPanel
+      unit={reviewingData.unit}
+      findings={reviewingData.findings}
+      aiProposal={reviewingData.aiProposal}
+      userApproved={reviewingData.userApproved}
+      previousApproved={reviewingData.previousApproved}
+      characterDimKey={characterDimKey}
+      dimColor={dimColor} dimLabel={dimLabel} character={character}
+      onBack={()=>setReviewingUid(null)}
+      onSaveApproved={async(data)=>{ await saveUserApproved(reviewingUid,data); }}
+      onReopen={async()=>{ await reopenApproved(reviewingUid); }}
+    />);
+  }
+
   return(
     <div style={{maxWidth:"1100px",margin:"0 auto",padding:"20px 16px"}}>
       {/* כותרת */}
@@ -1211,7 +1530,10 @@ ${indicatorsBlock}
                             )}
                           </td>
                           <td style={{padding:"5px 10px"}}>
-                            {!d1Loading&&st.status!=="approved"&&<button onClick={()=>runD1(`unit:${uid}`)} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"9px"}}>▶ הרץ</button>}
+                            <div style={{display:"flex",gap:"4px",flexWrap:"wrap"}}>
+                              {(st.status==="ai-valid"||st.status==="approved")&&<button onClick={()=>setReviewingUid(uid)} style={{padding:"3px 8px",borderRadius:"4px",border:`1px solid ${dimColor}66`,cursor:"pointer",background:"transparent",color:dimColor,fontSize:"9px",fontWeight:"700"}}>👁 סקור</button>}
+                              {!d1Loading&&st.status!=="approved"&&<button onClick={()=>runD1(`unit:${uid}`)} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"9px"}}>▶ הרץ</button>}
+                            </div>
                           </td>
                         </tr>);
                       })}
