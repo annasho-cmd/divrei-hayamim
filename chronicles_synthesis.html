@@ -295,8 +295,13 @@ function allConceptsFrom(raw){
 }
 
 function getParams(name,raw){
+  // מושג מובנה
   const c=raw&&raw.concepts&&raw.concepts[name];
-  return (c&&Array.isArray(c.params))?c.params:[];
+  if(c&&Array.isArray(c.params)&&c.params.length) return c.params;
+  // מושג מותאם אישית
+  const cc=(raw&&raw.customConcepts||[]).find(x=>x.name===name);
+  if(cc&&Array.isArray(cc.params)) return cc.params;
+  return [];
 }
 
 function getSemantic(name,raw){
@@ -2239,6 +2244,7 @@ td{border:1px solid #94a3b8;padding:6px 9px;text-align:right;vertical-align:top;
 <h2>שלב ${n}: ${escapeHtml(STAGE_LABELS[n]||"")}</h2>
 <div class="desc">${escapeHtml(STAGE_DESC[n]||"")}</div>
 ${result.hasTable&&rows.length?`<table><thead><tr>${headers.map(h=>`<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${escapeHtml(c).replace(/\n/g,"<br>")}</td>`).join("")}</tr>`).join("")}</tbody></table>`:""}
+${n===2&&Array.isArray(result.indicatorDetails)&&result.indicatorDetails.length?`<h2 style="margin-top:16pt;">פירוט אינדיקטורים חיוביים לפי יחידה</h2>${result.indicatorDetails.map(ud=>`<div style="margin:10pt 0;padding:8pt 10pt;background:#f8fafc;border-right:3pt solid #475569;"><div style="font-weight:bold;font-size:12pt;color:#1a365d;margin-bottom:6pt;">${escapeHtml(ud.unitName)} (${escapeHtml(ud.chapter)}) — ${ud.totalFound} אינדיקטורים חיוביים</div><table style="margin:4pt 0;"><thead><tr><th style="width:160pt;">קטגוריה</th><th>אינדיקטור</th><th style="width:60pt;">פסוק</th><th>הסבר מהכלי האנליטי</th></tr></thead><tbody>${ud.indicators.map(ind=>`<tr><td>${escapeHtml(ind.paramLabel)}</td><td>${escapeHtml(ind.q)}</td><td>${escapeHtml(ind.verse||"—")}</td><td>${escapeHtml(ind.note||"—")}</td></tr>`).join("")}</tbody></table></div>`).join("")}`:""}
 ${result.summary?`<div class="summary"><b>סיכום השלב:</b><br>${escapeHtml(result.summary).replace(/\n/g,"<br>")}</div>`:""}
 ${result.selfCheck?`<div class="selfcheck"><b>🔍 בדיקה עצמית:</b><br>${escapeHtml(result.selfCheck).replace(/\n/g,"<br>")}</div>`:""}
 ${result.manuallyEdited?`<div style="font-size:9pt;color:#92400e;margin-top:8pt;">⚠ שלב זה נערך ידנית ב-${result.editedAt||""}</div>`:""}
@@ -2311,29 +2317,52 @@ ${result.manuallyEdited?`<div style="font-size:9pt;color:#92400e;margin-top:8pt;
     const units=collectRelevant();
     const params=validParams(getParams(concept,raw));
     const labelOrder=[]; const l2i={};
-    params.forEach((p,i)=>{const l=p.paramLabel||"אחר"; if(!l2i[l]){l2i[l]=[];labelOrder.push(l);} l2i[l].push(i);});
+    params.forEach((p,i)=>{const l=p.paramLabel||"כללי"; if(!l2i[l]){l2i[l]=[];labelOrder.push(l);} l2i[l].push(i);});
     const headers=["יחידה",...labelOrder,'סה"כ'];
     const rows=[]; let total=0;
+    const indicatorDetails=[]; // פירוט אינדיקטורים חיוביים לפי יחידה
     units.forEach(u=>{
       const uid=String(u.id);
       const s=getUnitSummary(uid,raw);
       const nrList=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
       if(nrList.includes(concept)) return;
       const ec=getEntry(uid,concept,"chronicles",raw)||{};
-      const pos=(ec.params||[]).map((p,i)=>p&&p.found===true?i:-1).filter(i=>i>=0);
+      const ecParams=Array.isArray(ec.params)?ec.params:[];
+      const pos=ecParams.map((p,i)=>p&&p.found===true?i:-1).filter(i=>i>=0);
       if(!pos.length) return;
       const row=[`${u.name||"?"} (${u.chapter||"?"})`];
       labelOrder.forEach(l=>row.push(String(pos.filter(i=>l2i[l].includes(i)).length)));
       row.push(String(pos.length)); total+=pos.length;
       rows.push(row);
+      // בניית פירוט לכל אינדיקטור חיובי ביחידה
+      const foundInUnit=pos.map(i=>{
+        const def=params[i]||{};
+        const data=ecParams[i]||{};
+        return {
+          indicatorIdx:i,
+          q:def.q||`אינדיקטור ${i+1}`,
+          paramLabel:def.paramLabel||"כללי",
+          verse:data.verse||"",
+          note:data.explicit_note||data.note||data.evidence||""
+        };
+      });
+      indicatorDetails.push({
+        unitId:uid,
+        unitName:u.name||"?",
+        chapter:u.chapter||"?",
+        totalFound:pos.length,
+        indicators:foundInUnit
+      });
     });
+    const labelsForSummary=labelOrder.length?labelOrder.join(", "):"— (אין קטגוריות פרמטרים מוגדרות למושג זה)";
     return{
       status:"חישוב מיידי — מוכן לאישור",
       hasTable:true,
       tableHeaders:headers,
       tableRows:rows,
-      summary:`${rows.length} יחידות עם אינדיקטורים חיוביים, סה"כ ${total} אינדיקטורים ב-${labelOrder.length} קטגוריות: ${labelOrder.join(", ")}.`,
-      selfCheck:"חישוב דטרמיניסטי. הקטגוריות נגזרות מתוך paramLabel של פרמטרי המושג."
+      indicatorDetails,
+      summary:`${rows.length} יחידות עם אינדיקטורים חיוביים, סה"כ ${total} אינדיקטורים ב-${labelOrder.length} קטגוריות: ${labelsForSummary}.`,
+      selfCheck:"חישוב דטרמיניסטי. הטבלה מציגה ספירת אינדיקטורים חיוביים לפי paramLabel. הפירוט מתחתיה מציג את טקסט כל אינדיקטור כן + הפסוק + ההסבר (אם קיים) מהכלי האנליטי."
     };
   }
 
@@ -2937,6 +2966,32 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         </div>
                       );
                     })()}
+                    {/* פירוט אינדיקטורים חיוביים לפי יחידה (שלב 2) */}
+                    {n===2&&hasResult.indicatorDetails&&hasResult.indicatorDetails.length>0&&(
+                      <div style={{marginBottom:"12px",padding:"12px 14px",background:"#0f172a",borderRadius:"7px",border:`1px solid ${dimColor}44`}}>
+                        <div style={{fontSize:"11px",color:dimColor,fontWeight:"700",marginBottom:"8px"}}>📋 פירוט אינדיקטורים חיוביים לפי יחידה (מהכלי האנליטי)</div>
+                        <div style={{maxHeight:"500px",overflowY:"auto",display:"flex",flexDirection:"column",gap:"10px"}}>
+                          {hasResult.indicatorDetails.map((ud,ui)=>(
+                            <div key={ui} style={{padding:"10px",background:"#1e293b",borderRadius:"6px",borderRight:`2px solid ${dimColor}66`}}>
+                              <div style={{fontSize:"12px",fontWeight:"700",color:"#f1f5f9",marginBottom:"6px"}}>{ud.unitName} <span style={{color:"#64748b",fontWeight:"400"}}>({ud.chapter}) · {ud.totalFound} אינדיקטורים חיוביים</span></div>
+                              <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                                {ud.indicators.map((ind,ii)=>(
+                                  <div key={ii} style={{padding:"7px 10px",background:"#0f172a",borderRadius:"5px",fontSize:"11px"}}>
+                                    <div style={{display:"flex",gap:"8px",alignItems:"flex-start",flexWrap:"wrap",marginBottom:"3px"}}>
+                                      <span style={{background:`${dimColor}22`,color:dimColor,padding:"1px 6px",borderRadius:"3px",fontSize:"10px",fontWeight:"700"}}>{ind.paramLabel}</span>
+                                      {ind.verse&&<span style={{background:"#1e3a5f",color:"#93c5fd",padding:"1px 6px",borderRadius:"3px",fontSize:"10px",fontWeight:"700"}}>פסוק {ind.verse}</span>}
+                                    </div>
+                                    <div style={{color:"#cbd5e1",lineHeight:"1.5",marginBottom:ind.note?"4px":"0"}}>{ind.q}</div>
+                                    {ind.note&&<div style={{color:"#94a3b8",fontSize:"10px",fontStyle:"italic",padding:"4px 6px",background:"#334155",borderRadius:"3px",lineHeight:"1.4"}}>💬 {ind.note}</div>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {hasResult.summary&&(
                       <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${dimColor}`}}>
                         <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"4px"}}>סיכום השלב</div>
