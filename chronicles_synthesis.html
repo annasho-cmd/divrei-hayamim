@@ -628,9 +628,131 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
   const [drillDown,setDrillDown]=useState(null); // {finding, phenomenonTitle, aspect}
   const [savingApproval,setSavingApproval]=useState(false);
 
-  // מצב התצוגה: מה שאנחנו מציגים? user_approved אם קיים, אחרת ai_proposal
+  // מצב התצוגה: user_approved אם קיים (גם אם לא אושר עדיין — זה המצב הערוך), אחרת ai_proposal
   const activeData=userApproved||aiProposal||{phenomena:[],needsReview:[]};
-  const isApproved=!!userApproved;
+  const isApproved=!!(userApproved&&userApproved.approvedAt);
+  const hasEdits=!!(userApproved&&!userApproved.approvedAt);
+
+  // ─ Editing state ─
+  const [editingIdx,setEditingIdx]=useState(null); // index של תופעה בעריכה
+  const [draft,setDraft]=useState(null); // טיוטה של התופעה הנערכת
+  const [savingEdit,setSavingEdit]=useState(false);
+  const [splitDialog,setSplitDialog]=useState(null); // {phenomenonIdx}
+  const [mergeDialog,setMergeDialog]=useState(null); // {phenomenonIdx}
+  const [reviewPromptIdx,setReviewPromptIdx]=useState(null); // אם מבקשים הערה בעת סימון "דורש בדיקה"
+
+  // רשימות ל-dropdowns
+  const ACTORS=["דוד","שלמה","דמות אחרת","קבוצה","לא רלוונטי","לא ברור"];
+  const PRESENTATIONS=["דיבור ישיר של המלך","תיאור המספר","דברי דמות אחרת","בחירה ספרותית","משולב"];
+  const MEANS=["פעולה","אמירה","תיאור","מבנה ספרותי","בחירה לשונית","משולב"];
+
+  // כלי עזר לבניית נתון לשמירה
+  function buildToSave(newPhenomena,newNeedsReview,historyEntry){
+    return {
+      ...activeData,
+      phenomena:newPhenomena||activeData.phenomena,
+      needsReview:newNeedsReview||activeData.needsReview,
+      editHistory:[...(activeData.editHistory||[]),historyEntry],
+      approvedAt:null, // כל עריכה מורידה את האישור
+      approvedBy:"user",
+      basedOnProposal:aiProposal?aiProposal.runAt:null,
+      lastEditedAt:new Date().toISOString()
+    };
+  }
+
+  // ───────── עריכת תופעה ─────────
+  function startEdit(i){
+    const p=activeData.phenomena[i]||{};
+    setDraft({
+      title:p.title||"",
+      description:p.description||"",
+      actor:p.actor||"",
+      presentation:p.presentation||"",
+      designMeans:p.designMeans||"",
+      analyticalClaim:p.analyticalClaim||"",
+      justification:p.justification||"",
+      researcherNote:p.researcherNote||""
+    });
+    setEditingIdx(i);
+  }
+  function cancelEdit(){ setDraft(null); setEditingIdx(null); }
+  async function saveEdit(){
+    if(editingIdx==null) return;
+    setSavingEdit(true);
+    const newPhenomena=[...activeData.phenomena];
+    const prev=newPhenomena[editingIdx]||{};
+    const changes=Object.keys(draft).filter(k=>draft[k]!==(prev[k]||""));
+    newPhenomena[editingIdx]={...prev,...draft};
+    const entry={at:new Date().toISOString(),type:"edit_phenomenon",phenomenonIndex:editingIdx,phenomenonTitle:newPhenomena[editingIdx].title,fieldsChanged:changes};
+    await onSaveApproved(buildToSave(newPhenomena,null,entry));
+    setSavingEdit(false); setDraft(null); setEditingIdx(null);
+  }
+
+  // ───────── דורש בדיקה ─────────
+  async function toggleNeedsReview(i,note){
+    const newPhenomena=[...activeData.phenomena];
+    const was=!!newPhenomena[i].needsReview;
+    newPhenomena[i]={...newPhenomena[i],needsReview:!was,reviewNote:!was?(note||""):""};
+    const entry={at:new Date().toISOString(),type:was?"unmark_review":"mark_review",phenomenonIndex:i,phenomenonTitle:newPhenomena[i].title,note:note||""};
+    await onSaveApproved(buildToSave(newPhenomena,null,entry));
+  }
+
+  // ───────── פיצול ─────────
+  async function performSplit(i,plan){
+    // plan = {evidenceDispositions: [{sourceId, action: "stay"|"move"|"copy", newAspect?}], newPhen: {title, description, actor, presentation, designMeans, justification}}
+    const newPhenomena=[...activeData.phenomena];
+    const original={...newPhenomena[i]};
+    const origEvidence=Array.isArray(original.textualEvidence)?[...original.textualEvidence]:[];
+    const origSids=Array.isArray(original.assignedSourceIds)?[...original.assignedSourceIds]:[];
+    const stayEvidence=[],stayAssigned=new Set();
+    const newEvidence=[],newAssigned=new Set();
+    plan.evidenceDispositions.forEach(d=>{
+      const ev=origEvidence.find(e=>e.sourceId===d.sourceId);
+      if(!ev) return;
+      if(d.action==="stay"){ stayEvidence.push(ev); stayAssigned.add(d.sourceId); }
+      else if(d.action==="move"){ newEvidence.push({...ev,aspect:d.newAspect||ev.aspect}); newAssigned.add(d.sourceId); }
+      else if(d.action==="copy"){
+        stayEvidence.push(ev); stayAssigned.add(d.sourceId);
+        newEvidence.push({...ev,aspect:d.newAspect||ev.aspect}); newAssigned.add(d.sourceId);
+      }
+    });
+    newPhenomena[i]={...original,textualEvidence:stayEvidence,assignedSourceIds:[...stayAssigned]};
+    const newPhen={
+      title:plan.newPhen.title,description:plan.newPhen.description||"",
+      actor:plan.newPhen.actor||original.actor||"",presentation:plan.newPhen.presentation||original.presentation||"",
+      designMeans:plan.newPhen.designMeans||original.designMeans||"",
+      analyticalClaim:"",justification:plan.newPhen.justification||`פוצל מתופעה "${original.title}" (${new Date().toLocaleDateString("he-IL")})`,
+      textualEvidence:newEvidence,assignedSourceIds:[...newAssigned]
+    };
+    newPhenomena.push(newPhen);
+    const entry={at:new Date().toISOString(),type:"split",fromPhenomenonIndex:i,fromTitle:original.title,toTitle:newPhen.title,
+      sidsMoved:[...newAssigned].filter(s=>!stayAssigned.has(s)),sidsCopied:[...newAssigned].filter(s=>stayAssigned.has(s))};
+    await onSaveApproved(buildToSave(newPhenomena,null,entry));
+  }
+
+  // ───────── איחוד ─────────
+  async function performMerge(fromIdx,toIdx,mergedTitleDesc){
+    // mergedTitleDesc = {title, description, actor?, presentation?, designMeans?, analyticalClaim?, justification?, researcherNote?}
+    const newPhenomena=[...activeData.phenomena];
+    const a=newPhenomena[fromIdx]||{}, b=newPhenomena[toIdx]||{};
+    const combinedEvidence=[...(a.textualEvidence||[]),...(b.textualEvidence||[])];
+    const combinedSids=[...new Set([...(a.assignedSourceIds||[]),...(b.assignedSourceIds||[])])];
+    const merged={
+      title:mergedTitleDesc.title,description:mergedTitleDesc.description||"",
+      actor:mergedTitleDesc.actor||a.actor||b.actor||"",
+      presentation:mergedTitleDesc.presentation||a.presentation||b.presentation||"",
+      designMeans:mergedTitleDesc.designMeans||a.designMeans||b.designMeans||"",
+      analyticalClaim:mergedTitleDesc.analyticalClaim||"",
+      justification:mergedTitleDesc.justification||`אוחדו שתי תופעות: "${a.title}" + "${b.title}" (${new Date().toLocaleDateString("he-IL")})`,
+      researcherNote:mergedTitleDesc.researcherNote||a.researcherNote||b.researcherNote||"",
+      textualEvidence:combinedEvidence,assignedSourceIds:combinedSids
+    };
+    // מסירים את שתי המקוריות ומוסיפים את המאוחדת
+    const filtered=newPhenomena.filter((_,i)=>i!==fromIdx&&i!==toIdx);
+    filtered.push(merged);
+    const entry={at:new Date().toISOString(),type:"merge",fromTitles:[a.title,b.title],toTitle:merged.title,sidsCombined:combinedSids};
+    await onSaveApproved(buildToSave(filtered,null,entry));
+  }
   const unitName=unit.name||unit.label||unit.id;
   const chapter=unit.chapter||"?";
   const uniqueConcepts=[...new Set(findings.map(f=>f.concept))];
@@ -698,7 +820,8 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
           </div>
           <div style={{marginTop:"8px"}}>
             {isApproved&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#065f46",color:"#86efac",fontWeight:"700"}}>✓ מאושרת ע״י חוקרת</span>}
-            {!isApproved&&aiProposal&&aiProposal.validatedByCode&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#1e3a5f",color:"#93c5fd",fontWeight:"700"}}>🤖 הצעת AI תקינה — ממתינה לאישור</span>}
+            {hasEdits&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#78350f",color:"#fcd34d",fontWeight:"700"}}>✏ נערכה — ממתינה לאישור מחודש</span>}
+            {!isApproved&&!hasEdits&&aiProposal&&aiProposal.validatedByCode&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#1e3a5f",color:"#93c5fd",fontWeight:"700"}}>🤖 הצעת AI תקינה — ממתינה לאישור</span>}
             {!isApproved&&aiProposal&&!aiProposal.validatedByCode&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#7f1d1d",color:"#fca5a5",fontWeight:"700"}}>⚠ הצעת AI לא תקינה</span>}
             {!isApproved&&!aiProposal&&<span style={{fontSize:"11px",padding:"3px 10px",borderRadius:"5px",background:"#1e293b",color:"#94a3b8",fontWeight:"700"}}>⏳ טרם רץ</span>}
             {previousApproved&&!isApproved&&<span style={{fontSize:"10px",color:"#f59e0b",marginRight:"8px"}}>· נפתחה מחדש (יש גרסה קודמת שנשמרה)</span>}
@@ -714,53 +837,93 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
         </div>
       ):(
         <div style={{display:"flex",flexDirection:"column",gap:"12px"}}>
-          {activeData.phenomena.map((p,i)=>(
-            <div key={i} style={{padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`1px solid ${p.needsReview?"#f59e0b66":dimColor+"33"}`}}>
+          {activeData.phenomena.map((p,i)=>{
+            const isEd=editingIdx===i;
+            const d=isEd?draft:p;
+            const fieldStyle={width:"100%",padding:"6px",background:"#0f172a",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit",resize:"vertical",direction:"rtl"};
+            return(
+            <div key={i} style={{padding:"16px 20px",background:"#1e293b",borderRadius:"10px",border:`1px solid ${isEd?dimColor:(p.needsReview?"#f59e0b66":dimColor+"33")}`}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
                 <div style={{flex:1,minWidth:"300px"}}>
-                  <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>
-                    תופעה {i+1}: {p.title||"(ללא שם)"}
-                    {p.needsReview&&<span style={{fontSize:"10px",color:"#f59e0b",marginRight:"8px",padding:"2px 7px",background:"#78350f44",borderRadius:"4px"}}>⚠ דורש בדיקה</span>}
-                  </div>
-                  <div style={{fontSize:"11px",color:"#94a3b8"}}>
-                    actor: <span style={{color:"#cbd5e1"}}>{p.actor||"—"}</span>
-                    {" · "}presentation: <span style={{color:"#cbd5e1"}}>{p.presentation||"—"}</span>
-                    {" · "}means: <span style={{color:"#cbd5e1"}}>{p.designMeans||"—"}</span>
-                  </div>
+                  {isEd?(
+                    <input type="text" value={d.title} onChange={e=>setDraft({...d,title:e.target.value})} placeholder="שם התופעה" style={{...fieldStyle,fontWeight:"700",fontSize:"14px"}}/>
+                  ):(
+                    <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>
+                      תופעה {i+1}: {p.title||"(ללא שם)"}
+                      {p.needsReview&&<span style={{fontSize:"10px",color:"#f59e0b",marginRight:"8px",padding:"2px 7px",background:"#78350f44",borderRadius:"4px"}}>⚠ דורש בדיקה</span>}
+                    </div>
+                  )}
+                  {isEd?(
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"6px",marginTop:"8px"}}>
+                      <div><div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"2px"}}>actor</div>
+                        <select value={d.actor} onChange={e=>setDraft({...d,actor:e.target.value})} style={fieldStyle}><option value="">—</option>{ACTORS.map(x=><option key={x} value={x}>{x}</option>)}</select></div>
+                      <div><div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"2px"}}>presentation</div>
+                        <select value={d.presentation} onChange={e=>setDraft({...d,presentation:e.target.value})} style={fieldStyle}><option value="">—</option>{PRESENTATIONS.map(x=><option key={x} value={x}>{x}</option>)}</select></div>
+                      <div><div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"2px"}}>designMeans</div>
+                        <select value={d.designMeans} onChange={e=>setDraft({...d,designMeans:e.target.value})} style={fieldStyle}><option value="">—</option>{MEANS.map(x=><option key={x} value={x}>{x}</option>)}</select></div>
+                    </div>
+                  ):(
+                    <div style={{fontSize:"11px",color:"#94a3b8"}}>
+                      actor: <span style={{color:"#cbd5e1"}}>{p.actor||"—"}</span>
+                      {" · "}presentation: <span style={{color:"#cbd5e1"}}>{p.presentation||"—"}</span>
+                      {" · "}means: <span style={{color:"#cbd5e1"}}>{p.designMeans||"—"}</span>
+                    </div>
+                  )}
                 </div>
                 <div style={{display:"flex",gap:"4px",flexWrap:"wrap"}}>
-                  <button disabled style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"10px"}} title="בפיתוח — בלוק 2">✏ ערוך</button>
-                  <button disabled style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"10px"}} title="בפיתוח — בלוק 2">🔀 פצל</button>
-                  <button disabled style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"10px"}} title="בפיתוח — בלוק 2">🔗 אחד</button>
-                  <button disabled style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #334155",cursor:"not-allowed",background:"transparent",color:"#475569",fontSize:"10px"}} title="בפיתוח — בלוק 2">⚠ דורש בדיקה</button>
+                  {isEd?(<>
+                    <button onClick={saveEdit} disabled={savingEdit||!d.title.trim()} style={{padding:"5px 12px",borderRadius:"5px",border:"none",cursor:d.title.trim()?"pointer":"not-allowed",background:d.title.trim()?"#34d399":"#334155",color:"white",fontSize:"10px",fontWeight:"700"}}>{savingEdit?"⏳":"💾 שמור"}</button>
+                    <button onClick={cancelEdit} disabled={savingEdit} style={{padding:"5px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"10px"}}>ביטול</button>
+                  </>):(<>
+                    <button onClick={()=>startEdit(i)} disabled={editingIdx!=null} style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:editingIdx!=null?"not-allowed":"pointer",background:"transparent",color:editingIdx!=null?"#475569":"#cbd5e1",fontSize:"10px"}}>✏ ערוך</button>
+                    <button onClick={()=>setSplitDialog({phenomenonIdx:i})} disabled={editingIdx!=null||(p.assignedSourceIds||[]).length<2} style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:(editingIdx!=null||(p.assignedSourceIds||[]).length<2)?"not-allowed":"pointer",background:"transparent",color:(editingIdx!=null||(p.assignedSourceIds||[]).length<2)?"#475569":"#cbd5e1",fontSize:"10px"}} title={(p.assignedSourceIds||[]).length<2?"פיצול דורש לפחות 2 ראיות":""}>🔀 פצל</button>
+                    <button onClick={()=>setMergeDialog({phenomenonIdx:i})} disabled={editingIdx!=null||activeData.phenomena.length<2} style={{padding:"4px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:(editingIdx!=null||activeData.phenomena.length<2)?"not-allowed":"pointer",background:"transparent",color:(editingIdx!=null||activeData.phenomena.length<2)?"#475569":"#cbd5e1",fontSize:"10px"}} title={activeData.phenomena.length<2?"צריך לפחות 2 תופעות":""}>🔗 אחד</button>
+                    <button onClick={()=>p.needsReview?toggleNeedsReview(i,""):setReviewPromptIdx(i)} disabled={editingIdx!=null} style={{padding:"4px 10px",borderRadius:"5px",border:`1px solid ${p.needsReview?"#f59e0b":"#475569"}`,cursor:editingIdx!=null?"not-allowed":"pointer",background:p.needsReview?"#78350f44":"transparent",color:p.needsReview?"#fbbf24":"#cbd5e1",fontSize:"10px"}}>{p.needsReview?"✓ בטל סימון":"⚠ דורש בדיקה"}</button>
+                  </>)}
                 </div>
               </div>
 
-              {p.description&&(
-                <div style={{marginTop:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${dimColor}`}}>
-                  <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"3px"}}>📝 תיאור עובדתי</div>
-                  <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{p.description}</div>
+              {isEd?(
+                <div style={{marginTop:"10px",display:"flex",flexDirection:"column",gap:"8px"}}>
+                  <div><div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"3px"}}>📝 תיאור עובדתי</div>
+                    <textarea value={d.description} onChange={e=>setDraft({...d,description:e.target.value})} rows={3} style={fieldStyle}/></div>
+                  <div><div style={{fontSize:"10px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>💭 טענה אנליטית מצומצמת (ריק = ללא טענה)</div>
+                    <textarea value={d.analyticalClaim} onChange={e=>setDraft({...d,analyticalClaim:e.target.value})} rows={3} style={fieldStyle}/></div>
+                  <div><div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"3px"}}>נימוק לאיחוד</div>
+                    <textarea value={d.justification} onChange={e=>setDraft({...d,justification:e.target.value})} rows={2} style={fieldStyle}/></div>
+                  <div><div style={{fontSize:"10px",color:"#fbbf24",fontWeight:"700",marginBottom:"3px"}}>📝 הערה מחקרית (חוקרת) — ילווה לד'2 ולא יחליף את הטענה האנליטית</div>
+                    <textarea value={d.researcherNote} onChange={e=>setDraft({...d,researcherNote:e.target.value})} rows={3} placeholder="למשל: 'התופעה מבוססת היטב כמסגור של המספר, אך אין להסיק ממנה כשלעצמה תכונות אישיות של דוד'" style={{...fieldStyle,background:"#78350f22",border:"1px solid #f59e0b44"}}/></div>
                 </div>
-              )}
-              {p.analyticalClaim&&p.analyticalClaim.trim()&&(
-                <div style={{marginTop:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:"3px solid #a78bfa"}}>
-                  <div style={{fontSize:"10px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>💭 טענה אנליטית מצומצמת</div>
-                  <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{p.analyticalClaim}</div>
-                </div>
-              )}
-              {p.justification&&(
-                <div style={{marginTop:"8px",padding:"8px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"11px",color:"#94a3b8",fontStyle:"italic"}}>
-                  <strong style={{color:"#cbd5e1"}}>נימוק לאיחוד:</strong> {p.justification}
-                </div>
-              )}
-
-              {/* הערה מחקרית — תמיד מופיעה (לקריאה בלבד בבלוק 1) */}
-              {p.researcherNote&&(
-                <div style={{marginTop:"8px",padding:"10px 12px",background:"#78350f22",borderRadius:"6px",borderRight:"3px solid #f59e0b"}}>
-                  <div style={{fontSize:"10px",color:"#fbbf24",fontWeight:"700",marginBottom:"3px"}}>📝 הערה מחקרית (חוקרת)</div>
-                  <div style={{fontSize:"12px",color:"#fef3c7",lineHeight:"1.6"}}>{p.researcherNote}</div>
-                </div>
-              )}
+              ):(<>
+                {p.description&&(
+                  <div style={{marginTop:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${dimColor}`}}>
+                    <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"3px"}}>📝 תיאור עובדתי</div>
+                    <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{p.description}</div>
+                  </div>
+                )}
+                {p.analyticalClaim&&p.analyticalClaim.trim()&&(
+                  <div style={{marginTop:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:"3px solid #a78bfa"}}>
+                    <div style={{fontSize:"10px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>💭 טענה אנליטית מצומצמת</div>
+                    <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{p.analyticalClaim}</div>
+                  </div>
+                )}
+                {p.justification&&(
+                  <div style={{marginTop:"8px",padding:"8px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"11px",color:"#94a3b8",fontStyle:"italic"}}>
+                    <strong style={{color:"#cbd5e1"}}>נימוק לאיחוד:</strong> {p.justification}
+                  </div>
+                )}
+                {p.researcherNote&&(
+                  <div style={{marginTop:"8px",padding:"10px 12px",background:"#78350f22",borderRadius:"6px",borderRight:"3px solid #f59e0b"}}>
+                    <div style={{fontSize:"10px",color:"#fbbf24",fontWeight:"700",marginBottom:"3px"}}>📝 הערה מחקרית (חוקרת)</div>
+                    <div style={{fontSize:"12px",color:"#fef3c7",lineHeight:"1.6"}}>{p.researcherNote}</div>
+                  </div>
+                )}
+                {p.needsReview&&p.reviewNote&&(
+                  <div style={{marginTop:"8px",padding:"10px 12px",background:"#78350f22",borderRadius:"6px",borderRight:"3px solid #f59e0b",fontSize:"11px",color:"#fde68a"}}>
+                    <strong>⚠ הערה (דורש בדיקה):</strong> {p.reviewNote}
+                  </div>
+                )}
+              </>)}
 
               {/* ראיות */}
               {Array.isArray(p.textualEvidence)&&p.textualEvidence.length>0&&(()=>{
@@ -804,7 +967,8 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
                 );
               })()}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -864,6 +1028,181 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
       </div>
 
       {drillDown&&<SourceDrillDownModal finding={drillDown.finding} phenomenonTitle={drillDown.phenomenonTitle} aiAspect={drillDown.aspect} onClose={()=>setDrillDown(null)}/>}
+
+      {/* דיאלוג סימון "דורש בדיקה" עם הערה */}
+      {reviewPromptIdx!=null&&<ReviewNotePrompt phenomenon={activeData.phenomena[reviewPromptIdx]} onConfirm={(note)=>{toggleNeedsReview(reviewPromptIdx,note); setReviewPromptIdx(null);}} onCancel={()=>setReviewPromptIdx(null)}/>}
+
+      {/* דיאלוג פיצול */}
+      {splitDialog!=null&&<SplitDialog phenomenon={activeData.phenomena[splitDialog.phenomenonIdx]} findings={findings} onConfirm={async(plan)=>{await performSplit(splitDialog.phenomenonIdx,plan); setSplitDialog(null);}} onCancel={()=>setSplitDialog(null)} dimColor={dimColor}/>}
+
+      {/* דיאלוג איחוד */}
+      {mergeDialog!=null&&<MergeDialog phenomenon={activeData.phenomena[mergeDialog.phenomenonIdx]} fromIdx={mergeDialog.phenomenonIdx} allPhenomena={activeData.phenomena} onConfirm={async(toIdx,merged)=>{await performMerge(mergeDialog.phenomenonIdx,toIdx,merged); setMergeDialog(null);}} onCancel={()=>setMergeDialog(null)} dimColor={dimColor}/>}
+    </div>
+  );
+}
+
+// ─── דיאלוג הערת "דורש בדיקה" ───
+function ReviewNotePrompt({phenomenon,onConfirm,onCancel}){
+  const [note,setNote]=useState("");
+  return (
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"#000a",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:"20px"}}>
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",maxWidth:"560px",width:"100%",border:"1px solid #f59e0b"}}>
+        <div style={{fontSize:"15px",fontWeight:"700",color:"#fcd34d",marginBottom:"8px"}}>⚠ סימון תופעה "{phenomenon.title}" כדורשת בדיקה</div>
+        <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"12px"}}>הסברי מה הבעיה או מה דורש בדיקה נוספת (אופציונלי). ההערה תלווה את התופעה גם לד'2.</div>
+        <textarea value={note} onChange={e=>setNote(e.target.value)} rows={4} placeholder="למשל: הטענה דורשת בדיקה מול פרשן X; יש פסוק נוסף שלא נבדק..." style={{width:"100%",padding:"8px",background:"#0f172a",border:"1px solid #475569",borderRadius:"6px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit",resize:"vertical",direction:"rtl"}}/>
+        <div style={{display:"flex",gap:"8px",marginTop:"14px",justifyContent:"flex-end"}}>
+          <button onClick={onCancel} style={{padding:"8px 16px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px"}}>ביטול</button>
+          <button onClick={()=>onConfirm(note)} style={{padding:"8px 16px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700"}}>⚠ סמן כדורש בדיקה</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── דיאלוג פיצול תופעה ───
+function SplitDialog({phenomenon,findings,onConfirm,onCancel,dimColor}){
+  const evidence=Array.isArray(phenomenon.textualEvidence)?phenomenon.textualEvidence:[];
+  const [dispositions,setDispositions]=useState(()=>evidence.map(e=>({sourceId:e.sourceId,action:"stay",newAspect:""})));
+  const [newTitle,setNewTitle]=useState("");
+  const [newDesc,setNewDesc]=useState("");
+  const [newActor,setNewActor]=useState("");
+  const [newPresentation,setNewPresentation]=useState("");
+  const [newMeans,setNewMeans]=useState("");
+  const movedOrCopied=dispositions.filter(d=>d.action!=="stay").length;
+  const stayCount=dispositions.filter(d=>d.action==="stay").length;
+  const canSplit=newTitle.trim()&&movedOrCopied>0&&stayCount>0;
+  const findingBySid={}; findings.forEach(f=>{findingBySid[f.sid]=f;});
+
+  function setDisp(sid,field,val){ setDispositions(ds=>ds.map(d=>d.sourceId===sid?{...d,[field]:val}:d)); }
+
+  return (
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"#000c",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:"20px"}}>
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",maxWidth:"900px",width:"100%",maxHeight:"90vh",overflowY:"auto",border:`1px solid ${dimColor}`}}>
+        <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9",marginBottom:"4px"}}>🔀 פיצול תופעה: "{phenomenon.title}"</div>
+        <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"14px"}}>לכל ראיה — החליטי: להישאר בתופעה המקורית, להעביר לתופעה חדשה, או להעתיק לשתיהן (עם היבט שונה)</div>
+        <div style={{maxHeight:"300px",overflowY:"auto",border:"1px solid #334155",borderRadius:"6px",padding:"10px",marginBottom:"14px"}}>
+          {evidence.map((ev,i)=>{
+            const d=dispositions[i]; const f=findingBySid[ev.sourceId];
+            return (<div key={i} style={{padding:"10px",borderBottom:"1px solid #334155",display:"flex",gap:"10px",alignItems:"flex-start"}}>
+              <div style={{flex:1,fontSize:"11px"}}>
+                <div style={{color:"#60a5fa",fontFamily:"monospace",marginBottom:"3px"}}>{f?f.label:ev.sourceId}</div>
+                <div style={{color:"#cbd5e1"}}>{ev.evidence||"—"}</div>
+                <div style={{color:"#94a3b8",fontSize:"10px",marginTop:"3px"}}>היבט נוכחי: {ev.aspect||"—"}</div>
+              </div>
+              <div style={{minWidth:"200px"}}>
+                <select value={d.action} onChange={e=>setDisp(ev.sourceId,"action",e.target.value)} style={{width:"100%",padding:"5px",background:"#0f172a",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px"}}>
+                  <option value="stay">נשארת (במקורית)</option>
+                  <option value="move">מועברת לחדשה</option>
+                  <option value="copy">מועתקת (לשתיהן, עם היבט אחר)</option>
+                </select>
+                {d.action==="copy"&&<input type="text" value={d.newAspect} onChange={e=>setDisp(ev.sourceId,"newAspect",e.target.value)} placeholder="היבט חדש בתופעה החדשה" style={{width:"100%",padding:"4px",marginTop:"4px",background:"#0f172a",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"10px"}}/>}
+              </div>
+            </div>);
+          })}
+        </div>
+        <div style={{padding:"12px",background:"#0f172a",borderRadius:"6px",marginBottom:"14px"}}>
+          <div style={{fontSize:"12px",fontWeight:"700",color:"#f1f5f9",marginBottom:"8px"}}>פרטי התופעה החדשה</div>
+          <input type="text" value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="שם התופעה החדשה (חובה)" style={{width:"100%",padding:"6px",marginBottom:"6px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px"}}/>
+          <textarea value={newDesc} onChange={e=>setNewDesc(e.target.value)} rows={2} placeholder="תיאור עובדתי" style={{width:"100%",padding:"6px",marginBottom:"6px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit"}}/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"6px"}}>
+            <input type="text" value={newActor} onChange={e=>setNewActor(e.target.value)} placeholder="actor" style={{padding:"5px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px"}}/>
+            <input type="text" value={newPresentation} onChange={e=>setNewPresentation(e.target.value)} placeholder="presentation" style={{padding:"5px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px"}}/>
+            <input type="text" value={newMeans} onChange={e=>setNewMeans(e.target.value)} placeholder="designMeans" style={{padding:"5px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px"}}/>
+          </div>
+        </div>
+        <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px"}}>סיכום: {stayCount} ראיות נשארות | {movedOrCopied} מועברות/מועתקות</div>
+        <div style={{display:"flex",gap:"8px",justifyContent:"flex-end"}}>
+          <button onClick={onCancel} style={{padding:"8px 16px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px"}}>ביטול</button>
+          <button onClick={()=>onConfirm({evidenceDispositions:dispositions,newPhen:{title:newTitle,description:newDesc,actor:newActor,presentation:newPresentation,designMeans:newMeans}})} disabled={!canSplit}
+            style={{padding:"8px 20px",borderRadius:"7px",border:"none",cursor:canSplit?"pointer":"not-allowed",background:canSplit?"#34d399":"#334155",color:canSplit?"white":"#64748b",fontSize:"12px",fontWeight:"700"}}>
+            🔀 בצע פיצול
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── דיאלוג איחוד תופעות ───
+function MergeDialog({phenomenon,fromIdx,allPhenomena,onConfirm,onCancel,dimColor}){
+  const [toIdx,setToIdx]=useState(null);
+  const [mergedTitle,setMergedTitle]=useState("");
+  const [mergedDesc,setMergedDesc]=useState("");
+  const [mergedActor,setMergedActor]=useState("");
+  const [mergedPresentation,setMergedPresentation]=useState("");
+  const [mergedMeans,setMergedMeans]=useState("");
+  const [mergedClaim,setMergedClaim]=useState("");
+  const other=allPhenomena.map((p,i)=>({p,i})).filter(x=>x.i!==fromIdx);
+  const target=toIdx!=null?allPhenomena[toIdx]:null;
+
+  function proceedToConfirm(idx){
+    setToIdx(idx);
+    const t=allPhenomena[idx];
+    // ברירות מחדל: מאחדים את השמות והתיאורים
+    setMergedTitle(`${phenomenon.title} + ${t.title}`);
+    setMergedDesc(`${phenomenon.description||""}\n\n${t.description||""}`.trim());
+    setMergedActor(phenomenon.actor||t.actor||"");
+    setMergedPresentation(phenomenon.presentation||t.presentation||"");
+    setMergedMeans(phenomenon.designMeans||t.designMeans||"");
+    setMergedClaim("");
+  }
+
+  return (
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"#000c",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:"20px"}}>
+      <div style={{background:"#1e293b",borderRadius:"12px",padding:"24px",maxWidth:"900px",width:"100%",maxHeight:"90vh",overflowY:"auto",border:`1px solid ${dimColor}`}}>
+        <div style={{fontSize:"16px",fontWeight:"700",color:"#f1f5f9",marginBottom:"4px"}}>🔗 איחוד תופעה "{phenomenon.title}" עם תופעה אחרת</div>
+        {!target?(
+          <>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"14px"}}>בחרי תופעה שנייה לאיחוד:</div>
+            <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
+              {other.map(({p,i})=>(
+                <button key={i} onClick={()=>proceedToConfirm(i)} style={{textAlign:"right",padding:"12px",borderRadius:"7px",border:"1px solid #334155",cursor:"pointer",background:"#0f172a",color:"#cbd5e1",fontSize:"12px"}}>
+                  <div style={{fontWeight:"700",color:"#f1f5f9"}}>{p.title}</div>
+                  <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"3px"}}>{(p.textualEvidence||[]).length} ראיות · {(p.assignedSourceIds||[]).length} sids</div>
+                </button>
+              ))}
+            </div>
+          </>
+        ):(
+          <>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"14px",marginBottom:"14px"}}>
+              <div style={{padding:"12px",background:"#0f172a",borderRadius:"6px"}}>
+                <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"4px"}}>תופעה א'</div>
+                <div style={{fontSize:"13px",color:"#f1f5f9",fontWeight:"600",marginBottom:"4px"}}>{phenomenon.title}</div>
+                <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.5"}}>{phenomenon.description||"—"}</div>
+                <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"6px"}}>{(phenomenon.textualEvidence||[]).length} ראיות</div>
+              </div>
+              <div style={{padding:"12px",background:"#0f172a",borderRadius:"6px"}}>
+                <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"4px"}}>תופעה ב'</div>
+                <div style={{fontSize:"13px",color:"#f1f5f9",fontWeight:"600",marginBottom:"4px"}}>{target.title}</div>
+                <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.5"}}>{target.description||"—"}</div>
+                <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"6px"}}>{(target.textualEvidence||[]).length} ראיות</div>
+              </div>
+            </div>
+            <div style={{padding:"12px",background:"#0f172a",borderRadius:"6px",marginBottom:"14px"}}>
+              <div style={{fontSize:"12px",fontWeight:"700",color:"#34d399",marginBottom:"8px"}}>פרטי התופעה המאוחדת</div>
+              <input type="text" value={mergedTitle} onChange={e=>setMergedTitle(e.target.value)} placeholder="שם מאוחד (חובה)" style={{width:"100%",padding:"6px",marginBottom:"6px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px"}}/>
+              <textarea value={mergedDesc} onChange={e=>setMergedDesc(e.target.value)} rows={3} placeholder="תיאור מאוחד" style={{width:"100%",padding:"6px",marginBottom:"6px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit"}}/>
+              <textarea value={mergedClaim} onChange={e=>setMergedClaim(e.target.value)} rows={2} placeholder="טענה אנליטית (אופציונלי)" style={{width:"100%",padding:"6px",marginBottom:"6px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit"}}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"6px"}}>
+                <input type="text" value={mergedActor} onChange={e=>setMergedActor(e.target.value)} placeholder="actor" style={{padding:"5px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px"}}/>
+                <input type="text" value={mergedPresentation} onChange={e=>setMergedPresentation(e.target.value)} placeholder="presentation" style={{padding:"5px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px"}}/>
+                <input type="text" value={mergedMeans} onChange={e=>setMergedMeans(e.target.value)} placeholder="designMeans" style={{padding:"5px",background:"#1e293b",border:"1px solid #475569",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px"}}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:"8px",justifyContent:"space-between"}}>
+              <button onClick={()=>setToIdx(null)} style={{padding:"8px 16px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px"}}>↩ בחרי תופעה אחרת</button>
+              <div style={{display:"flex",gap:"8px"}}>
+                <button onClick={onCancel} style={{padding:"8px 16px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px"}}>ביטול</button>
+                <button onClick={()=>onConfirm(toIdx,{title:mergedTitle,description:mergedDesc,actor:mergedActor,presentation:mergedPresentation,designMeans:mergedMeans,analyticalClaim:mergedClaim})} disabled={!mergedTitle.trim()}
+                  style={{padding:"8px 20px",borderRadius:"7px",border:"none",cursor:mergedTitle.trim()?"pointer":"not-allowed",background:mergedTitle.trim()?"#34d399":"#334155",color:mergedTitle.trim()?"white":"#64748b",fontSize:"12px",fontWeight:"700"}}>
+                  🔗 בצע איחוד
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
