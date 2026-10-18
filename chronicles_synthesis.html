@@ -754,10 +754,28 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
                 </div>
               )}
 
+              {/* הערה מחקרית — תמיד מופיעה (לקריאה בלבד בבלוק 1) */}
+              {p.researcherNote&&(
+                <div style={{marginTop:"8px",padding:"10px 12px",background:"#78350f22",borderRadius:"6px",borderRight:"3px solid #f59e0b"}}>
+                  <div style={{fontSize:"10px",color:"#fbbf24",fontWeight:"700",marginBottom:"3px"}}>📝 הערה מחקרית (חוקרת)</div>
+                  <div style={{fontSize:"12px",color:"#fef3c7",lineHeight:"1.6"}}>{p.researcherNote}</div>
+                </div>
+              )}
+
               {/* ראיות */}
-              {Array.isArray(p.textualEvidence)&&p.textualEvidence.length>0&&(
+              {Array.isArray(p.textualEvidence)&&p.textualEvidence.length>0&&(()=>{
+                // ספירת פסוקים ייחודיים (עם נירמול)
+                const normalizeRef=r=>String(r||"").replace(/[–——–−-]/g,"-").replace(/[.,:'"\s]+/g,"").trim();
+                const refs=p.textualEvidence.map(e=>normalizeRef(e.reference));
+                const unique=[...new Set(refs.filter(r=>r.length>0))];
+                const hasRange=refs.some(r=>r.includes("-")||r.match(/\d+_\d+_\d+/));
+                const hasEmpty=refs.some(r=>!r);
+                const verseLabel=hasEmpty||!unique.length?"לא אומת":hasRange?`~${unique.length} הפניות (כולל טווחים)`:`${unique.length} פסוק${unique.length===1?"":"ים"} ייחודיים`;
+                return (
                 <div style={{marginTop:"10px"}}>
-                  <div style={{fontSize:"11px",fontWeight:"700",color:"#60a5fa",marginBottom:"6px"}}>📚 ראיות ({p.textualEvidence.length}) — לחצי על sourceId לצפייה בנתון המקורי משלב 3</div>
+                  <div style={{fontSize:"11px",fontWeight:"700",color:"#60a5fa",marginBottom:"6px"}}>
+                    📚 ראיות: {p.textualEvidence.length} ממצא{p.textualEvidence.length===1?"":"ים"} מושגי{p.textualEvidence.length===1?"":"ים"} | {verseLabel} — לחצי על sourceId לצפייה בנתון המקורי משלב 3
+                  </div>
                   <table style={{fontSize:"11px",width:"100%"}}>
                     <thead><tr style={{background:"#0f172a"}}>
                       <th style={{textAlign:"right",color:"#64748b",padding:"5px 8px",width:"120px"}}>sourceId</th>
@@ -783,7 +801,8 @@ function UnitReviewPanel({unit,findings,aiProposal,userApproved,previousApproved
                     </tbody>
                   </table>
                 </div>
-              )}
+                );
+              })()}
             </div>
           ))}
         </div>
@@ -1067,7 +1086,7 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
   // ─ ד'1 — זיהוי תופעות פר-יחידה (עיבוד בטור, שמירות ביניים, המשכיות) ─
   // ═══════════════════════════════════════════════════════════════════════
   const characterDimKey=`${character}__${dimId}`;
-  const PROMPT_VERSION_D1="v1-2026-10-18";
+  const PROMPT_VERSION_D1="v2-2026-10-18-tight-claim";
 
   // state של ד'1
   const [d1State,setD1State]=useState({}); // {unitId: {ai_proposal, user_approved}}
@@ -1106,13 +1125,14 @@ function DimensionStage4Screen({raw,character,dimId,apiKey,onBack,stageResults,s
 3. לכל תופעה נסחי כותרת תיאורית קצרה ותיאור עובדתי מדויק. הכותרת לא תכלול את שם המושג הנבואי ולא תציג מסקנה תיאולוגית.
 4. הבחיני בין מי שפועל או מדבר (actor) לבין האופן שבו המספר מציג אותו (presentation). אין לייחס למלך מעשה/אמירה/ידיעה/תכונה השייכים לדמות אחרת.
 5. לכל תופעה ציינו את אמצעי העיצוב הטקסטואלי (designMeans) ואת הראיות המדויקות שסופקו (textualEvidence). **אין להמציא פסוקים, ציטוטים, אסמכתאות או פרטים שאינם בקלט.**
-6. נסחי טענה אנליטית מצומצמת (analyticalClaim) המתארת מה ניתן ללמוד מן התופעה על אופן הצגת המלך או מלכותו. הפרידי בבירור בין התיאור העובדתי לטענה. אם אין בסיס לטענה — השאירי analyticalClaim ריק ואל תמציאי קשר.
+6. נסחי טענה אנליטית מצומצמת (analyticalClaim) המתארת מה ניתן ללמוד מן התופעה על אופן הצגת המלך או מלכותו. הפרידי בבירור בין התיאור העובדתי לטענה. אם אין בסיס לטענה — השאירי analyticalClaim ריק ואל תמציאי קשר. **הטענה חייבת להישען רק על הראיות עצמן ולא לחרוג מהן.** אסור לייחס למלך תכונה שלא באה לידי ביטוי ישיר בטקסט. **אסור להציג רכיבים משלימים של הסיפור כרכיבים מנוגדים** — למשל אסור לכתוב "לא תוצאה של תהליך פוליטי אלא התממשות של דבר אלוהי" כאשר פסוק אחד יכול לכלול גם ברית אנושית וגם מימוש דבר ה'. נסחי בשילוב, לא בניגוד.
 7. אל תסיקי מסקנות השוואתיות ביחס לשמואל/מלכים גם אם צוינה מקבילה. אל תקבעי זיקה לחזון הנבואי. אלה שלבים 6-7.
 8. **כל sourceId בקלט חייב להופיע לפחות פעם אחת ב-assignedSourceIds או ב-needsReview. אין להמציא sourceIds שלא בקלט.** מותר לשייך מקור ליותר מתופעה אחת כאשר הוא כולל ממצאים מובחנים — יש להסביר את ההבחנה ב-aspect.
 9. לכל תופעה ציינו בקצרה (justification) מדוע הממצאים שויכו אליה. אם תופעה יחידנית — ציינו כך בלי לנסות איחוד מלאכותי.
 10. אל תסיקי שפעולה היא חיובית/שלילית/מרכזית/חוזרת רק משום שהיא מתאימה למושג מסוים או מופיעה בכמה מושגים. שמרי גם ממצאים מסייגים, חריגים ומורכבים.
 11. השתמשי ב-needsReview רק כאשר קיימת בעיה ממשית בזיהוי/שיוך/ביסוס. אין להעביר לשם ממצא רק משום שהוא מתייחס למספר או לדמות אחרת.
 12. אל תתקני בשקט סתירות בין הממצאים. סמני אותן לבדיקה.
+13. **actor — מי שפועל או מדבר בפועל בטקסט**, אם ניתן לזהותו. אם האירוע הוא מסגור של המספר (למשל: "כדבר ה' ביד שמואל"), השאירי actor = "לא רלוונטי" והבהירי בתיאור התופעה שהיא נוגעת למלך. **עדיף שדה שאינו חל במקרה מסוים מאשר שיוך פעולה לדמות הלא נכונה.**
 
 ### נתוני היחידה
 שם: ${unitName}
