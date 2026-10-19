@@ -2319,7 +2319,7 @@ ${conceptDef.text}
     fbSaveStageResults(updated);
   }
 
-  async function runPhase2(){
+  async function runPhase2(resetFromScratch=false){
     if(!conceptDef||!conceptDef.text){ setP2Error("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
     if(!conceptDef.clarification||!conceptDef.clarification.text){ setP2Error("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
     const s2=stageData.stage2, s3=stageData.stage3;
@@ -2329,11 +2329,10 @@ ${conceptDef.text}
 
     const indicatorsByUnit={};
     (s2.indicatorDetails||[]).forEach(ud=>{ indicatorsByUnit[ud.unitId]=ud; });
-    const buildUnitBlock=(cu,idx)=>{
+    const buildUnitBlock=(cu)=>{
       const indRec=indicatorsByUnit[cu.uid];
-      const indLines=indRec?indRec.indicators.map(ind=>`      - [${ind.paramLabel}] "${ind.q}"${ind.verse?` [פסוק ${ind.verse}]`:""}${ind.note?`\n        הסבר חוקרת: ${ind.note}`:""}`).join("\n"):"      (אין פירוט אינדיקטורים)";
-      return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-יחידה ${idx+1}: ${cu.unitName} (${cu.chapter})
+      const indLines=indRec?indRec.indicators.map(ind=>`  - [${ind.paramLabel}] "${ind.q}"${ind.verse?` [פסוק ${ind.verse}]`:""}${ind.note?`\n    הסבר חוקרת: ${ind.note}`:""}`).join("\n"):"  (אין פירוט אינדיקטורים)";
+      return `יחידה: ${cu.unitName} (${cu.chapter})
 מזהה: ${cu.uid}
 ${cu.hasParallel?`מקבילה: ${cu.sourceRef}`:"סונדרגוט (אין מקבילה בשמואל/מלכים)"}
 
@@ -2345,13 +2344,12 @@ ${cu.hasConclusion?cu.conclusion:"(אין מסקנה מחקרית — אין ל�
     };
 
     const who=character==="solomon"?"שלמה":"דוד";
-    const buildPrompt=(unitsBatch,batchInfo)=>{
-      const unitBlocks=unitsBatch.map((cu,idx)=>buildUnitBlock(cu,idx)).join("\n\n");
-      return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לבצע **בדיקת התאמה** בין המסקנות המחקריות (שנכתבו ידנית ע"י החוקרת), האינדיקטורים, הראיות הטקסטואליות וההגדרה המחקרית של המושג.
+    const buildPromptSingleUnit=(unit,unitIdx,total)=>{
+      return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לבצע **בדיקת התאמה** בין המסקנה המחקרית (שנכתבה ידנית ע"י החוקרת), האינדיקטורים, הראיות הטקסטואליות וההגדרה המחקרית של המושג — ליחידה אחת.
 
 ### המושג הנבדק: "${concept}"
 ### הדמות: ${who}
-### אצווה: ${batchInfo} (סווג רק את היחידות שבאצווה זו — אצוות נוספות מעובדות בנפרד)
+### יחידה: ${unitIdx} מתוך ${total} (יחידות נוספות מעובדות בנפרד; סווג רק את היחידה שבפרומפט הזה)
 
 ### ההגדרה המחייבת (מפרק ב׳ של התזה — עוגן שלא ניתן לשנות):
 ${conceptDef.text}
@@ -2362,83 +2360,80 @@ ${conceptDef.clarification.text}
 **דיוק מתודולוגי מחייב**: הרכיבים בהגדרה אינם חייבים להיאמר במפורש או להופיע באותו פסוק. אפשר לבסס את הקשר ביניהם מתוך היחידה והקשרה המתועד, ובלבד שההסקה תנמק כיצד הראיות תואמות להגדרה. גם הכרעה נקודתית עשויה לבטא את המושג. ארגון או ציות כשלעצמם אינם מספיקים (למושג חכמה).
 
 ### המשימה
-לכל אחת מ-${unitsBatch.length} היחידות באצווה זו, סווג את המסקנה המחקרית ("conclusionStatus") לאחת מהקטגוריות:
-- **"supported"**: המסקנה נתמכת בראיות ובהגדרה. הראיות ברורות וההסקה תואמת.
-- **"qualified"**: המסקנה בעיקרה נכונה אך דורשת סייג. ציין את הסייג המדויק.
-- **"exceeded"**: המסקנה חורגת מהראיות הזמינות או מההגדרה. יש להסביר במפורש איפה החריגה.
-- **"no_conclusion"**: ליחידה אין מסקנה כתובה. אין לסווג כ-exceeded ואין להמציא מסקנה — פשוט סמן "אין מסקנה לבדיקה".
-- **"insufficient_evidence"**: יש מסקנה אך החומר הזמין אינו מאפשר להכריע. הצג "לא ניתן להכריע מהחומר הזמין".
+סווג את המסקנה המחקרית של היחידה הזאת ("conclusionStatus") לאחת מהקטגוריות:
+- **"supported"**: המסקנה נתמכת בראיות ובהגדרה.
+- **"qualified"**: המסקנה בעיקרה נכונה אך דורשת סייג. ציין את הסייג.
+- **"exceeded"**: המסקנה חורגת מהראיות או מההגדרה. הסבר איפה החריגה.
+- **"no_conclusion"**: ליחידה אין מסקנה כתובה. אין לסווג כ-exceeded ואין להמציא מסקנה.
+- **"insufficient_evidence"**: יש מסקנה אך החומר אינו מאפשר להכריע.
 
 ### חוקים מחייבים
-1. אם המסקנה כוללת כמה טענות — פרק אותה ל-perClaim, וסווג כל טענה בנפרד. סיווג מסכם אחד לא יסתיר הבדלים.
-2. כל נימוק חייב להצביע על ראיה ספציפית: פסוק, אינדיקטור או פרשנות מתועדת. "ראיה מהיחידה" כללית — לא מספיק.
-3. ההגדרה היא העוגן. ההבהרה מסייעת ליישום. אל תוסיף תנאים שאינם בהגדרה.
-4. שמור על הדיוק המתודולוגי לגבי actor: אם המספר הוא המסגר של הפעולה, ציין זאת.
-5. אין להמציא פסוקים, ציטוטים או ראיות שלא בקלט.
-6. יש לכסות את **כל ${unitsBatch.length} היחידות באצווה זו** ללא יוצא מן הכלל.
+1. אם המסקנה כוללת כמה טענות — פרק אותה ל-perClaim, וסווג כל טענה בנפרד.
+2. כל נימוק חייב להצביע על ראיה ספציפית: פסוק, אינדיקטור או פרשנות מתועדת.
+3. ההגדרה היא העוגן. אין להוסיף תנאים שאינם בה.
+4. אין להמציא פסוקים, ציטוטים או ראיות.
 
-### היחידות:
-${unitBlocks}
+### היחידה:
+${buildUnitBlock(unit)}
 
-### פורמט התשובה (JSON תקין בלבד, ללא טקסט נוסף):
+### פורמט התשובה (JSON תקין בלבד — אובייקט יחיד, לא array):
 
-{"perUnit":[{"uid":"<מזהה היחידה>","unitName":"<שם>","chapter":"<פרק>","conclusionStatus":"supported|qualified|exceeded|no_conclusion|insufficient_evidence","summary":"<משפט מסכם קצר על הסיווג>","perClaim":[{"claim":"<ציטוט או ניסוח של טענה בודדת מתוך המסקנה>","status":"supported|qualified|exceeded","justification":"<נימוק מפורט>","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"<תיאור הראיה>","detail":"<ציטוט או הסבר>"}]}]}]}`;
+{"uid":"${unit.uid}","unitName":"${unit.unitName}","chapter":"${unit.chapter}","conclusionStatus":"supported|qualified|exceeded|no_conclusion|insufficient_evidence","summary":"<משפט מסכם קצר>","perClaim":[{"claim":"<טענה בודדת מהמסקנה>","status":"supported|qualified|exceeded","justification":"<נימוק מפורט>","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"<תיאור הראיה>","detail":"<ציטוט או הסבר>"}]}]}`;
     };
 
-    // ─ חלוקה לאצוות ─
     const allUnits=s3.detailedConclusions;
-    const BATCH_SIZE=10;
-    const batches=[];
-    for(let i=0;i<allUnits.length;i+=BATCH_SIZE) batches.push(allUnits.slice(i,i+BATCH_SIZE));
+    // ─ המשכיות: אם יש תוצאה חלקית, נמשיך ממנה ─
+    const existingPerUnit=(!resetFromScratch&&p2Proposal&&Array.isArray(p2Proposal.perUnit))?p2Proposal.perUnit:[];
+    const processedUids=new Set(existingPerUnit.map(u=>u.uid));
+    const unitsToDo=allUnits.filter(u=>!processedUids.has(u.uid));
+    if(unitsToDo.length===0){
+      setP2Error("כל היחידות כבר עובדו. למחיקה והרצה מאפס לחצי 'הרץ מאפס'.");
+      setP2Loading(false); setP2Progress(""); return;
+    }
+    let allPerUnit=[...existingPerUnit];
+    let totalUsage={input_tokens:((!resetFromScratch&&p2Proposal&&p2Proposal.usage?.input_tokens)||0),output_tokens:((!resetFromScratch&&p2Proposal&&p2Proposal.usage?.output_tokens)||0)};
+    let totalCost=((!resetFromScratch&&p2Proposal&&p2Proposal.costUsd)||0);
+    const runStartedAt=(!resetFromScratch&&p2Proposal&&p2Proposal.runAt)||new Date().toISOString();
 
     try{
-      let allPerUnit=[], totalUsage={input_tokens:0,output_tokens:0}, totalCost=0, totalPromptLen=0, totalRespLen=0;
-      for(let b=0;b<batches.length;b++){
-        const batch=batches[b];
-        const prompt=buildPrompt(batch,`${b+1}/${batches.length}`);
-        setP2Progress(`אצווה ${b+1}/${batches.length}: שולח ${batch.length} יחידות (~${Math.round(prompt.length/4)} tok)...`);
-        const r=await aiCallDirectWithUsage(prompt,16000);
+      for(let i=0;i<unitsToDo.length;i++){
+        const unit=unitsToDo[i];
+        const absoluteIdx=allUnits.findIndex(u=>u.uid===unit.uid)+1;
+        setP2Progress(`יחידה ${absoluteIdx}/${allUnits.length}: ${unit.unitName}... (${allPerUnit.length}/${allUnits.length} הושלמו)`);
+        const prompt=buildPromptSingleUnit(unit,absoluteIdx,allUnits.length);
+        const r=await aiCallDirectWithUsage(prompt,6000); // 6K מספיק ליחידה אחת, מרווח מהגבול
         totalUsage.input_tokens+=(r.usage?.input_tokens||0);
         totalUsage.output_tokens+=(r.usage?.output_tokens||0);
         totalCost+=(r.costUsd||0);
-        totalPromptLen+=prompt.length;
-        totalRespLen+=r.text.length;
         let parsed;
         try{
           const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,"");
           parsed=JSON.parse(clean);
         }catch(e){
           const m=r.text.match(/\{[\s\S]*\}/);
-          if(m){ try{ parsed=JSON.parse(m[0]); }catch(e2){ throw new Error(`אצווה ${b+1}: לא ניתן לפענח JSON — ${e.message}`); } }
-          else throw new Error(`אצווה ${b+1}: לא נמצא JSON בתגובה`);
+          if(m){ try{ parsed=JSON.parse(m[0]); }catch(e2){ throw new Error(`יחידה "${unit.unitName}": לא ניתן לפענח JSON — ${e.message}`); } }
+          else throw new Error(`יחידה "${unit.unitName}": לא נמצא JSON בתגובה`);
         }
-        if(!Array.isArray(parsed.perUnit)) throw new Error(`אצווה ${b+1}: perUnit לא תקין`);
-        if(parsed.perUnit.length<batch.length){
-          console.warn(`אצווה ${b+1}: ציפינו ${batch.length} יחידות, קיבלנו ${parsed.perUnit.length}`);
-        }
-        allPerUnit=allPerUnit.concat(parsed.perUnit);
+        // יישור המזהה והשם מהנתונים המקוריים (כדי להבטיח התאמה)
+        allPerUnit.push({...parsed,uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter});
+        // ─ שמירה אחרי כל יחידה ─
+        const aiProposal={
+          perUnit:allPerUnit,
+          coverage:{totalUnits:allUnits.length,withConclusion:allUnits.filter(c=>c.hasConclusion).length,withoutConclusion:allUnits.filter(c=>!c.hasConclusion).length},
+          runAt:runStartedAt,
+          lastUpdatedAt:new Date().toISOString(),
+          usage:totalUsage,
+          costUsd:totalCost,
+          processedUnits:allPerUnit.length,
+          totalUnits:allUnits.length,
+          completed:allPerUnit.length===allUnits.length,
+          perUnitProcessing:true
+        };
+        savePhase2(aiProposal,p2Decisions);
       }
-      setP2Progress("שומר תוצאות...");
-      const expectedCount=allUnits.length;
-      const truncated=allPerUnit.length<expectedCount;
-      const aiProposal={
-        perUnit:allPerUnit,
-        coverage:{totalUnits:expectedCount,withConclusion:allUnits.filter(c=>c.hasConclusion).length,withoutConclusion:allUnits.filter(c=>!c.hasConclusion).length},
-        runAt:new Date().toISOString(),
-        usage:totalUsage,
-        costUsd:totalCost,
-        batches:batches.length,
-        batchSize:BATCH_SIZE,
-        promptLength:totalPromptLen,
-        responseLength:totalRespLen,
-        truncated,
-        expectedUnits:expectedCount,
-        actualUnits:allPerUnit.length
-      };
-      savePhase2(aiProposal,p2Decisions);
       setP2Progress("");
     }catch(e){
-      setP2Error(e.message||String(e));
+      setP2Error(`${e.message||e}. נשמרה התקדמות עד ליחידה ${allPerUnit.length}/${allUnits.length}. לחצי "המשך" כדי להמשיך.`);
     }
     setP2Loading(false);
   }
@@ -3478,8 +3473,8 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
                             {!p2Proposal?(
                               <>
-                                <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px"}}>קריאה אחת ל-AI תעבור על כל {stage4Availability.stage3ConclusionsCount+stage4Availability.stage3MissingCount} היחידות ותסווג כל מסקנה. ה-AI יצטרך לספק נימוק מפורט לכל סיווג, להצביע על ראיה ספציפית, ולפרק מסקנות מרובות-טענות לרכיביהן.</div>
-                                <button onClick={runPhase2} disabled={p2Loading} style={{padding:"10px 22px",borderRadius:"7px",border:"none",cursor:p2Loading?"wait":"pointer",background:p2Loading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{p2Loading?`⏳ ${p2Progress||"רץ..."}`:"🔍 בצע בדיקת התאמה"}</button>
+                                <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px"}}>בדיקה יחידה-אחר-יחידה (שמירה אחרי כל יחידה). {stage4Availability.stage3ConclusionsCount+stage4Availability.stage3MissingCount} יחידות × ~15-20 שניות לכל אחת ≈ 10-15 דקות. אם הדפדפן נסגר או יש שגיאה — ההתקדמות נשמרת ואפשר להמשיך.</div>
+                                <button onClick={()=>runPhase2(false)} disabled={p2Loading} style={{padding:"10px 22px",borderRadius:"7px",border:"none",cursor:p2Loading?"wait":"pointer",background:p2Loading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{p2Loading?`⏳ ${p2Progress||"רץ..."}`:"🔍 בצע בדיקת התאמה"}</button>
                                 {p2Error&&<div style={{marginTop:"8px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p2Error}</div>}
                               </>
                             ):(
@@ -3521,9 +3516,17 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   );
                                 })()}
 
-                                <div style={{display:"flex",gap:"8px",marginBottom:"10px",flexWrap:"wrap"}}>
-                                  <button onClick={runPhase2} disabled={p2Loading} style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:p2Loading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{p2Loading?`⏳ ${p2Progress||""}`:"🔄 הרץ מחדש"}</button>
-                                  {p2Error&&<div style={{padding:"4px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"10px",color:"#fca5a5",alignSelf:"center"}}>❌ {p2Error}</div>}
+                                <div style={{display:"flex",gap:"8px",marginBottom:"10px",flexWrap:"wrap",alignItems:"center"}}>
+                                  {p2Proposal.processedUnits<p2Proposal.totalUnits?(
+                                    <>
+                                      <button onClick={()=>runPhase2(false)} disabled={p2Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p2Loading?"wait":"pointer",background:p2Loading?"#334155":"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700"}}>{p2Loading?`⏳ ${p2Progress||""}`:`▶ המשך מיחידה ${p2Proposal.processedUnits+1}/${p2Proposal.totalUnits}`}</button>
+                                      <span style={{fontSize:"10px",color:"#fcd34d"}}>⚠ {p2Proposal.totalUnits-p2Proposal.processedUnits} יחידות עדיין לא עובדו</span>
+                                    </>
+                                  ):(
+                                    <button onClick={()=>runPhase2(false)} disabled={p2Loading||p2Proposal.processedUnits>=p2Proposal.totalUnits} style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:(p2Loading||p2Proposal.processedUnits>=p2Proposal.totalUnits)?"not-allowed":"pointer",background:"transparent",color:p2Proposal.processedUnits>=p2Proposal.totalUnits?"#64748b":"#cbd5e1",fontSize:"11px"}}>✅ כל היחידות הושלמו</button>
+                                  )}
+                                  <button onClick={()=>{if(confirm("למחוק את כל התוצאות ולהתחיל מאפס? כל הסיווגים והחלטות החוקרת ימחקו.")) runPhase2(true);}} disabled={p2Loading} style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #7f1d1d",cursor:p2Loading?"wait":"pointer",background:"transparent",color:"#fca5a5",fontSize:"11px"}}>🗑 הרץ מאפס</button>
+                                  {p2Error&&<div style={{padding:"4px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"10px",color:"#fca5a5"}}>❌ {p2Error}</div>}
                                 </div>
 
                                 {/* רשימת היחידות עם סיווגים ופעולות */}
