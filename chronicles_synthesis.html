@@ -2327,10 +2327,9 @@ ${conceptDef.text}
     if(!s3||s3.source!=="compareNotes"||!Array.isArray(s3.detailedConclusions)){ setP2Error("אין נתוני שלב 3 בפורמט החדש."); return; }
     setP2Error(""); setP2Loading(true); setP2Progress("בונה חומר קלט...");
 
-    // בניית בלוק נתונים לכל יחידה
     const indicatorsByUnit={};
     (s2.indicatorDetails||[]).forEach(ud=>{ indicatorsByUnit[ud.unitId]=ud; });
-    const unitBlocks=s3.detailedConclusions.map((cu,idx)=>{
+    const buildUnitBlock=(cu,idx)=>{
       const indRec=indicatorsByUnit[cu.uid];
       const indLines=indRec?indRec.indicators.map(ind=>`      - [${ind.paramLabel}] "${ind.q}"${ind.verse?` [פסוק ${ind.verse}]`:""}${ind.note?`\n        הסבר חוקרת: ${ind.note}`:""}`).join("\n"):"      (אין פירוט אינדיקטורים)";
       return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2343,14 +2342,16 @@ ${indLines}
 
 מסקנה מחקרית משלב 3 (${cu.hasConclusion?"קיימת":"חסרה"}):
 ${cu.hasConclusion?cu.conclusion:"(אין מסקנה מחקרית — אין לסווג; יש להציג 'אין מסקנה לבדיקה')"}`;
-    }).join("\n\n");
+    };
 
     const who=character==="solomon"?"שלמה":"דוד";
-    const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לבצע **בדיקת התאמה** בין המסקנות המחקריות (שנכתבו ידנית ע"י החוקרת), האינדיקטורים, הראיות הטקסטואליות וההגדרה המחקרית של המושג.
+    const buildPrompt=(unitsBatch,batchInfo)=>{
+      const unitBlocks=unitsBatch.map((cu,idx)=>buildUnitBlock(cu,idx)).join("\n\n");
+      return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לבצע **בדיקת התאמה** בין המסקנות המחקריות (שנכתבו ידנית ע"י החוקרת), האינדיקטורים, הראיות הטקסטואליות וההגדרה המחקרית של המושג.
 
 ### המושג הנבדק: "${concept}"
 ### הדמות: ${who}
-### מספר יחידות: ${s3.detailedConclusions.length}
+### אצווה: ${batchInfo} (סווג רק את היחידות שבאצווה זו — אצוות נוספות מעובדות בנפרד)
 
 ### ההגדרה המחייבת (מפרק ב׳ של התזה — עוגן שלא ניתן לשנות):
 ${conceptDef.text}
@@ -2361,7 +2362,7 @@ ${conceptDef.clarification.text}
 **דיוק מתודולוגי מחייב**: הרכיבים בהגדרה אינם חייבים להיאמר במפורש או להופיע באותו פסוק. אפשר לבסס את הקשר ביניהם מתוך היחידה והקשרה המתועד, ובלבד שההסקה תנמק כיצד הראיות תואמות להגדרה. גם הכרעה נקודתית עשויה לבטא את המושג. ארגון או ציות כשלעצמם אינם מספיקים (למושג חכמה).
 
 ### המשימה
-לכל אחת מ-${s3.detailedConclusions.length} היחידות, סווג את המסקנה המחקרית ("conclusionStatus") לאחת מהקטגוריות:
+לכל אחת מ-${unitsBatch.length} היחידות באצווה זו, סווג את המסקנה המחקרית ("conclusionStatus") לאחת מהקטגוריות:
 - **"supported"**: המסקנה נתמכת בראיות ובהגדרה. הראיות ברורות וההסקה תואמת.
 - **"qualified"**: המסקנה בעיקרה נכונה אך דורשת סייג. ציין את הסייג המדויק.
 - **"exceeded"**: המסקנה חורגת מהראיות הזמינות או מההגדרה. יש להסביר במפורש איפה החריגה.
@@ -2374,44 +2375,65 @@ ${conceptDef.clarification.text}
 3. ההגדרה היא העוגן. ההבהרה מסייעת ליישום. אל תוסיף תנאים שאינם בהגדרה.
 4. שמור על הדיוק המתודולוגי לגבי actor: אם המספר הוא המסגר של הפעולה, ציין זאת.
 5. אין להמציא פסוקים, ציטוטים או ראיות שלא בקלט.
-6. יש לכסות את **כל ${s3.detailedConclusions.length} היחידות** ללא יוצא מן הכלל.
+6. יש לכסות את **כל ${unitsBatch.length} היחידות באצווה זו** ללא יוצא מן הכלל.
 
 ### היחידות:
 ${unitBlocks}
 
 ### פורמט התשובה (JSON תקין בלבד, ללא טקסט נוסף):
 
-{"perUnit":[{"uid":"<מזהה היחידה>","unitName":"<שם>","chapter":"<פרק>","conclusionStatus":"supported|qualified|exceeded|no_conclusion|insufficient_evidence","summary":"<משפט מסכם קצר על הסיווג>","perClaim":[{"claim":"<ציטוט או ניסוח של טענה בודדת מתוך המסקנה>","status":"supported|qualified|exceeded","justification":"<נימוק מפורט>","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"<תיאור הראיה>","detail":"<ציטוט או הסבר>"}]}]}],"coverage":{"totalUnits":${s3.detailedConclusions.length},"withConclusion":${s3.detailedConclusions.filter(c=>c.hasConclusion).length},"withoutConclusion":${s3.detailedConclusions.filter(c=>!c.hasConclusion).length}}}`;
+{"perUnit":[{"uid":"<מזהה היחידה>","unitName":"<שם>","chapter":"<פרק>","conclusionStatus":"supported|qualified|exceeded|no_conclusion|insufficient_evidence","summary":"<משפט מסכם קצר על הסיווג>","perClaim":[{"claim":"<ציטוט או ניסוח של טענה בודדת מתוך המסקנה>","status":"supported|qualified|exceeded","justification":"<נימוק מפורט>","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"<תיאור הראיה>","detail":"<ציטוט או הסבר>"}]}]}]}`;
+    };
+
+    // ─ חלוקה לאצוות ─
+    const allUnits=s3.detailedConclusions;
+    const BATCH_SIZE=10;
+    const batches=[];
+    for(let i=0;i<allUnits.length;i+=BATCH_SIZE) batches.push(allUnits.slice(i,i+BATCH_SIZE));
 
     try{
-      setP2Progress(`שולח לקלט ל-AI (~${Math.round(prompt.length/4)} טוקנים). זה יכול לקחת 60-180 שניות...`);
-      const r=await aiCallDirectWithUsage(prompt,16000);
-      setP2Progress("מפענח תשובה...");
-      // ניסיון לפענח JSON
-      let parsed;
-      try{
-        const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,"");
-        parsed=JSON.parse(clean);
-      }catch(e){
-        // ניסיון שני: לחפש JSON בתוך התגובה
-        const m=r.text.match(/\{[\s\S]*\}/);
-        if(m){ try{ parsed=JSON.parse(m[0]); }catch(e2){ throw new Error("לא ניתן לפענח JSON: "+e.message); } }
-        else throw new Error("לא נמצא JSON בתגובה");
+      let allPerUnit=[], totalUsage={input_tokens:0,output_tokens:0}, totalCost=0, totalPromptLen=0, totalRespLen=0;
+      for(let b=0;b<batches.length;b++){
+        const batch=batches[b];
+        const prompt=buildPrompt(batch,`${b+1}/${batches.length}`);
+        setP2Progress(`אצווה ${b+1}/${batches.length}: שולח ${batch.length} יחידות (~${Math.round(prompt.length/4)} tok)...`);
+        const r=await aiCallDirectWithUsage(prompt,16000);
+        totalUsage.input_tokens+=(r.usage?.input_tokens||0);
+        totalUsage.output_tokens+=(r.usage?.output_tokens||0);
+        totalCost+=(r.costUsd||0);
+        totalPromptLen+=prompt.length;
+        totalRespLen+=r.text.length;
+        let parsed;
+        try{
+          const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,"");
+          parsed=JSON.parse(clean);
+        }catch(e){
+          const m=r.text.match(/\{[\s\S]*\}/);
+          if(m){ try{ parsed=JSON.parse(m[0]); }catch(e2){ throw new Error(`אצווה ${b+1}: לא ניתן לפענח JSON — ${e.message}`); } }
+          else throw new Error(`אצווה ${b+1}: לא נמצא JSON בתגובה`);
+        }
+        if(!Array.isArray(parsed.perUnit)) throw new Error(`אצווה ${b+1}: perUnit לא תקין`);
+        if(parsed.perUnit.length<batch.length){
+          console.warn(`אצווה ${b+1}: ציפינו ${batch.length} יחידות, קיבלנו ${parsed.perUnit.length}`);
+        }
+        allPerUnit=allPerUnit.concat(parsed.perUnit);
       }
-      if(!Array.isArray(parsed.perUnit)) throw new Error("perUnit לא תקין");
-      const expectedCount=s3.detailedConclusions.length;
-      const truncated=parsed.perUnit.length<expectedCount;
+      setP2Progress("שומר תוצאות...");
+      const expectedCount=allUnits.length;
+      const truncated=allPerUnit.length<expectedCount;
       const aiProposal={
-        perUnit:parsed.perUnit,
-        coverage:parsed.coverage||{},
+        perUnit:allPerUnit,
+        coverage:{totalUnits:expectedCount,withConclusion:allUnits.filter(c=>c.hasConclusion).length,withoutConclusion:allUnits.filter(c=>!c.hasConclusion).length},
         runAt:new Date().toISOString(),
-        usage:r.usage,
-        costUsd:r.costUsd,
-        promptLength:prompt.length,
-        responseLength:r.text.length,
+        usage:totalUsage,
+        costUsd:totalCost,
+        batches:batches.length,
+        batchSize:BATCH_SIZE,
+        promptLength:totalPromptLen,
+        responseLength:totalRespLen,
         truncated,
         expectedUnits:expectedCount,
-        actualUnits:parsed.perUnit.length
+        actualUnits:allPerUnit.length
       };
       savePhase2(aiProposal,p2Decisions);
       setP2Progress("");
