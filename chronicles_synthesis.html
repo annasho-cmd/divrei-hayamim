@@ -193,6 +193,31 @@ function fbSaveStageResults(stageResults){
   },800);
 }
 
+// ─ שלב 4 (חדש) — הגדרת מושג משותפת לשני המלכים ─
+// נתיב: synthesis_v1/conceptDefinitions/{concept}
+function _fbConceptDefPath(concept){
+  const safe=String(concept).replace(/[.#$[\]/]/g,"_");
+  return `${FB_SYNTH_PATH}/conceptDefinitions/${safe}`;
+}
+function fbSaveConceptDefinition(concept,data){
+  return db.ref(_fbConceptDefPath(concept)).set(__packJson(data));
+}
+function fbLoadConceptDefinition(concept,cb){
+  db.ref(_fbConceptDefPath(concept)).once("value").then(snap=>{
+    const v=snap.val();
+    cb(v?__unpackJson(v):null);
+  }).catch(e=>{ console.error("fbLoadConceptDefinition",concept,e); cb(null); });
+}
+
+// ─ חישוב עלות משוערת לפי טוקנים (Claude Sonnet 4.5 pricing נכון ל-2026-10) ─
+// $3/MTok input, $15/MTok output
+function _estimateCostUsd(usage){
+  if(!usage) return 0;
+  const inTok=usage.input_tokens||0;
+  const outTok=usage.output_tokens||0;
+  return (inTok*3/1e6)+(outTok*15/1e6);
+}
+
 // ─ Stage 4 (ד') — Firebase helpers ─
 // נתיב: synthesis_v1/stage4/{character__dim}/perUnit/{unitId}/{ai_proposal|user_approved}
 function _stage4UnitPath(characterDimKey,unitId,section){
@@ -2163,6 +2188,106 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,sta
     }
   },[stageResults,resultsKey]);
 
+  // ─ שלב 4 פאזה 1: הגדרת מושג משותפת לשני המלכים ─
+  const [conceptDef,setConceptDef]=useState(null); // {text, savedAt, editedAt, clarification: {text, generatedAt, basedOnDefinitionAt, usage, costUsd}}
+  const [defDraft,setDefDraft]=useState("");
+  const [defEditing,setDefEditing]=useState(false);
+  const [defLoadingSave,setDefLoadingSave]=useState(false);
+  const [clarLoading,setClarLoading]=useState(false);
+  const [clarError,setClarError]=useState("");
+
+  // טעינת הגדרת המושג מ-Firebase (משותפת לשני המלכים)
+  useEffect(()=>{
+    fbLoadConceptDefinition(concept,data=>{
+      setConceptDef(data||null);
+      setDefDraft((data&&data.text)||"");
+      setDefEditing(!data||!data.text); // אם אין הגדרה — נפתח במצב עריכה אוטומטית
+    });
+  },[concept]);
+
+  async function saveConceptDef(){
+    const text=(defDraft||"").trim();
+    if(!text){ alert("ההגדרה לא יכולה להיות ריקה."); return; }
+    setDefLoadingSave(true);
+    const now=new Date().toISOString();
+    const toSave={
+      ...conceptDef,
+      text,
+      savedAt:conceptDef&&conceptDef.savedAt?conceptDef.savedAt:now,
+      editedAt:now,
+      // אם ההגדרה השתנתה — נקה את הבהרת היישום (היא תלויה בהגדרה הקודמת)
+      clarification:(conceptDef&&conceptDef.text===text)?(conceptDef.clarification||null):null
+    };
+    try{
+      await fbSaveConceptDefinition(concept,toSave);
+      setConceptDef(toSave);
+      setDefEditing(false);
+    }catch(e){
+      alert("שגיאה בשמירה: "+(e.message||e));
+    }
+    setDefLoadingSave(false);
+  }
+
+  async function generateClarification(){
+    if(!conceptDef||!conceptDef.text){ alert("יש להזין ולשמור הגדרה קודם."); return; }
+    setClarError(""); setClarLoading(true);
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דמויות דוד ושלמה בדברי הימים לאור החזון הנבואי. לפניך הגדרה מחקרית של המושג "${concept}" כפי שנוסחה בפרק ב׳ של התזה.
+
+### ההגדרה:
+${conceptDef.text}
+
+### המשימה:
+בלי לשנות את ההגדרה ובלי להוסיף לה תנאים, הסבר בקצרה (3-6 שורות) כיצד יש ליישם אותה בעת בחינת הממצאים הטקסטואליים בספר דברי הימים. ציין במפורש:
+
+1. אילו מאפיינים נדרשים לזיהוי המושג (רק ככל שהדבר עולה מההגדרה).
+2. אילו מאפיינים אינם מספיקים כשלעצמם (רק ככל שהדבר עולה מההגדרה).
+3. אם ההגדרה מותירה עניין פתוח או דורשת שיקול דעת — ציין זאת במפורש.
+
+### חשוב:
+- ההבהרה אינה הגדרה חדשה. היא רק מתווה יישום.
+- אל תוסיף דרישות שאינן בהגדרה.
+- אל תחליף מילים בהגדרה.
+- אם ההגדרה אינה מפרטת תנאי כלשהו, אל תמציא אותו.
+
+הגב בעברית, בפסקאות קצרות וברורות. ללא כותרות משנה.`;
+    try{
+      const r=await aiCallDirectWithUsage(prompt,2000);
+      const now=new Date().toISOString();
+      const updated={
+        ...conceptDef,
+        clarification:{
+          text:r.text.trim(),
+          generatedAt:now,
+          basedOnDefinitionAt:conceptDef.editedAt||conceptDef.savedAt||now,
+          usage:r.usage,
+          costUsd:r.costUsd
+        }
+      };
+      await fbSaveConceptDefinition(concept,updated);
+      setConceptDef(updated);
+    }catch(e){
+      setClarError(e.message||String(e));
+    }
+    setClarLoading(false);
+  }
+
+  // בדיקת זמינות נתוני שלבים 2+3 לדמות הזאת + למושג הזה
+  const stage4Availability=useMemo(()=>{
+    const s2=stageData&&stageData.stage2;
+    const s3=stageData&&stageData.stage3;
+    const approvedStages=(stageData&&stageData.approvedStages)||[];
+    return {
+      stage2HasData:!!(s2&&Array.isArray(s2.tableRows)&&s2.tableRows.length>0),
+      stage2Approved:approvedStages.includes(2),
+      stage2IsNewFormat:!!(s2&&Array.isArray(s2.indicatorDetails)&&s2.indicatorDetails.length>0),
+      stage3HasData:!!(s3&&Array.isArray(s3.tableRows)&&s3.tableRows.length>0),
+      stage3Approved:approvedStages.includes(3),
+      stage3IsNewFormat:s3&&s3.source==="compareNotes",
+      stage3ConclusionsCount:(s3&&s3.coverage&&s3.coverage.conclusionsCollected)||0,
+      stage3MissingCount:(s3&&s3.coverage&&s3.coverage.withoutConclusion)||0
+    };
+  },[stageData]);
+
   // מיגרציה חד-פעמית: אם שלב 3 טעון אבל אין sourceIds, יוצרים ושומרים.
   // קורה אוטומטית בכניסה למושג עם נתונים ישנים (לפני שלב 1 של ד').
   useEffect(()=>{
@@ -2372,6 +2497,11 @@ ${result.manuallyEdited?`<div style="font-size:9pt;color:#92400e;margin-top:8pt;
 
   // ─────── קריאה ישירה ל-Anthropic (בלי worker) ───────
   async function aiCallDirect(prompt,maxTokens){
+    const r=await aiCallDirectWithUsage(prompt,maxTokens);
+    return r.text;
+  }
+  // גרסה שמחזירה גם usage לצורך מעקב עלות (שלב 4 חדש)
+  async function aiCallDirectWithUsage(prompt,maxTokens){
     if(!apiKey) throw new Error("חסר מפתח API. הזן אותו דרך סמל ה-🔑 בסרגל העליון.");
     const res=await fetch("https://api.anthropic.com/v1/messages",{
       method:"POST",
@@ -2398,7 +2528,9 @@ ${result.manuallyEdited?`<div style="font-size:9pt;color:#92400e;margin-top:8pt;
       console.warn("aiCallDirect: תשובה נקטעה במגבלת max_tokens");
       throw new Error(`התשובה נקטעה במגבלת ${maxTokens} טוקנים (stop_reason=max_tokens). נסי שוב — המערכת תמשיך מהקבוצה הזאת, או דווחי לי להעלות את המגבלה.`);
     }
-    return data.content.map(b=>b.text||"").join("");
+    const text=data.content.map(b=>b.text||"").join("");
+    const usage=data.usage||{};
+    return {text,usage,costUsd:_estimateCostUsd(usage)};
   }
 
   function parseJSON(text){
@@ -2644,7 +2776,8 @@ ${extra?`\nהנחיות נוספות: ${extra}\n`:""}
   }
 
   // ─────── שלב 4: איחוד אינדיקטורים לתופעות טקסטואליות ───────
-  async function runStage4(extra=""){
+  // שלב 4 הישן (זיהוי תופעות פר מושג) — נשמר כגיבוי, לא נקרא יותר
+  async function runStage4LegacyPhenomena(extra=""){
     const s3=stageData.stage3;
     if(!s3||!s3.tableRows||!s3.tableRows.length){
       return{status:"אין נתונים",hasTable:false,
@@ -2827,11 +2960,17 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
           setStageData(curData);
         }
       }
+      // שלב 4: הכפתור "הפעל" אינו רלוונטי יותר — הפעולות מתבצעות בפאנל פאזה 1 עצמו
+      if(n===4){
+        setLoading(false);
+        setProgressNote("");
+        alert("שלב 4 הוחלף לשיטה חדשה: הגדרה→בדיקת התאמה→סינתזה. השתמשי בכפתורי הפאנל של שלב 4 (בפאזות א/ב/ג) ולא ב'הפעל'. התופעות הישנות (ד'1) נשמרו בארכיון בסוף הפאנל.");
+        return;
+      }
       let result;
       if(n===1) result=runStage1();
       else if(n===2) result=runStage2();
       else if(n===3) result=runStage3(); // סינכרוני — ללא AI
-      else if(n===4) result=await runStage4(extra);
       else {
         // שלבים 5-7 — יבואו בסבבים הבאים
         await new Promise(r=>setTimeout(r,500));
@@ -3040,6 +3179,124 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         </div>
                       );
                     })()}
+                    {/* ═══ שלב 4 — פאזה 1 (הגדרת מושג + הבהרת יישום + בדיקת זמינות נתונים) ═══ */}
+                    {n===4&&(
+                      <div style={{marginBottom:"14px"}}>
+                        {/* הסבר המהלך */}
+                        <div style={{padding:"10px 14px",background:`${dimColor}11`,borderRadius:"7px",border:`1px dashed ${dimColor}44`,fontSize:"11px",color:"#cbd5e1",marginBottom:"12px",lineHeight:"1.6"}}>
+                          <strong style={{color:dimColor}}>שלב 4 החדש:</strong> מהלך מחקרי בן 6 צעדים לסינתזה של מושג אחד בדמות אחת (לפי המפרט שאישרת ב-19.10). הפאנל כאן מכסה כרגע את <strong>פאזה 1</strong>: הגדרת המושג, הבהרת יישום, ובדיקת זמינות שלבים 2+3. פאזות 2 ו-3 יבנו לאחר אישורך את התוצר של פאזה 1.
+                        </div>
+
+                        {/* צעד א': הגדרת המושג (משותפת לדוד ולשלמה) */}
+                        <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                            <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>📘 הגדרת המושג "{concept}" מפרק ב׳ של התזה</div>
+                            <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>משותפת לדוד ולשלמה · נשמרת כנוסח מקורי, ללא שינוי</div>
+                          </div>
+                          {defEditing?(
+                            <>
+                              <textarea value={defDraft} onChange={e=>setDefDraft(e.target.value)} rows={8} placeholder={`הדביקי כאן את הנוסח המדויק של הגדרת המושג "${concept}" כפי שנוסח בפרק ב׳ של התזה. ללא קיצור וללא עריכה.`} style={{width:"100%",padding:"10px",background:"#0f172a",border:"1px solid #475569",borderRadius:"6px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit",resize:"vertical",direction:"rtl",lineHeight:"1.6"}}/>
+                              <div style={{display:"flex",gap:"8px",marginTop:"8px",flexWrap:"wrap"}}>
+                                <button onClick={saveConceptDef} disabled={defLoadingSave||!defDraft.trim()} style={{padding:"7px 16px",borderRadius:"6px",border:"none",cursor:(defLoadingSave||!defDraft.trim())?"not-allowed":"pointer",background:(defLoadingSave||!defDraft.trim())?"#334155":"#34d399",color:(defLoadingSave||!defDraft.trim())?"#64748b":"white",fontSize:"12px",fontWeight:"700"}}>{defLoadingSave?"⏳ שומר..." :"💾 שמור הגדרה"}</button>
+                                {conceptDef&&conceptDef.text&&<button onClick={()=>{setDefDraft(conceptDef.text);setDefEditing(false);}} style={{padding:"7px 14px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px"}}>ביטול</button>}
+                              </div>
+                            </>
+                          ):conceptDef&&conceptDef.text?(
+                            <>
+                              <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"12px",color:"#cbd5e1",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{conceptDef.text}</div>
+                              <div style={{display:"flex",justifyContent:"space-between",marginTop:"8px",fontSize:"10px",color:"#64748b",alignItems:"center",flexWrap:"wrap",gap:"8px"}}>
+                                <div>נשמר: {conceptDef.editedAt?conceptDef.editedAt.slice(0,16).replace("T"," "):"—"}</div>
+                                <button onClick={()=>setDefEditing(true)} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>✏ ערוך הגדרה</button>
+                              </div>
+                            </>
+                          ):(
+                            <div style={{padding:"10px",background:"#78350f22",borderRadius:"6px",fontSize:"11px",color:"#fcd34d"}}>⚠ טרם הוזנה הגדרה למושג זה. הדביקי את ההגדרה בשדה הטקסט כדי להתחיל.</div>
+                          )}
+                        </div>
+
+                        {/* צעד ב': הבהרת יישום (AI) */}
+                        {conceptDef&&conceptDef.text&&(
+                          <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                              <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>💡 הבהרת יישום (AI)</div>
+                              <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>מתבצע ב-AI על ההגדרה בלבד · לא משנה את ההגדרה · לא מוסיף תנאים</div>
+                            </div>
+                            {conceptDef.clarification&&conceptDef.clarification.text?(
+                              <>
+                                {conceptDef.clarification.basedOnDefinitionAt!==conceptDef.editedAt&&(
+                                  <div style={{padding:"8px 10px",background:"#78350f22",borderRadius:"5px",fontSize:"10px",color:"#fcd34d",marginBottom:"8px"}}>⚠ ההגדרה שונתה אחרי שההבהרה נוצרה. מומלץ ליצור הבהרה חדשה.</div>
+                                )}
+                                <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"12px",color:"#cbd5e1",lineHeight:"1.7",whiteSpace:"pre-wrap",borderRight:`3px solid ${dimColor}`}}>{conceptDef.clarification.text}</div>
+                                <div style={{display:"flex",justifyContent:"space-between",marginTop:"8px",fontSize:"10px",color:"#64748b",alignItems:"center",flexWrap:"wrap",gap:"8px"}}>
+                                  <div>
+                                    נוצר: {conceptDef.clarification.generatedAt?conceptDef.clarification.generatedAt.slice(0,16).replace("T"," "):"—"}
+                                    {conceptDef.clarification.usage&&<span style={{marginRight:"10px",color:"#60a5fa"}}>· קלט: {conceptDef.clarification.usage.input_tokens||0} tok · פלט: {conceptDef.clarification.usage.output_tokens||0} tok · עלות: ${(conceptDef.clarification.costUsd||0).toFixed(4)}</span>}
+                                  </div>
+                                  <button onClick={generateClarification} disabled={clarLoading} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:clarLoading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{clarLoading?"⏳ יוצר..." :"🔄 צור הבהרה מחודשת"}</button>
+                                </div>
+                              </>
+                            ):(
+                              <>
+                                <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.5"}}>לחצי כדי שה-AI יבהיר כיצד ליישם את ההגדרה בעת בחינת הממצאים. ההבהרה היא הנחיית עבודה בלבד — אין בה הגדרה חדשה.</div>
+                                <button onClick={generateClarification} disabled={clarLoading} style={{padding:"8px 18px",borderRadius:"7px",border:"none",cursor:clarLoading?"wait":"pointer",background:clarLoading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{clarLoading?"⏳ ה-AI יוצר הבהרה (10-20 שניות)...":"💡 צור הבהרת יישום"}</button>
+                                {clarError&&<div style={{marginTop:"8px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {clarError}</div>}
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {/* צעד ג': בדיקת זמינות שלבים 2+3 */}
+                        <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
+                          <div style={{fontSize:"13px",fontWeight:"700",color:dimColor,marginBottom:"10px"}}>📊 בדיקת זמינות נתוני שלבים 2 + 3 (לדמות: {character==="solomon"?"שלמה":"דוד"})</div>
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px"}}>
+                            {/* שלב 2 */}
+                            <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${stage4Availability.stage2HasData?"#34d399":"#64748b"}`}}>
+                              <div style={{fontSize:"11px",fontWeight:"700",color:"#f1f5f9",marginBottom:"6px"}}>שלב 2 — אינדיקטורים</div>
+                              <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6"}}>
+                                <div>{stage4Availability.stage2HasData?"✅ יש נתונים":"❌ אין נתונים — יש להריץ"}</div>
+                                <div>{stage4Availability.stage2Approved?"✅ מאושר":"⚠ טרם אושר"}</div>
+                                <div>{stage4Availability.stage2IsNewFormat?"✅ כולל פירוט אינדיקטורים":"⚠ בפורמט ישן — בטלי אישור והריצי שוב לקבלת פירוט"}</div>
+                              </div>
+                            </div>
+                            {/* שלב 3 */}
+                            <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${stage4Availability.stage3HasData?"#34d399":"#64748b"}`}}>
+                              <div style={{fontSize:"11px",fontWeight:"700",color:"#f1f5f9",marginBottom:"6px"}}>שלב 3 — מסקנות מחקריות</div>
+                              <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6"}}>
+                                <div>{stage4Availability.stage3HasData?"✅ יש נתונים":"❌ אין נתונים — יש להריץ"}</div>
+                                <div>{stage4Availability.stage3Approved?"✅ מאושר":"⚠ טרם אושר"}</div>
+                                <div>{stage4Availability.stage3IsNewFormat?`✅ מהכלי האנליטי · ${stage4Availability.stage3ConclusionsCount} מסקנות${stage4Availability.stage3MissingCount>0?` · ${stage4Availability.stage3MissingCount} ללא מסקנה`:""}`:"⚠ פורמט ישן (AI) — בטלי אישור והריצי שוב"}</div>
+                              </div>
+                            </div>
+                          </div>
+                          {(!stage4Availability.stage2HasData||!stage4Availability.stage3HasData||!stage4Availability.stage3IsNewFormat)&&(
+                            <div style={{marginTop:"10px",padding:"8px 10px",background:"#78350f22",borderRadius:"5px",fontSize:"11px",color:"#fcd34d"}}>⚠ לפני המעבר לפאזה 2: יש להשלים ואשר את שלבים 2 ו-3 בפורמט החדש.</div>
+                          )}
+                          {stage4Availability.stage2HasData&&stage4Availability.stage3HasData&&stage4Availability.stage3IsNewFormat&&conceptDef&&conceptDef.text&&conceptDef.clarification&&(
+                            <div style={{marginTop:"10px",padding:"8px 10px",background:"#064e3b33",borderRadius:"5px",fontSize:"11px",color:"#86efac"}}>✅ פאזה 1 הושלמה. נתוני המחקר זמינים, הגדרה והבהרה שמורות. ממתינים לאישורך לפני בניית פאזה 2 (בדיקת התאמה).</div>
+                          )}
+                        </div>
+
+                        {/* ארכיון: ד'1 הישן (אם יש נתונים ישנים ב-stage4) */}
+                        {stageData.stage4&&stageData.stage4.tableRows&&(
+                          <details style={{padding:"10px 14px",background:"#1e1b4b22",borderRadius:"7px",border:"1px dashed #818cf855"}}>
+                            <summary style={{cursor:"pointer",fontSize:"11px",color:"#a5b4fc",fontWeight:"700"}}>📜 ארכיון: ד׳1 (ניתוח תופעות ישן) — לחצי להרחבה</summary>
+                            <div style={{marginTop:"10px",fontSize:"11px",color:"#94a3b8"}}>
+                              <div style={{marginBottom:"8px",fontStyle:"italic"}}>תוצר של השיטה הקודמת (זיהוי תופעות טקסטואליות). נשמר למעקב, לא משמש בשיטה החדשה.</div>
+                              {stageData.stage4.summary&&<div style={{padding:"6px 8px",background:"#0f172a",borderRadius:"5px",marginBottom:"6px"}}><strong style={{color:"#cbd5e1"}}>סיכום:</strong> {stageData.stage4.summary}</div>}
+                              {Array.isArray(stageData.stage4.tableRows)&&stageData.stage4.tableRows.length>0&&(
+                                <div style={{overflowX:"auto",maxHeight:"300px",overflowY:"auto"}}>
+                                  <table style={{fontSize:"10px",width:"100%",borderCollapse:"collapse"}}>
+                                    <thead><tr style={{background:"#0f172a"}}>{(stageData.stage4.tableHeaders||[]).map((h,i)=>(<th key={i} style={{padding:"4px 6px",textAlign:"right",color:"#64748b",borderBottom:"1px solid #334155"}}>{h}</th>))}</tr></thead>
+                                    <tbody>{stageData.stage4.tableRows.map((r,i)=>(<tr key={i} style={{borderBottom:"1px solid #1e293b"}}>{r.map((c,j)=>(<td key={j} style={{padding:"4px 6px",color:"#94a3b8",verticalAlign:"top"}}>{c}</td>))}</tr>))}</tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    )}
+
                     {/* ─ שלב 3 חדש: תצוגת מסקנות מפורטת לפי יחידה ─ */}
                     {n===3&&hasResult.source==="compareNotes"&&Array.isArray(hasResult.detailedConclusions)&&hasResult.detailedConclusions.length>0&&(
                       <div style={{marginBottom:"12px",padding:"12px 14px",background:"#0f172a",borderRadius:"7px",border:`1px solid ${dimColor}44`}}>
