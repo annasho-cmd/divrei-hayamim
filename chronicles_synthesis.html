@@ -2189,12 +2189,14 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,sta
   },[stageResults,resultsKey]);
 
   // ─ שלב 4 פאזה 1: הגדרת מושג משותפת לשני המלכים ─
-  const [conceptDef,setConceptDef]=useState(null); // {text, savedAt, editedAt, clarification: {text, generatedAt, basedOnDefinitionAt, usage, costUsd}}
+  const [conceptDef,setConceptDef]=useState(null); // {text, savedAt, editedAt, clarification: {text, generatedAt, basedOnDefinitionAt, usage, costUsd, editedByUser?}}
   const [defDraft,setDefDraft]=useState("");
   const [defEditing,setDefEditing]=useState(false);
   const [defLoadingSave,setDefLoadingSave]=useState(false);
   const [clarLoading,setClarLoading]=useState(false);
   const [clarError,setClarError]=useState("");
+  const [clarEditing,setClarEditing]=useState(false);
+  const [clarDraft,setClarDraft]=useState("");
 
   // טעינת הגדרת המושג מ-Firebase (משותפת לשני המלכים)
   useEffect(()=>{
@@ -2226,6 +2228,27 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,sta
       alert("שגיאה בשמירה: "+(e.message||e));
     }
     setDefLoadingSave(false);
+  }
+
+  async function saveEditedClarification(){
+    if(!conceptDef)return;
+    const text=(clarDraft||"").trim();
+    if(!text){ alert("ההבהרה לא יכולה להיות ריקה."); return; }
+    const now=new Date().toISOString();
+    const updated={
+      ...conceptDef,
+      clarification:{
+        ...(conceptDef.clarification||{}),
+        text,
+        editedByUser:true,
+        editedAt:now,
+        // שומרים את ה-usage/cost המקוריים לידיעה; אם החוקרת ערכה — זה לא עולה כסף
+        basedOnDefinitionAt:conceptDef.editedAt||conceptDef.savedAt||now
+      }
+    };
+    await fbSaveConceptDefinition(concept,updated);
+    setConceptDef(updated);
+    setClarEditing(false);
   }
 
   async function generateClarification(){
@@ -2269,6 +2292,138 @@ ${conceptDef.text}
       setClarError(e.message||String(e));
     }
     setClarLoading(false);
+  }
+
+  // ─ שלב 4 פאזה 2: בדיקת התאמה ─
+  const [p2Loading,setP2Loading]=useState(false);
+  const [p2Error,setP2Error]=useState("");
+  const [p2Progress,setP2Progress]=useState("");
+  // p2Data: {aiProposal: {perUnit:[...], runAt, usage, costUsd, promptSize, outputSize, truncated?}, researcherDecisions: {uid: {status, note, editedClaims:[...]}}}
+  const stage4Data=stageData.stage4||{};
+  const p2Proposal=stage4Data.phase2_ai_proposal||null;
+  const p2Decisions=stage4Data.phase2_researcher_decisions||{};
+
+  function savePhase2(ai,decisions){
+    const newStage4={
+      ...stage4Data,
+      phase2_ai_proposal:ai!==undefined?ai:p2Proposal,
+      phase2_researcher_decisions:decisions!==undefined?decisions:p2Decisions,
+      lastUpdated:Date.now()
+    };
+    const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+    setStageData(newData);
+    const all=stageResults||LS_get("stageResults",{});
+    const updated={...all,[resultsKey]:newData};
+    if(setStageResults) setStageResults(updated);
+    LS_set("stageResults",updated);
+    fbSaveStageResults(updated);
+  }
+
+  async function runPhase2(){
+    if(!conceptDef||!conceptDef.text){ setP2Error("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
+    if(!conceptDef.clarification||!conceptDef.clarification.text){ setP2Error("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
+    const s2=stageData.stage2, s3=stageData.stage3;
+    if(!s2||!Array.isArray(s2.tableRows)||!s2.tableRows.length){ setP2Error("אין נתוני שלב 2."); return; }
+    if(!s3||s3.source!=="compareNotes"||!Array.isArray(s3.detailedConclusions)){ setP2Error("אין נתוני שלב 3 בפורמט החדש."); return; }
+    setP2Error(""); setP2Loading(true); setP2Progress("בונה חומר קלט...");
+
+    // בניית בלוק נתונים לכל יחידה
+    const indicatorsByUnit={};
+    (s2.indicatorDetails||[]).forEach(ud=>{ indicatorsByUnit[ud.unitId]=ud; });
+    const unitBlocks=s3.detailedConclusions.map((cu,idx)=>{
+      const indRec=indicatorsByUnit[cu.uid];
+      const indLines=indRec?indRec.indicators.map(ind=>`      - [${ind.paramLabel}] "${ind.q}"${ind.verse?` [פסוק ${ind.verse}]`:""}${ind.note?`\n        הסבר חוקרת: ${ind.note}`:""}`).join("\n"):"      (אין פירוט אינדיקטורים)";
+      return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+יחידה ${idx+1}: ${cu.unitName} (${cu.chapter})
+מזהה: ${cu.uid}
+${cu.hasParallel?`מקבילה: ${cu.sourceRef}`:"סונדרגוט (אין מקבילה בשמואל/מלכים)"}
+
+אינדיקטורים חיוביים משלב 2:
+${indLines}
+
+מסקנה מחקרית משלב 3 (${cu.hasConclusion?"קיימת":"חסרה"}):
+${cu.hasConclusion?cu.conclusion:"(אין מסקנה מחקרית — אין לסווג; יש להציג 'אין מסקנה לבדיקה')"}`;
+    }).join("\n\n");
+
+    const who=character==="solomon"?"שלמה":"דוד";
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לבצע **בדיקת התאמה** בין המסקנות המחקריות (שנכתבו ידנית ע"י החוקרת), האינדיקטורים, הראיות הטקסטואליות וההגדרה המחקרית של המושג.
+
+### המושג הנבדק: "${concept}"
+### הדמות: ${who}
+### מספר יחידות: ${s3.detailedConclusions.length}
+
+### ההגדרה המחייבת (מפרק ב׳ של התזה — עוגן שלא ניתן לשנות):
+${conceptDef.text}
+
+### הבהרת יישום (לא מוסיפה תנאים להגדרה):
+${conceptDef.clarification.text}
+
+**דיוק מתודולוגי מחייב**: הרכיבים בהגדרה אינם חייבים להיאמר במפורש או להופיע באותו פסוק. אפשר לבסס את הקשר ביניהם מתוך היחידה והקשרה המתועד, ובלבד שההסקה תנמק כיצד הראיות תואמות להגדרה. גם הכרעה נקודתית עשויה לבטא את המושג. ארגון או ציות כשלעצמם אינם מספיקים (למושג חכמה).
+
+### המשימה
+לכל אחת מ-${s3.detailedConclusions.length} היחידות, סווג את המסקנה המחקרית ("conclusionStatus") לאחת מהקטגוריות:
+- **"supported"**: המסקנה נתמכת בראיות ובהגדרה. הראיות ברורות וההסקה תואמת.
+- **"qualified"**: המסקנה בעיקרה נכונה אך דורשת סייג. ציין את הסייג המדויק.
+- **"exceeded"**: המסקנה חורגת מהראיות הזמינות או מההגדרה. יש להסביר במפורש איפה החריגה.
+- **"no_conclusion"**: ליחידה אין מסקנה כתובה. אין לסווג כ-exceeded ואין להמציא מסקנה — פשוט סמן "אין מסקנה לבדיקה".
+- **"insufficient_evidence"**: יש מסקנה אך החומר הזמין אינו מאפשר להכריע. הצג "לא ניתן להכריע מהחומר הזמין".
+
+### חוקים מחייבים
+1. אם המסקנה כוללת כמה טענות — פרק אותה ל-perClaim, וסווג כל טענה בנפרד. סיווג מסכם אחד לא יסתיר הבדלים.
+2. כל נימוק חייב להצביע על ראיה ספציפית: פסוק, אינדיקטור או פרשנות מתועדת. "ראיה מהיחידה" כללית — לא מספיק.
+3. ההגדרה היא העוגן. ההבהרה מסייעת ליישום. אל תוסיף תנאים שאינם בהגדרה.
+4. שמור על הדיוק המתודולוגי לגבי actor: אם המספר הוא המסגר של הפעולה, ציין זאת.
+5. אין להמציא פסוקים, ציטוטים או ראיות שלא בקלט.
+6. יש לכסות את **כל ${s3.detailedConclusions.length} היחידות** ללא יוצא מן הכלל.
+
+### היחידות:
+${unitBlocks}
+
+### פורמט התשובה (JSON תקין בלבד, ללא טקסט נוסף):
+
+{"perUnit":[{"uid":"<מזהה היחידה>","unitName":"<שם>","chapter":"<פרק>","conclusionStatus":"supported|qualified|exceeded|no_conclusion|insufficient_evidence","summary":"<משפט מסכם קצר על הסיווג>","perClaim":[{"claim":"<ציטוט או ניסוח של טענה בודדת מתוך המסקנה>","status":"supported|qualified|exceeded","justification":"<נימוק מפורט>","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"<תיאור הראיה>","detail":"<ציטוט או הסבר>"}]}]}],"coverage":{"totalUnits":${s3.detailedConclusions.length},"withConclusion":${s3.detailedConclusions.filter(c=>c.hasConclusion).length},"withoutConclusion":${s3.detailedConclusions.filter(c=>!c.hasConclusion).length}}}`;
+
+    try{
+      setP2Progress(`שולח לקלט ל-AI (~${Math.round(prompt.length/4)} טוקנים). זה יכול לקחת 60-180 שניות...`);
+      const r=await aiCallDirectWithUsage(prompt,16000);
+      setP2Progress("מפענח תשובה...");
+      // ניסיון לפענח JSON
+      let parsed;
+      try{
+        const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,"");
+        parsed=JSON.parse(clean);
+      }catch(e){
+        // ניסיון שני: לחפש JSON בתוך התגובה
+        const m=r.text.match(/\{[\s\S]*\}/);
+        if(m){ try{ parsed=JSON.parse(m[0]); }catch(e2){ throw new Error("לא ניתן לפענח JSON: "+e.message); } }
+        else throw new Error("לא נמצא JSON בתגובה");
+      }
+      if(!Array.isArray(parsed.perUnit)) throw new Error("perUnit לא תקין");
+      const expectedCount=s3.detailedConclusions.length;
+      const truncated=parsed.perUnit.length<expectedCount;
+      const aiProposal={
+        perUnit:parsed.perUnit,
+        coverage:parsed.coverage||{},
+        runAt:new Date().toISOString(),
+        usage:r.usage,
+        costUsd:r.costUsd,
+        promptLength:prompt.length,
+        responseLength:r.text.length,
+        truncated,
+        expectedUnits:expectedCount,
+        actualUnits:parsed.perUnit.length
+      };
+      savePhase2(aiProposal,p2Decisions);
+      setP2Progress("");
+    }catch(e){
+      setP2Error(e.message||String(e));
+    }
+    setP2Loading(false);
+  }
+
+  function setResearcherDecision(uid,decision){
+    const updated={...p2Decisions,[uid]:{...(p2Decisions[uid]||{}),...decision,decidedAt:new Date().toISOString()}};
+    savePhase2(p2Proposal,updated);
   }
 
   // בדיקת זמינות נתוני שלבים 2+3 לדמות הזאת + למושג הזה
@@ -3223,17 +3378,32 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                             </div>
                             {conceptDef.clarification&&conceptDef.clarification.text?(
                               <>
-                                {conceptDef.clarification.basedOnDefinitionAt!==conceptDef.editedAt&&(
+                                {conceptDef.clarification.basedOnDefinitionAt!==conceptDef.editedAt&&!conceptDef.clarification.editedByUser&&(
                                   <div style={{padding:"8px 10px",background:"#78350f22",borderRadius:"5px",fontSize:"10px",color:"#fcd34d",marginBottom:"8px"}}>⚠ ההגדרה שונתה אחרי שההבהרה נוצרה. מומלץ ליצור הבהרה חדשה.</div>
                                 )}
-                                <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"12px",color:"#cbd5e1",lineHeight:"1.7",whiteSpace:"pre-wrap",borderRight:`3px solid ${dimColor}`}}>{conceptDef.clarification.text}</div>
-                                <div style={{display:"flex",justifyContent:"space-between",marginTop:"8px",fontSize:"10px",color:"#64748b",alignItems:"center",flexWrap:"wrap",gap:"8px"}}>
-                                  <div>
-                                    נוצר: {conceptDef.clarification.generatedAt?conceptDef.clarification.generatedAt.slice(0,16).replace("T"," "):"—"}
-                                    {conceptDef.clarification.usage&&<span style={{marginRight:"10px",color:"#60a5fa"}}>· קלט: {conceptDef.clarification.usage.input_tokens||0} tok · פלט: {conceptDef.clarification.usage.output_tokens||0} tok · עלות: ${(conceptDef.clarification.costUsd||0).toFixed(4)}</span>}
-                                  </div>
-                                  <button onClick={generateClarification} disabled={clarLoading} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:clarLoading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{clarLoading?"⏳ יוצר..." :"🔄 צור הבהרה מחודשת"}</button>
-                                </div>
+                                {clarEditing?(
+                                  <>
+                                    <textarea value={clarDraft} onChange={e=>setClarDraft(e.target.value)} rows={10} style={{width:"100%",padding:"10px",background:"#0f172a",border:"1px solid #475569",borderRadius:"6px",color:"#f1f5f9",fontSize:"12px",fontFamily:"inherit",resize:"vertical",direction:"rtl",lineHeight:"1.7"}}/>
+                                    <div style={{display:"flex",gap:"8px",marginTop:"8px",flexWrap:"wrap"}}>
+                                      <button onClick={saveEditedClarification} disabled={!clarDraft.trim()} style={{padding:"7px 16px",borderRadius:"6px",border:"none",cursor:clarDraft.trim()?"pointer":"not-allowed",background:clarDraft.trim()?"#34d399":"#334155",color:clarDraft.trim()?"white":"#64748b",fontSize:"12px",fontWeight:"700"}}>💾 שמור הבהרה</button>
+                                      <button onClick={()=>{setClarDraft(conceptDef.clarification.text);setClarEditing(false);}} style={{padding:"7px 14px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px"}}>ביטול</button>
+                                    </div>
+                                  </>
+                                ):(
+                                  <>
+                                    <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"12px",color:"#cbd5e1",lineHeight:"1.7",whiteSpace:"pre-wrap",borderRight:`3px solid ${dimColor}`}}>{(conceptDef.clarification.text||"").replace(/^#+\s*/gm,"").replace(/\*\*(.*?)\*\*/g,"$1")}</div>
+                                    <div style={{display:"flex",justifyContent:"space-between",marginTop:"8px",fontSize:"10px",color:"#64748b",alignItems:"center",flexWrap:"wrap",gap:"8px"}}>
+                                      <div>
+                                        {conceptDef.clarification.editedByUser?<span style={{color:"#86efac"}}>✓ נערך ידנית ב-{(conceptDef.clarification.editedAt||"").slice(0,16).replace("T"," ")}</span>:<>נוצר: {conceptDef.clarification.generatedAt?conceptDef.clarification.generatedAt.slice(0,16).replace("T"," "):"—"}</>}
+                                        {conceptDef.clarification.usage&&<span style={{marginRight:"10px",color:"#60a5fa"}}>· קלט AI: {conceptDef.clarification.usage.input_tokens||0} tok · פלט: {conceptDef.clarification.usage.output_tokens||0} tok · עלות: ${(conceptDef.clarification.costUsd||0).toFixed(4)}</span>}
+                                      </div>
+                                      <div style={{display:"flex",gap:"6px"}}>
+                                        <button onClick={()=>{setClarDraft(conceptDef.clarification.text);setClarEditing(true);}} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>✏ ערוך</button>
+                                        <button onClick={generateClarification} disabled={clarLoading} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:clarLoading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{clarLoading?"⏳":"🔄 חדש מ-AI"}</button>
+                                      </div>
+                                    </div>
+                                  </>
+                                )}
                               </>
                             ):(
                               <>
@@ -3272,9 +3442,126 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                             <div style={{marginTop:"10px",padding:"8px 10px",background:"#78350f22",borderRadius:"5px",fontSize:"11px",color:"#fcd34d"}}>⚠ לפני המעבר לפאזה 2: יש להשלים ואשר את שלבים 2 ו-3 בפורמט החדש.</div>
                           )}
                           {stage4Availability.stage2HasData&&stage4Availability.stage3HasData&&stage4Availability.stage3IsNewFormat&&conceptDef&&conceptDef.text&&conceptDef.clarification&&(
-                            <div style={{marginTop:"10px",padding:"8px 10px",background:"#064e3b33",borderRadius:"5px",fontSize:"11px",color:"#86efac"}}>✅ פאזה 1 הושלמה. נתוני המחקר זמינים, הגדרה והבהרה שמורות. ממתינים לאישורך לפני בניית פאזה 2 (בדיקת התאמה).</div>
+                            <div style={{marginTop:"10px",padding:"8px 10px",background:"#064e3b33",borderRadius:"5px",fontSize:"11px",color:"#86efac"}}>✅ פאזה 1 הושלמה. נתוני המחקר זמינים, הגדרה והבהרה שמורות.</div>
                           )}
                         </div>
+
+                        {/* ═══ פאזה 2 — בדיקת התאמה ═══ */}
+                        {conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&(
+                          <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                              <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>🔍 פאזה 2 — בדיקת התאמה</div>
+                              <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>סיווג כל מסקנה כ-נתמכת / מסויגת / חורגת / אין מסקנה / לא ניתן להכריע</div>
+                            </div>
+
+                            {!p2Proposal?(
+                              <>
+                                <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px"}}>קריאה אחת ל-AI תעבור על כל {stage4Availability.stage3ConclusionsCount+stage4Availability.stage3MissingCount} היחידות ותסווג כל מסקנה. ה-AI יצטרך לספק נימוק מפורט לכל סיווג, להצביע על ראיה ספציפית, ולפרק מסקנות מרובות-טענות לרכיביהן.</div>
+                                <button onClick={runPhase2} disabled={p2Loading} style={{padding:"10px 22px",borderRadius:"7px",border:"none",cursor:p2Loading?"wait":"pointer",background:p2Loading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{p2Loading?`⏳ ${p2Progress||"רץ..."}`:"🔍 בצע בדיקת התאמה"}</button>
+                                {p2Error&&<div style={{marginTop:"8px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p2Error}</div>}
+                              </>
+                            ):(
+                              <>
+                                {/* סיכום הרצה */}
+                                <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",marginBottom:"10px",fontSize:"11px",color:"#cbd5e1"}}>
+                                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
+                                    <span>🏃 הורץ: {p2Proposal.runAt?p2Proposal.runAt.slice(0,16).replace("T"," "):"—"}</span>
+                                    <span style={{color:"#60a5fa"}}>· קלט: {p2Proposal.usage?.input_tokens||0} tok</span>
+                                    <span style={{color:"#60a5fa"}}>· פלט: {p2Proposal.usage?.output_tokens||0} tok</span>
+                                    <span style={{color:"#86efac",fontWeight:"700"}}>· עלות: ${(p2Proposal.costUsd||0).toFixed(4)}</span>
+                                  </div>
+                                  <div style={{marginTop:"4px",color:p2Proposal.truncated?"#fca5a5":"#86efac"}}>
+                                    {p2Proposal.truncated?`⚠ קטיעה חשודה: ציפינו ${p2Proposal.expectedUnits} יחידות, קיבלנו ${p2Proposal.actualUnits}. הריצי שוב.`:`✅ כיסוי מלא: ${p2Proposal.actualUnits}/${p2Proposal.expectedUnits} יחידות`}
+                                  </div>
+                                </div>
+
+                                {/* ספירת סיווגים */}
+                                {(()=>{
+                                  const counts={supported:0,qualified:0,exceeded:0,no_conclusion:0,insufficient_evidence:0};
+                                  p2Proposal.perUnit.forEach(u=>{ if(counts[u.conclusionStatus]!==undefined) counts[u.conclusionStatus]++; });
+                                  const dec={approved:0,edited:0,review:0,pending:0};
+                                  p2Proposal.perUnit.forEach(u=>{ const d=p2Decisions[u.uid]; if(!d||!d.status) dec.pending++; else if(d.status==="approved") dec.approved++; else if(d.status==="edited") dec.edited++; else if(d.status==="review") dec.review++; });
+                                  return (
+                                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"10px"}}>
+                                      <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"6px"}}>
+                                        <div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"4px"}}>סיווגי AI</div>
+                                        <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5"}}>
+                                          <span style={{color:"#34d399"}}>נתמכת: {counts.supported}</span> · <span style={{color:"#fbbf24"}}>מסויגת: {counts.qualified}</span> · <span style={{color:"#f87171"}}>חורגת: {counts.exceeded}</span> · <span style={{color:"#94a3b8"}}>אין מסקנה: {counts.no_conclusion}</span> · <span style={{color:"#60a5fa"}}>לא ניתן להכריע: {counts.insufficient_evidence}</span>
+                                        </div>
+                                      </div>
+                                      <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"6px"}}>
+                                        <div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"4px"}}>החלטות החוקרת</div>
+                                        <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5"}}>
+                                          <span style={{color:"#86efac"}}>✓ אושר: {dec.approved}</span> · <span style={{color:"#fcd34d"}}>✏ ערוך: {dec.edited}</span> · <span style={{color:"#f59e0b"}}>⚠ לבדיקה: {dec.review}</span> · <span style={{color:"#64748b"}}>○ ממתין: {dec.pending}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
+
+                                <div style={{display:"flex",gap:"8px",marginBottom:"10px",flexWrap:"wrap"}}>
+                                  <button onClick={runPhase2} disabled={p2Loading} style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:p2Loading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{p2Loading?`⏳ ${p2Progress||""}`:"🔄 הרץ מחדש"}</button>
+                                  {p2Error&&<div style={{padding:"4px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"10px",color:"#fca5a5",alignSelf:"center"}}>❌ {p2Error}</div>}
+                                </div>
+
+                                {/* רשימת היחידות עם סיווגים ופעולות */}
+                                <div style={{maxHeight:"700px",overflowY:"auto",display:"flex",flexDirection:"column",gap:"8px"}}>
+                                  {p2Proposal.perUnit.map((u,ui)=>{
+                                    const dec=p2Decisions[u.uid]||{};
+                                    const statusColor={supported:"#34d399",qualified:"#fbbf24",exceeded:"#f87171",no_conclusion:"#94a3b8",insufficient_evidence:"#60a5fa"}[u.conclusionStatus]||"#64748b";
+                                    const statusLabel={supported:"נתמכת",qualified:"מסויגת",exceeded:"חורגת",no_conclusion:"אין מסקנה",insufficient_evidence:"לא ניתן להכריע"}[u.conclusionStatus]||u.conclusionStatus;
+                                    const decColor=dec.status==="approved"?"#86efac":dec.status==="edited"?"#fcd34d":dec.status==="review"?"#f59e0b":"#64748b";
+                                    return (
+                                      <div key={ui} style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${statusColor}`}}>
+                                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"10px",flexWrap:"wrap",marginBottom:"6px"}}>
+                                          <div style={{flex:1,minWidth:"200px"}}>
+                                            <div style={{fontSize:"12px",fontWeight:"700",color:"#f1f5f9"}}>{u.unitName} <span style={{color:"#64748b",fontWeight:"400"}}>({u.chapter})</span></div>
+                                            <div style={{marginTop:"3px",fontSize:"10px"}}><span style={{background:`${statusColor}22`,color:statusColor,padding:"1px 8px",borderRadius:"3px",fontWeight:"700"}}>{statusLabel}</span>{dec.status&&<span style={{marginRight:"6px",background:`${decColor}22`,color:decColor,padding:"1px 8px",borderRadius:"3px",fontWeight:"700"}}>{dec.status==="approved"?"✓ מאושר":dec.status==="edited"?"✏ נערך":"⚠ לבדיקה"}</span>}</div>
+                                          </div>
+                                          <div style={{display:"flex",gap:"4px",flexWrap:"wrap"}}>
+                                            <button onClick={()=>setResearcherDecision(u.uid,{status:"approved",note:""})} style={{padding:"4px 8px",borderRadius:"4px",border:dec.status==="approved"?"1px solid #86efac":"1px solid #475569",cursor:"pointer",background:dec.status==="approved"?"#064e3b":"transparent",color:dec.status==="approved"?"#86efac":"#cbd5e1",fontSize:"10px",fontWeight:"700"}}>✓ אשר</button>
+                                            <button onClick={()=>{
+                                              const note=prompt("עריכת סיווג ונימוק (השארי ריק כדי לבטל):",dec.note||"");
+                                              if(note!==null) setResearcherDecision(u.uid,{status:"edited",note});
+                                            }} style={{padding:"4px 8px",borderRadius:"4px",border:dec.status==="edited"?"1px solid #fcd34d":"1px solid #475569",cursor:"pointer",background:dec.status==="edited"?"#78350f":"transparent",color:dec.status==="edited"?"#fcd34d":"#cbd5e1",fontSize:"10px",fontWeight:"700"}}>✏ ערוך</button>
+                                            <button onClick={()=>{
+                                              const note=prompt("סימון לבדיקה נוספת. מה דורש בדיקה?",dec.note||"");
+                                              if(note!==null) setResearcherDecision(u.uid,{status:"review",note});
+                                            }} style={{padding:"4px 8px",borderRadius:"4px",border:dec.status==="review"?"1px solid #f59e0b":"1px solid #475569",cursor:"pointer",background:dec.status==="review"?"#78350f44":"transparent",color:dec.status==="review"?"#fbbf24":"#cbd5e1",fontSize:"10px",fontWeight:"700"}}>⚠ לבדיקה</button>
+                                          </div>
+                                        </div>
+                                        {u.summary&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",marginBottom:"6px"}}>{u.summary}</div>}
+                                        {Array.isArray(u.perClaim)&&u.perClaim.length>0&&(
+                                          <details style={{marginTop:"4px"}}>
+                                            <summary style={{cursor:"pointer",fontSize:"10px",color:"#94a3b8",fontWeight:"700"}}>▸ פירוט לפי טענות ({u.perClaim.length})</summary>
+                                            <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
+                                              {u.perClaim.map((cl,ci)=>{
+                                                const clColor={supported:"#34d399",qualified:"#fbbf24",exceeded:"#f87171"}[cl.status]||"#64748b";
+                                                return (
+                                                  <div key={ci} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px",fontSize:"10px",borderRight:`2px solid ${clColor}`}}>
+                                                    <div style={{color:clColor,fontWeight:"700",marginBottom:"2px"}}>{{supported:"נתמכת",qualified:"מסויגת",exceeded:"חורגת"}[cl.status]||cl.status}</div>
+                                                    <div style={{color:"#cbd5e1",fontStyle:"italic",marginBottom:"2px"}}>"{cl.claim}"</div>
+                                                    <div style={{color:"#94a3b8",lineHeight:"1.5"}}>{cl.justification}</div>
+                                                    {Array.isArray(cl.evidenceRefs)&&cl.evidenceRefs.length>0&&(
+                                                      <div style={{marginTop:"3px",fontSize:"9px",color:"#60a5fa"}}>
+                                                        {cl.evidenceRefs.map((ev,ei)=>(<div key={ei}>→ <strong>{ev.type}:</strong> {ev.ref}{ev.detail?` — ${ev.detail}`:""}</div>))}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          </details>
+                                        )}
+                                        {dec.note&&<div style={{marginTop:"6px",padding:"4px 8px",background:`${decColor}22`,borderRadius:"4px",fontSize:"10px",color:decColor}}>💬 הערת חוקרת: {dec.note}</div>}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
 
                         {/* ארכיון: ד'1 הישן (אם יש נתונים ישנים ב-stage4) */}
                         {stageData.stage4&&stageData.stage4.tableRows&&(
