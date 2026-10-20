@@ -2373,12 +2373,18 @@ ${conceptDef.clarification.text}
 3. ההגדרה היא העוגן. אין להוסיף תנאים שאינם בה.
 4. אין להמציא פסוקים, ציטוטים או ראיות.
 
+### חוקי פורמט JSON קריטיים
+- **אל תשתמשי בגרשיים כפולים (") בתוך ערכי מחרוזת.** אם את צריכה לצטט ביטוי בעברית, השתמשי בגרשיים טיפוגרפיים: ״ ״ (קוד \\u05F4), או בגרש בודד ʼ, או בסוגריים (...).
+- **אל תשברי שורה בתוך ערך מחרוזת** (אין newlines בתוך strings).
+- **אין פסיק אחרי האלמנט האחרון** בarray או object.
+- פלט רק את ה-JSON, ללא הסברים לפניו או אחריו, ללא גבולות markdown.
+
 ### היחידה:
 ${buildUnitBlock(unit)}
 
-### פורמט התשובה (JSON תקין בלבד — אובייקט יחיד, לא array):
+### פורמט התשובה (JSON תקין בלבד — אובייקט יחיד):
 
-{"uid":"${unit.uid}","unitName":"${unit.unitName}","chapter":"${unit.chapter}","conclusionStatus":"supported|qualified|exceeded|no_conclusion|insufficient_evidence","summary":"<משפט מסכם קצר>","perClaim":[{"claim":"<טענה בודדת מהמסקנה>","status":"supported|qualified|exceeded","justification":"<נימוק מפורט>","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"<תיאור הראיה>","detail":"<ציטוט או הסבר>"}]}]}`;
+{"uid":"${unit.uid}","unitName":"${unit.unitName}","chapter":"${unit.chapter}","conclusionStatus":"supported|qualified|exceeded|no_conclusion|insufficient_evidence","summary":"משפט מסכם קצר","perClaim":[{"claim":"טענה בודדת מהמסקנה","status":"supported|qualified|exceeded","justification":"נימוק מפורט","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"תיאור הראיה","detail":"ציטוט או הסבר (בלי גרשיים כפולים בתוך)"}]}]}`;
     };
 
     const allUnits=s3.detailedConclusions;
@@ -2405,14 +2411,52 @@ ${buildUnitBlock(unit)}
         totalUsage.input_tokens+=(r.usage?.input_tokens||0);
         totalUsage.output_tokens+=(r.usage?.output_tokens||0);
         totalCost+=(r.costUsd||0);
-        let parsed;
+        let parsed=null; let parseError=null;
+        // ─ שלב 1: ניסיון סטנדרטי ─
         try{
           const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,"");
           parsed=JSON.parse(clean);
-        }catch(e){
-          const m=r.text.match(/\{[\s\S]*\}/);
-          if(m){ try{ parsed=JSON.parse(m[0]); }catch(e2){ throw new Error(`יחידה "${unit.unitName}": לא ניתן לפענח JSON — ${e.message}`); } }
-          else throw new Error(`יחידה "${unit.unitName}": לא נמצא JSON בתגובה`);
+        }catch(e){ parseError=e; }
+        // ─ שלב 2: חילוץ JSON עם המחרוזת הראשונה { עד האחרונה } ─
+        if(!parsed){
+          const first=r.text.indexOf("{"), last=r.text.lastIndexOf("}");
+          if(first>=0&&last>first){
+            const extract=r.text.substring(first,last+1);
+            try{ parsed=JSON.parse(extract); parseError=null; }catch(e){ parseError=e; }
+          }
+        }
+        // ─ שלב 3: תיקונים מצטברים (פסיקים אחרונים, גרשיים חכמים) ─
+        if(!parsed){
+          const first=r.text.indexOf("{"), last=r.text.lastIndexOf("}");
+          if(first>=0&&last>first){
+            let fixed=r.text.substring(first,last+1);
+            // הסרת פסיק לפני סגירת סוגריים
+            fixed=fixed.replace(/,(\s*[}\]])/g,"$1");
+            // המרת גרשיים חכמים טיפוגרפיים לגרש בודד (בטוח יותר מניסיון להבריח)
+            fixed=fixed.replace(/[“”״]/g,"ʼ"); // „ ״
+            try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+          }
+        }
+        // ─ שלב 4: ניסיון להבריח גרשיים כפולים בתוך ערכי מחרוזת בעברית ─
+        if(!parsed){
+          const first=r.text.indexOf("{"), last=r.text.lastIndexOf("}");
+          if(first>=0&&last>first){
+            let fixed=r.text.substring(first,last+1);
+            // גרשיים כפולים אחרי אות עברית ולפני אות עברית → להבריח
+            fixed=fixed.replace(/([֐-׿])"([֐-׿])/g,"$1\\\"$2");
+            // גרשיים כפולים אחרי רווח ולפני אות עברית (פתיחה) → להבריח
+            fixed=fixed.replace(/\s"([֐-׿])/g," \\\"$1");
+            // גרשיים כפולים אחרי אות עברית ולפני רווח/פיסוק (סגירה) → להבריח
+            fixed=fixed.replace(/([֐-׿])"(?=[\s.,;])/g,"$1\\\"");
+            fixed=fixed.replace(/,(\s*[}\]])/g,"$1");
+            try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+          }
+        }
+        if(!parsed){
+          // שומרים את התגובה הגולמית לדיבוג (עד 2000 תווים)
+          const snippet=r.text.substring(0,2000);
+          console.error(`JSON parse failed for unit ${unit.unitName}:`,parseError,"\nResponse:",r.text);
+          throw new Error(`יחידה "${unit.unitName}": לא ניתן לפענח JSON — ${parseError?parseError.message:"שגיאה לא ידועה"}. ראי קונסול למעקב.`);
         }
         // יישור המזהה והשם מהנתונים המקוריים (כדי להבטיח התאמה)
         allPerUnit.push({...parsed,uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter});
