@@ -2522,7 +2522,7 @@ ${buildUnitBlock(unit)}
         setP2Progress(`יחידה ${absoluteIdx}/${allUnits.length}: ${unit.unitName}... (${allPerUnit.length}/${allUnits.length} הושלמו${skippedCount>0?`, ${skippedCount} נכשלו ודולגו`:""})`);
         try{
           const prompt=buildPromptSingleUnit(unit,absoluteIdx,allUnits.length);
-          const r=await aiCallDirectWithUsage(prompt,6000);
+          const r=await aiCallDirectWithUsage(prompt,12000);
           totalUsage.input_tokens+=(r.usage?.input_tokens||0);
           totalUsage.output_tokens+=(r.usage?.output_tokens||0);
           totalCost+=(r.costUsd||0);
