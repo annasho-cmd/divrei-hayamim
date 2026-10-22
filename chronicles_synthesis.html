@@ -53,8 +53,8 @@ const STAGE_LABELS={
   1:"מיפוי גלוי/נרמז",
   2:"פירוט אינדיקטורים לפי קטגוריות",
   3:"ריכוז מסקנות מחקריות משלב ב׳ (מהכלי האנליטי)",
-  4:"איחוד לתופעות טקסטואליות (אופציונלי)",
-  5:"זיהוי דפוסים חוזרים",
+  4:"בדיקת התאמה — יחידות וטענות",
+  5:"סינתזה מושגית לדמות",
   6:"השוואה לשמואל-מלכים",
   7:"חזרה למושג הנבואי"
 };
@@ -62,8 +62,8 @@ const STAGE_DESC={
   1:"מיפוי לכל יחידה: ס (סמנטי גלוי), נ (נרמז), ס+נ, או —",
   2:"פירוט האינדיקטורים החיוביים בכל יחידה לפי קטגוריות הפרמטרים",
   3:"ריכוז המסקנות המחקריות שכתבת ב-שלב ב׳ של הכלי האנליטי — ללא AI, ללא שינוי בנתונים",
-  4:"איחוד האינדיקטורים לתופעות טקסטואליות — בלי לציין שם המושג (שלב אופציונלי, לא מתפתח כרגע)",
-  5:"זיהוי דפוסים חוזרים ברוב היחידות",
+  4:"הגדרה → הבהרת יישום → בדיקת התאמה של המסקנות לפי יחידות וטענות",
+  5:"סינתזה של המושג לדמות: מסקנה מרכזית + טענות משנה + ראיות + סייגים",
   6:"לכל דפוס: מה הכרוניסט עשה — נשמר/חוזק/שונה/יצירה מלאה",
   7:"בדיקה: אילו דפוסים מתאימים להגדרת המושג מפרק ב' של התזה"
 };
@@ -552,27 +552,7 @@ function ConceptSelector({raw,onPick,onPickDimension,onBackHome,stageResults}){
         </div>
       )}
 
-      {/* שלב ד' — ברמת הממד */}
-      {character&&dimId&&(
-        <div style={{marginBottom:"22px",padding:"16px",background:dim4Status.allReady?"#0f1e2e":"#1e293b",borderRadius:"10px",border:`1px solid ${dim4Status.allReady?dimColor+"66":"#334155"}`}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:"12px"}}>
-            <div style={{flex:1,minWidth:"280px"}}>
-              <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>📊 שלב ד': איחוד ממצאים לממד שלם</div>
-              <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6"}}>
-                איחוד האינדיקטורים מכל {concepts.length} המושגים של "{dimLabel}" לתופעות טקסטואליות.
-                {!dim4Status.allReady&&<span style={{color:"#fbbf24"}}><br/>⚠ זמין רק לאחר שכל המושגים השלימו שלבים 1-3</span>}
-              </div>
-            </div>
-            <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
-              <span style={{fontSize:"13px",fontWeight:"700",color:dim4Status.allReady?"#34d399":"#fbbf24"}}>{dim4Status.ready}/{dim4Status.total} מוכנים</span>
-              <button onClick={()=>dim4Status.allReady&&onPickDimension&&onPickDimension({character,dimId})} disabled={!dim4Status.allReady}
-                style={{padding:"10px 20px",borderRadius:"8px",border:"none",cursor:dim4Status.allReady?"pointer":"not-allowed",background:dim4Status.allReady?dimColor:"#334155",color:dim4Status.allReady?"white":"#64748b",fontSize:"13px",fontWeight:"700"}}>
-                {dim4Status.allReady?"→ הפעל שלב ד'":"🔒 חסום"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* שלב ד' הישן ברמת הממד — הוסתר ע״י בקשת החוקרת (22.10.2026). הנתונים נשמרים ב-Firebase. */}
 
       {/* מושג */}
       {character&&dimId&&(
@@ -2298,6 +2278,8 @@ ${conceptDef.text}
   const [p2Loading,setP2Loading]=useState(false);
   const [p2Error,setP2Error]=useState("");
   const [p2Progress,setP2Progress]=useState("");
+  const [acceptTestOpen,setAcceptTestOpen]=useState(false);
+  const [acceptTestSelected,setAcceptTestSelected]=useState([]);
   // p2Data: {aiProposal: {perUnit:[...], runAt, usage, costUsd, promptSize, outputSize, truncated?}, researcherDecisions: {uid: {status, note, editedClaims:[...]}}}
   const stage4Data=stageData.stage4||{};
   const p2Proposal=stage4Data.phase2_ai_proposal||null;
@@ -2319,7 +2301,8 @@ ${conceptDef.text}
     fbSaveStageResults(updated);
   }
 
-  async function runPhase2(resetFromScratch=false){
+  const PROMPT_VERSION_P2="v2-2026-10-22";
+  async function runPhase2(resetFromScratch=false,restrictToUids=null){
     if(!conceptDef||!conceptDef.text){ setP2Error("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
     if(!conceptDef.clarification||!conceptDef.clarification.text){ setP2Error("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
     const s2=stageData.stage2, s3=stageData.stage3;
@@ -2347,9 +2330,11 @@ ${cu.hasConclusion?cu.conclusion:"(אין מסקנה מחקרית — אין ל�
     const buildPromptSingleUnit=(unit,unitIdx,total)=>{
       return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לבצע **בדיקת התאמה** בין המסקנה המחקרית (שנכתבה ידנית ע"י החוקרת), האינדיקטורים, הראיות הטקסטואליות וההגדרה המחקרית של המושג — ליחידה אחת.
 
+גרסת פרומפט: v2 (22.10.2026)
+
 ### המושג הנבדק: "${concept}"
 ### הדמות: ${who}
-### יחידה: ${unitIdx} מתוך ${total} (יחידות נוספות מעובדות בנפרד; סווג רק את היחידה שבפרומפט הזה)
+### יחידה: ${unitIdx} מתוך ${total}
 
 ### ההגדרה המחייבת (מפרק ב׳ של התזה — עוגן שלא ניתן לשנות):
 ${conceptDef.text}
@@ -2357,46 +2342,82 @@ ${conceptDef.text}
 ### הבהרת יישום (לא מוסיפה תנאים להגדרה):
 ${conceptDef.clarification.text}
 
-**דיוק מתודולוגי מחייב**: הרכיבים בהגדרה אינם חייבים להיאמר במפורש או להופיע באותו פסוק. אפשר לבסס את הקשר ביניהם מתוך היחידה והקשרה המתועד, ובלבד שההסקה תנמק כיצד הראיות תואמות להגדרה. גם הכרעה נקודתית עשויה לבטא את המושג. ארגון או ציות כשלעצמם אינם מספיקים (למושג חכמה).
+### עקרונות מתודולוגיים (קריטיים — יש לציית לכולם)
 
-### המשימה
-סווג את המסקנה המחקרית של היחידה הזאת ("conclusionStatus") לאחת מהקטגוריות:
-- **"supported"**: המסקנה נתמכת בראיות ובהגדרה.
-- **"qualified"**: המסקנה בעיקרה נכונה אך דורשת סייג. ציין את הסייג.
-- **"exceeded"**: המסקנה חורגת מהראיות או מההגדרה. הסבר איפה החריגה.
-- **"no_conclusion"**: ליחידה אין מסקנה כתובה. אין לסווג כ-exceeded ואין להמציא מסקנה.
-- **"insufficient_evidence"**: יש מסקנה אך החומר אינו מאפשר להכריע.
+**א. יישום ההגדרה ללא החמרה נוספת:**
+הרכיבים בהגדרה אינם חייבים להיאמר במפורש בטקסט, להופיע באותו פסוק, או להיות מתוארים כמחשבת המלך. ניתן לבסס זיקה מושגית מתוך פעולות, בחירות ספרותיות, ניסוחים והקשר שסופקו — ובלבד שההסקה מנומקת. **אין להשלים שיקול דעת שאינו מבוסס בחומר** (זה הצד השני של אותו עיקרון).
+
+**ב. הבחנה בין ממצא טקסטואלי להסקה מושגית:**
+כל טענה במסקנה כוללת לפעמים שני רכיבים נפרדים — טענה על הכתוב/שינוי, והסקה מושגית ממנה. יש לבדוק אותם בנפרד. למשל: "חלוקת האחריות בין המלך לזקנים מראה חכמה" — הטענה על חלוקת אחריות עשויה להיות **נתמכת**, בעוד שההסקה שהיא מוכיחה חכמה עשויה להיות **מסויגת** או **חורגת**. אין לדחות את כל הטענה בגלל אחד הרכיבים.
+
+**ג. אין ברירת מחדל סיווג:**
+כל סיווג חייב לעמוד בקריטריון שלו. אסור "להעדיף מסויגת כדי לא להיות חמורה" — ההיפך: "מסויגת" מחייבת בסיס חיובי מזוהה. "חורגת" מציינת הרחבה מעבר לראיות. חוסר מידע = "insufficient" (נפרד).
+
+### סיווגים — קריטריונים מדויקים (לא היררכיה; כל אחד עצמאי)
+
+- **"supported"**: הטענה (ממצא או הסקה) נתמכת בראיות מזוהות שסופקו ובהגדרה המחייבת.
+- **"qualified"**: יש **בסיס חיובי מזוהה**, אך נדרש צמצום, הבחנה או הכרה במחלוקת. ציין את הסייג המדויק.
+- **"exceeded"**: הטענה כוללת קביעה שהראיות שסופקו אינן מבססות (הרחבה מעבר לחומר).
+- **"insufficient"**: חסר מידע הנחוץ לבדיקה (אין מספיק נתונים — לא נקבע נגד הטענה).
+- **"irrelevant"** (רק ל-conceptualStatus): הטענה היא ממצא טקסטואלי בלבד ואינה כוללת הסקה מושגית.
 
 ### חוקים מחייבים
-1. אם המסקנה כוללת כמה טענות — פרק אותה ל-perClaim, וסווג כל טענה בנפרד.
-2. כל נימוק חייב להצביע על ראיה ספציפית: פסוק, אינדיקטור או פרשנות מתועדת.
-3. ההגדרה היא העוגן. אין להוסיף תנאים שאינם בה.
-4. אין להמציא פסוקים, ציטוטים או ראיות.
+1. פרק כל מסקנה לטענות עצמאיות ב-perClaim. אם טענה מערבת ממצא והסקה — אל תשנה את המסקנה המקורית אבל סווג כל רכיב בנפרד.
+2. **כל נימוק** חייב להצביע על ראיה ספציפית: פסוק מזוהה, אינדיקטור משלב 2, או פרשנות מתועדת. אמירה כללית כמו "אין תהליך של הבנה" — אסורה. יש להסביר אילו ראיות נבדקו ומה הן מראות.
+3. ההגדרה היא העוגן, אין להוסיף תנאים.
+4. אין להמציא פסוקים, ציטוטים או ראיות. אין לטעון שמקור פרשני נבדק אם לא נבדק — יש לציין "הפניה מתועדת".
+5. בחן את **כלל היחידה והקשרה** לפני קביעה שרכיב נעדר. אם מתועד מרכיב רלוונטי (למשל "ויהוה צבאות עמו") — יש להתייחס אליו, גם אם אינו מוכיח לבדו את ההסקה המלאה.
+
+### סיכום (summary) — חוקים
+הסיכום יעריך את **המסקנה המרכזית** של היחידה ויסביר **כיצד היא נשענת על טענות המשנה**. אין להצביע לפי מספר/ספירת סיווגים ("3 מתוך 4 נתמכים לכן..."). אם יש פער בין הממצאים (נתמכים) להסקה (חורגת) — יש להסביר את הפער במפורש. למשל: "מסקנת החיזוק של החכמה חורגת; הממצאים על סמכות ואחריות נתמכים."
+האמן את הסיווג המסכם של היחידה (conclusionStatus) מהסיכום — לא ההיפך.
 
 ### חוקי פורמט JSON קריטיים
-- **אל תשתמשי בגרשיים כפולים (") בתוך ערכי מחרוזת.** אם את צריכה לצטט ביטוי בעברית, השתמשי בגרשיים טיפוגרפיים: ״ ״ (קוד \\u05F4), או בגרש בודד ʼ, או בסוגריים (...).
-- **אל תשברי שורה בתוך ערך מחרוזת** (אין newlines בתוך strings).
-- **אין פסיק אחרי האלמנט האחרון** בarray או object.
-- פלט רק את ה-JSON, ללא הסברים לפניו או אחריו, ללא גבולות markdown.
+- **אל תשתמשי בגרשיים כפולים (") בתוך ערכי מחרוזת.** השתמשי בגרשיים טיפוגרפיים: ״ ״ (\\u05F4), גרש בודד ʼ, או סוגריים.
+- אל תשברי שורה בתוך ערך מחרוזת.
+- אין פסיק אחרי האלמנט האחרון.
+- פלט רק JSON, ללא טקסט או markdown.
 
 ### היחידה:
 ${buildUnitBlock(unit)}
 
-### פורמט התשובה (JSON תקין בלבד — אובייקט יחיד):
+### פורמט התשובה (JSON תקין בלבד):
 
-{"uid":"${unit.uid}","unitName":"${unit.unitName}","chapter":"${unit.chapter}","conclusionStatus":"supported|qualified|exceeded|no_conclusion|insufficient_evidence","summary":"משפט מסכם קצר","perClaim":[{"claim":"טענה בודדת מהמסקנה","status":"supported|qualified|exceeded","justification":"נימוק מפורט","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"תיאור הראיה","detail":"ציטוט או הסבר (בלי גרשיים כפולים בתוך)"}]}]}`;
+{"uid":"${unit.uid}","unitName":"${unit.unitName}","chapter":"${unit.chapter}","conclusionStatus":"supported|qualified|exceeded|insufficient|no_conclusion","summary":"הערכת המסקנה המרכזית והסבר כיצד היא נשענת על טענות המשנה","perClaim":[{"claim":"ציטוט או ניסוח של טענה בודדת מהמסקנה המקורית","findingStatus":"supported|qualified|exceeded|insufficient","findingJustification":"נימוק עם הצבעה על ראיה: פסוק/אינדיקטור/פרשן מתועד","conceptualStatus":"supported|qualified|exceeded|insufficient|irrelevant","conceptualJustification":"נימוק להסקה המושגית ממצא זה (או 'הטענה היא ממצא בלבד ללא הסקה מושגית' אם irrelevant)","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"תיאור הראיה","detail":"הסבר קצר (בלי גרשיים כפולים)"}]}]}`;
     };
 
     const allUnits=s3.detailedConclusions;
-    // ─ המשכיות: אם יש תוצאה חלקית, נמשיך ממנה ─
-    const existingPerUnit=(!resetFromScratch&&p2Proposal&&Array.isArray(p2Proposal.perUnit))?p2Proposal.perUnit:[];
-    const processedUids=new Set(existingPerUnit.map(u=>u.uid));
-    const unitsToDo=allUnits.filter(u=>!processedUids.has(u.uid));
+    // ─ מצב "הרצה חוזרת סלקטיבית": restrictToUids מגדיר אילו יחידות לרוץ מחדש, בלי לדרוס את השאר ─
+    const isSelective=Array.isArray(restrictToUids)&&restrictToUids.length>0;
+    const existingPerUnit=(p2Proposal&&Array.isArray(p2Proposal.perUnit))?p2Proposal.perUnit:[];
+    let allPerUnit;
+    if(resetFromScratch){
+      allPerUnit=[];
+    }else if(isSelective){
+      // שומרים את גרסת v1 של היחידות שעומדות להתעדכן, ואז מסירים אותן מ-allPerUnit
+      const toReplaceSet=new Set(restrictToUids);
+      allPerUnit=existingPerUnit.filter(u=>!toReplaceSet.has(u.uid));
+    }else{
+      allPerUnit=[...existingPerUnit];
+    }
+    const processedUids=new Set(allPerUnit.map(u=>u.uid));
+    const unitsToDo=isSelective
+      ?allUnits.filter(u=>restrictToUids.includes(u.uid))
+      :allUnits.filter(u=>!processedUids.has(u.uid));
     if(unitsToDo.length===0){
-      setP2Error("כל היחידות כבר עובדו. למחיקה והרצה מאפס לחצי 'הרץ מאפס'.");
+      setP2Error(isSelective?"לא נבחרו יחידות לבדיקה סלקטיבית.":"כל היחידות כבר עובדו. למחיקה והרצה מאפס לחצי 'הרץ מאפס'.");
       setP2Loading(false); setP2Progress(""); return;
     }
-    let allPerUnit=[...existingPerUnit];
+    // שמירת גרסת v1 של היחידות שעומדות להתעדכן (לצורך השוואה)
+    if(isSelective){
+      const toReplaceSet=new Set(restrictToUids);
+      const previousUnits=existingPerUnit.filter(u=>toReplaceSet.has(u.uid)).map(u=>({...u,archivedAt:new Date().toISOString(),promptVersion:u.promptVersion||"v1"}));
+      const prevArchive=stage4Data.phase2_previous_proposal_v1||{perUnit:[]};
+      const existingArchivedUids=new Set((prevArchive.perUnit||[]).map(u=>u.uid));
+      const mergedArchive=[...(prevArchive.perUnit||[]).filter(u=>!toReplaceSet.has(u.uid)),...previousUnits];
+      // נשמור את זה בבת אחת בסוף הפאזה, לא כאן
+      window.__pendingArchive={perUnit:mergedArchive,lastUpdated:Date.now()};
+    }
     let totalUsage={input_tokens:((!resetFromScratch&&p2Proposal&&p2Proposal.usage?.input_tokens)||0),output_tokens:((!resetFromScratch&&p2Proposal&&p2Proposal.usage?.output_tokens)||0)};
     let totalCost=((!resetFromScratch&&p2Proposal&&p2Proposal.costUsd)||0);
     const runStartedAt=(!resetFromScratch&&p2Proposal&&p2Proposal.runAt)||new Date().toISOString();
@@ -2458,8 +2479,8 @@ ${buildUnitBlock(unit)}
           console.error(`JSON parse failed for unit ${unit.unitName}:`,parseError,"\nResponse:",r.text);
           throw new Error(`יחידה "${unit.unitName}": לא ניתן לפענח JSON — ${parseError?parseError.message:"שגיאה לא ידועה"}. ראי קונסול למעקב.`);
         }
-        // יישור המזהה והשם מהנתונים המקוריים (כדי להבטיח התאמה)
-        allPerUnit.push({...parsed,uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter});
+        // יישור המזהה והשם מהנתונים המקוריים (כדי להבטיח התאמה) + גרסת פרומפט
+        allPerUnit.push({...parsed,uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter,promptVersion:PROMPT_VERSION_P2,generatedAt:new Date().toISOString()});
         // ─ שמירה אחרי כל יחידה ─
         const aiProposal={
           perUnit:allPerUnit,
@@ -2471,10 +2492,24 @@ ${buildUnitBlock(unit)}
           processedUnits:allPerUnit.length,
           totalUnits:allUnits.length,
           completed:allPerUnit.length===allUnits.length,
-          perUnitProcessing:true
+          perUnitProcessing:true,
+          promptVersion:PROMPT_VERSION_P2
         };
-        savePhase2(aiProposal,p2Decisions);
+        // אם זו הרצה סלקטיבית — שמור גם את הארכיון של הגרסה הקודמת
+        if(window.__pendingArchive){
+          const newStage4={...stage4Data,phase2_ai_proposal:aiProposal,phase2_researcher_decisions:p2Decisions,phase2_previous_proposal_v1:window.__pendingArchive,lastUpdated:Date.now()};
+          const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+          setStageData(newData);
+          const all=stageResults||LS_get("stageResults",{});
+          const updated={...all,[resultsKey]:newData};
+          if(setStageResults) setStageResults(updated);
+          LS_set("stageResults",updated);
+          fbSaveStageResults(updated);
+        }else{
+          savePhase2(aiProposal,p2Decisions);
+        }
       }
+      window.__pendingArchive=null; // ניקוי אחרי השלמת כל הרצה
       setP2Progress("");
     }catch(e){
       setP2Error(`${e.message||e}. נשמרה התקדמות עד ליחידה ${allPerUnit.length}/${allUnits.length}. לחצי "המשך" כדי להמשיך.`);
@@ -3538,16 +3573,17 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
                                 {/* ספירת סיווגים */}
                                 {(()=>{
-                                  const counts={supported:0,qualified:0,exceeded:0,no_conclusion:0,insufficient_evidence:0};
+                                  const counts={supported:0,qualified:0,exceeded:0,insufficient:0,no_conclusion:0,insufficient_evidence:0};
                                   p2Proposal.perUnit.forEach(u=>{ if(counts[u.conclusionStatus]!==undefined) counts[u.conclusionStatus]++; });
                                   const dec={approved:0,edited:0,review:0,pending:0};
                                   p2Proposal.perUnit.forEach(u=>{ const d=p2Decisions[u.uid]; if(!d||!d.status) dec.pending++; else if(d.status==="approved") dec.approved++; else if(d.status==="edited") dec.edited++; else if(d.status==="review") dec.review++; });
+                                  const insufficientTotal=counts.insufficient+counts.insufficient_evidence;
                                   return (
                                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"10px"}}>
                                       <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"6px"}}>
-                                        <div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"4px"}}>סיווגי AI</div>
+                                        <div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"4px"}}>סיווגי AI (יחידות)</div>
                                         <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5"}}>
-                                          <span style={{color:"#34d399"}}>נתמכת: {counts.supported}</span> · <span style={{color:"#fbbf24"}}>מסויגת: {counts.qualified}</span> · <span style={{color:"#f87171"}}>חורגת: {counts.exceeded}</span> · <span style={{color:"#94a3b8"}}>אין מסקנה: {counts.no_conclusion}</span> · <span style={{color:"#60a5fa"}}>לא ניתן להכריע: {counts.insufficient_evidence}</span>
+                                          <span style={{color:"#34d399"}}>נתמכת: {counts.supported}</span> · <span style={{color:"#fbbf24"}}>מסויגת: {counts.qualified}</span> · <span style={{color:"#f87171"}}>חורגת: {counts.exceeded}</span> · <span style={{color:"#60a5fa"}}>אין מספיק מידע: {insufficientTotal}</span> · <span style={{color:"#94a3b8"}}>אין מסקנה: {counts.no_conclusion}</span>
                                         </div>
                                       </div>
                                       <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"6px"}}>
@@ -3567,11 +3603,48 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                       <span style={{fontSize:"10px",color:"#fcd34d"}}>⚠ {p2Proposal.totalUnits-p2Proposal.processedUnits} יחידות עדיין לא עובדו</span>
                                     </>
                                   ):(
-                                    <button onClick={()=>runPhase2(false)} disabled={p2Loading||p2Proposal.processedUnits>=p2Proposal.totalUnits} style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:(p2Loading||p2Proposal.processedUnits>=p2Proposal.totalUnits)?"not-allowed":"pointer",background:"transparent",color:p2Proposal.processedUnits>=p2Proposal.totalUnits?"#64748b":"#cbd5e1",fontSize:"11px"}}>✅ כל היחידות הושלמו</button>
+                                    <span style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #065f46",background:"#064e3b33",color:"#86efac",fontSize:"11px",fontWeight:"700"}}>✅ כל {p2Proposal.totalUnits} היחידות עובדו</span>
                                   )}
+                                  <button onClick={()=>{setAcceptTestOpen(!acceptTestOpen);setAcceptTestSelected([]);}} disabled={p2Loading} style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #818cf8",cursor:p2Loading?"wait":"pointer",background:acceptTestOpen?"#1e1b4b":"transparent",color:"#a5b4fc",fontSize:"11px",fontWeight:"700"}}>🧪 בדיקת קבלה סלקטיבית</button>
                                   <button onClick={()=>{if(confirm("למחוק את כל התוצאות ולהתחיל מאפס? כל הסיווגים והחלטות החוקרת ימחקו.")) runPhase2(true);}} disabled={p2Loading} style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #7f1d1d",cursor:p2Loading?"wait":"pointer",background:"transparent",color:"#fca5a5",fontSize:"11px"}}>🗑 הרץ מאפס</button>
                                   {p2Error&&<div style={{padding:"4px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"10px",color:"#fca5a5"}}>❌ {p2Error}</div>}
                                 </div>
+
+                                {/* ─ פאנל בחירת יחידות לבדיקת קבלה ─ */}
+                                {acceptTestOpen&&(
+                                  <div style={{padding:"12px",background:"#1e1b4b33",borderRadius:"7px",border:"1px dashed #818cf855",marginBottom:"10px"}}>
+                                    <div style={{fontSize:"11px",color:"#a5b4fc",fontWeight:"700",marginBottom:"6px"}}>🧪 בחרי יחידות להרצה חוזרת עם פרומפט v2</div>
+                                    <div style={{fontSize:"10px",color:"#cbd5e1",marginBottom:"8px",lineHeight:"1.5"}}>היחידות הנבחרות יורצו עם הפרומפט המעודכן ויחליפו את הגרסה הקיימת שלהן. <strong>הגרסה הקודמת נשמרת לארכיון</strong> ואפשר להשוות. יתר ה-{p2Proposal.perUnit.length-acceptTestSelected.length} יחידות לא ישתנו.</div>
+                                    <div style={{maxHeight:"200px",overflowY:"auto",background:"#0f172a",borderRadius:"5px",padding:"6px",marginBottom:"8px"}}>
+                                      {p2Proposal.perUnit.map((u,ui)=>{
+                                        const checked=acceptTestSelected.includes(u.uid);
+                                        return (
+                                          <label key={ui} style={{display:"flex",alignItems:"center",gap:"6px",padding:"4px 6px",cursor:"pointer",borderRadius:"3px",background:checked?"#1e1b4b":"transparent"}}>
+                                            <input type="checkbox" checked={checked} onChange={e=>setAcceptTestSelected(prev=>e.target.checked?[...prev,u.uid]:prev.filter(x=>x!==u.uid))} style={{cursor:"pointer"}}/>
+                                            <span style={{fontSize:"10px",color:"#cbd5e1"}}>{u.unitName} <span style={{color:"#64748b"}}>({u.chapter})</span></span>
+                                            {u.promptVersion&&<span style={{marginRight:"auto",fontSize:"9px",color:u.promptVersion===PROMPT_VERSION_P2?"#86efac":"#fcd34d"}}>{u.promptVersion}</span>}
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                    <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center"}}>
+                                      <span style={{fontSize:"10px",color:"#94a3b8"}}>נבחרו: {acceptTestSelected.length}</span>
+                                      <button onClick={()=>{
+                                        if(acceptTestSelected.length===0){ alert("לא נבחרו יחידות."); return; }
+                                        if(confirm(`להריץ ${acceptTestSelected.length} יחידות עם פרומפט v2? הגרסה הקיימת שלהן תועבר לארכיון.`)){
+                                          setAcceptTestOpen(false);
+                                          runPhase2(false,acceptTestSelected);
+                                        }
+                                      }} disabled={acceptTestSelected.length===0||p2Loading} style={{padding:"6px 14px",borderRadius:"5px",border:"none",cursor:(acceptTestSelected.length===0||p2Loading)?"not-allowed":"pointer",background:(acceptTestSelected.length===0||p2Loading)?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>▶ הרץ {acceptTestSelected.length} יחידות עם v2</button>
+                                      <button onClick={()=>{setAcceptTestOpen(false);setAcceptTestSelected([]);}} style={{padding:"6px 10px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px"}}>ביטול</button>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* הודעה אם יש ארכיון של גרסאות קודמות */}
+                                {stage4Data.phase2_previous_proposal_v1&&Array.isArray(stage4Data.phase2_previous_proposal_v1.perUnit)&&stage4Data.phase2_previous_proposal_v1.perUnit.length>0&&(
+                                  <div style={{padding:"6px 10px",background:"#1e1b4b22",borderRadius:"5px",fontSize:"10px",color:"#a5b4fc",marginBottom:"10px"}}>📜 ארכיון: {stage4Data.phase2_previous_proposal_v1.perUnit.length} יחידות בגרסה קודמת (לפני v2) — נשמרות ב-Firebase לצורך השוואה</div>
+                                )}
 
                                 {/* רשימת היחידות עם סיווגים ופעולות */}
                                 <div style={{maxHeight:"700px",overflowY:"auto",display:"flex",flexDirection:"column",gap:"8px"}}>
@@ -3601,19 +3674,34 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                         </div>
                                         {u.summary&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",marginBottom:"6px"}}>{u.summary}</div>}
                                         {Array.isArray(u.perClaim)&&u.perClaim.length>0&&(
-                                          <details style={{marginTop:"4px"}}>
+                                          <details style={{marginTop:"4px"}} open={u.perClaim.length<=3}>
                                             <summary style={{cursor:"pointer",fontSize:"10px",color:"#94a3b8",fontWeight:"700"}}>▸ פירוט לפי טענות ({u.perClaim.length})</summary>
-                                            <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
+                                            <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"6px"}}>
                                               {u.perClaim.map((cl,ci)=>{
-                                                const clColor={supported:"#34d399",qualified:"#fbbf24",exceeded:"#f87171"}[cl.status]||"#64748b";
+                                                const statusMap={supported:{label:"נתמכת",color:"#34d399"},qualified:{label:"מסויגת",color:"#fbbf24"},exceeded:{label:"חורגת",color:"#f87171"},insufficient:{label:"אין מספיק מידע",color:"#60a5fa"},irrelevant:{label:"לא רלוונטי",color:"#64748b"}};
+                                                // תאימות לאחור: אם יש status ישן אבל אין findingStatus — השתמש בישן
+                                                const findingSt=cl.findingStatus||cl.status||"insufficient";
+                                                const conceptualSt=cl.conceptualStatus||"irrelevant";
+                                                const findingInfo=statusMap[findingSt]||{label:findingSt,color:"#64748b"};
+                                                const conceptualInfo=statusMap[conceptualSt]||{label:conceptualSt,color:"#64748b"};
                                                 return (
-                                                  <div key={ci} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px",fontSize:"10px",borderRight:`2px solid ${clColor}`}}>
-                                                    <div style={{color:clColor,fontWeight:"700",marginBottom:"2px"}}>{{supported:"נתמכת",qualified:"מסויגת",exceeded:"חורגת"}[cl.status]||cl.status}</div>
-                                                    <div style={{color:"#cbd5e1",fontStyle:"italic",marginBottom:"2px"}}>"{cl.claim}"</div>
-                                                    <div style={{color:"#94a3b8",lineHeight:"1.5"}}>{cl.justification}</div>
+                                                  <div key={ci} style={{padding:"8px 10px",background:"#1e293b",borderRadius:"5px",fontSize:"10px"}}>
+                                                    <div style={{color:"#cbd5e1",fontStyle:"italic",marginBottom:"6px",lineHeight:"1.5"}}>״{cl.claim}״</div>
+                                                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"4px"}}>
+                                                      <div style={{padding:"6px 8px",background:"#0f172a",borderRadius:"4px",borderRight:`2px solid ${findingInfo.color}`}}>
+                                                        <div style={{fontSize:"9px",color:"#64748b",fontWeight:"700",marginBottom:"2px"}}>ממצא טקסטואלי</div>
+                                                        <div style={{color:findingInfo.color,fontWeight:"700",marginBottom:"3px"}}>{findingInfo.label}</div>
+                                                        <div style={{color:"#94a3b8",lineHeight:"1.5"}}>{cl.findingJustification||cl.justification||"—"}</div>
+                                                      </div>
+                                                      <div style={{padding:"6px 8px",background:"#0f172a",borderRadius:"4px",borderRight:`2px solid ${conceptualInfo.color}`}}>
+                                                        <div style={{fontSize:"9px",color:"#64748b",fontWeight:"700",marginBottom:"2px"}}>הסקה מושגית</div>
+                                                        <div style={{color:conceptualInfo.color,fontWeight:"700",marginBottom:"3px"}}>{conceptualInfo.label}</div>
+                                                        <div style={{color:"#94a3b8",lineHeight:"1.5"}}>{cl.conceptualJustification||"—"}</div>
+                                                      </div>
+                                                    </div>
                                                     {Array.isArray(cl.evidenceRefs)&&cl.evidenceRefs.length>0&&(
-                                                      <div style={{marginTop:"3px",fontSize:"9px",color:"#60a5fa"}}>
-                                                        {cl.evidenceRefs.map((ev,ei)=>(<div key={ei}>→ <strong>{ev.type}:</strong> {ev.ref}{ev.detail?` — ${ev.detail}`:""}</div>))}
+                                                      <div style={{marginTop:"4px",padding:"4px 6px",background:"#0f172a",borderRadius:"3px",fontSize:"9px",color:"#60a5fa"}}>
+                                                        {cl.evidenceRefs.map((ev,ei)=>(<div key={ei}>→ <strong>{{indicator:"אינדיקטור",verse:"פסוק",commentary:"פרשן מתועד"}[ev.type]||ev.type}:</strong> {ev.ref}{ev.detail?` — ${ev.detail}`:""}</div>))}
                                                       </div>
                                                     )}
                                                   </div>
@@ -3632,24 +3720,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                           </div>
                         )}
 
-                        {/* ארכיון: ד'1 הישן (אם יש נתונים ישנים ב-stage4) */}
-                        {stageData.stage4&&stageData.stage4.tableRows&&(
-                          <details style={{padding:"10px 14px",background:"#1e1b4b22",borderRadius:"7px",border:"1px dashed #818cf855"}}>
-                            <summary style={{cursor:"pointer",fontSize:"11px",color:"#a5b4fc",fontWeight:"700"}}>📜 ארכיון: ד׳1 (ניתוח תופעות ישן) — לחצי להרחבה</summary>
-                            <div style={{marginTop:"10px",fontSize:"11px",color:"#94a3b8"}}>
-                              <div style={{marginBottom:"8px",fontStyle:"italic"}}>תוצר של השיטה הקודמת (זיהוי תופעות טקסטואליות). נשמר למעקב, לא משמש בשיטה החדשה.</div>
-                              {stageData.stage4.summary&&<div style={{padding:"6px 8px",background:"#0f172a",borderRadius:"5px",marginBottom:"6px"}}><strong style={{color:"#cbd5e1"}}>סיכום:</strong> {stageData.stage4.summary}</div>}
-                              {Array.isArray(stageData.stage4.tableRows)&&stageData.stage4.tableRows.length>0&&(
-                                <div style={{overflowX:"auto",maxHeight:"300px",overflowY:"auto"}}>
-                                  <table style={{fontSize:"10px",width:"100%",borderCollapse:"collapse"}}>
-                                    <thead><tr style={{background:"#0f172a"}}>{(stageData.stage4.tableHeaders||[]).map((h,i)=>(<th key={i} style={{padding:"4px 6px",textAlign:"right",color:"#64748b",borderBottom:"1px solid #334155"}}>{h}</th>))}</tr></thead>
-                                    <tbody>{stageData.stage4.tableRows.map((r,i)=>(<tr key={i} style={{borderBottom:"1px solid #1e293b"}}>{r.map((c,j)=>(<td key={j} style={{padding:"4px 6px",color:"#94a3b8",verticalAlign:"top"}}>{c}</td>))}</tr>))}</tbody>
-                                  </table>
-                                </div>
-                              )}
-                            </div>
-                          </details>
-                        )}
+                        {/* ד'1 הישן נשמר ב-Firebase אבל לא מוצג בכלי יותר (נדרש ע״י החוקרת, 22.10.2026) */}
                       </div>
                     )}
 
