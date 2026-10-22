@@ -3301,7 +3301,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
             {showContent&&(
               <div style={{marginTop:"8px",marginRight:"30px",padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}33`}}>
-                {!hasResult&&(
+                {!hasResult&&n!==4&&(
                   <div>
                     <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"10px"}}>לחצי להרצת השלב.</div>
                     <button onClick={()=>runStage(n)} disabled={loading}
@@ -3311,21 +3311,23 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                   </div>
                 )}
 
-                {hasResult&&(
+                {(hasResult||n===4)&&(
                   <div>
-                    {/* סרגל פעולות: עריכה / שמירה / ייצוא */}
-                    <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
-                      <button onClick={()=>downloadStageAsWord(n,hasResult)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"#1e293b",color:"#cbd5e1",fontSize:"11px",fontWeight:"600"}}>📄 הורד כ-Word</button>
-                      {!editMode[n]&&(<button onClick={()=>startEdit(n,hasResult)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"#1e293b",color:"#cbd5e1",fontSize:"11px",fontWeight:"600"}}>✏️ עריכה</button>)}
-                      {editMode[n]&&(<>
-                        <button onClick={()=>saveEdit(n)} style={{padding:"6px 14px",borderRadius:"6px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"11px",fontWeight:"700"}}>💾 שמור שינויים</button>
-                        <button onClick={()=>cancelEdit(n)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px",fontWeight:"600"}}>ביטול</button>
-                        <span style={{alignSelf:"center",fontSize:"10px",color:"#fbbf24"}}>במצב עריכה — שינויים לא נשמרו עדיין</span>
-                      </>)}
-                      {hasResult.manuallyEdited&&!editMode[n]&&(<span style={{alignSelf:"center",fontSize:"10px",color:"#fbbf24"}}>⚠ נערך ידנית</span>)}
-                    </div>
+                    {/* סרגל פעולות: עריכה / שמירה / ייצוא — לא בשלב 4 (יש לו פאנל ייעודי) */}
+                    {n!==4&&hasResult&&(
+                      <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
+                        <button onClick={()=>downloadStageAsWord(n,hasResult)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"#1e293b",color:"#cbd5e1",fontSize:"11px",fontWeight:"600"}}>📄 הורד כ-Word</button>
+                        {!editMode[n]&&(<button onClick={()=>startEdit(n,hasResult)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"#1e293b",color:"#cbd5e1",fontSize:"11px",fontWeight:"600"}}>✏️ עריכה</button>)}
+                        {editMode[n]&&(<>
+                          <button onClick={()=>saveEdit(n)} style={{padding:"6px 14px",borderRadius:"6px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"11px",fontWeight:"700"}}>💾 שמור שינויים</button>
+                          <button onClick={()=>cancelEdit(n)} style={{padding:"6px 12px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px",fontWeight:"600"}}>ביטול</button>
+                          <span style={{alignSelf:"center",fontSize:"10px",color:"#fbbf24"}}>במצב עריכה — שינויים לא נשמרו עדיין</span>
+                        </>)}
+                        {hasResult.manuallyEdited&&!editMode[n]&&(<span style={{alignSelf:"center",fontSize:"10px",color:"#fbbf24"}}>⚠ נערך ידנית</span>)}
+                      </div>
+                    )}
 
-                    {hasResult.hasTable&&(
+                    {n!==4&&hasResult.hasTable&&(
                       <div style={{overflowX:"auto",marginBottom:"12px"}}>
                         <table style={{fontSize:"12px"}}>
                           <thead>
@@ -3814,7 +3816,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                       </div>
                     )}
 
-                    {hasResult.summary&&(
+                    {n!==4&&hasResult.summary&&(
                       <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${dimColor}`}}>
                         <div style={{fontSize:"10px",color:dimColor,fontWeight:"700",marginBottom:"4px"}}>סיכום השלב</div>
                         {editMode[n]?(
@@ -3825,7 +3827,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         )}
                       </div>
                     )}
-                    {hasResult.selfCheck&&(
+                    {n!==4&&hasResult.selfCheck&&(
                       <div style={{marginBottom:"12px",padding:"9px 12px",background:"#0f172a",borderRadius:"6px",border:"1px dashed #475569"}}>
                         <div style={{fontSize:"10px",color:"#94a3b8",fontWeight:"700",marginBottom:"4px"}}>🔍 בדיקה עצמית</div>
                         {editMode[n]?(
@@ -3836,18 +3838,20 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         )}
                       </div>
                     )}
-                    <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center"}}>
-                      {approved?(
-                        <div style={{fontSize:"11px",color:"#64748b",padding:"6px 0"}}>👁 מצב עיון בלבד. להרצה מחדש או שינוי — לחצי "בטל אישור" למעלה.</div>
-                      ):hasResult.status==="שגיאה"?(
-                        <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 18px",borderRadius:"7px",border:"none",cursor:loading?"wait":"pointer",background:loading?"#475569":"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700",opacity:loading?0.7:1}}>{loading?(progressNote||"⏳ רץ..."):"🔄 הפעל שוב"}</button>
-                      ):(
-                        <>
-                          <button onClick={()=>approveStage(n)} disabled={loading} style={{padding:"8px 16px",borderRadius:"7px",border:"none",cursor:loading?"not-allowed":"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700",opacity:loading?0.5:1}}>✓ אשר {n<7?"ועבור לשלב הבא":"סיים ניתוח"}</button>
-                          <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 16px",borderRadius:"7px",border:`1px solid ${loading?"#475569":"#ef4444"}`,cursor:loading?"wait":"pointer",background:loading?"#1e293b":"transparent",color:loading?"#94a3b8":"#ef4444",fontSize:"12px",fontWeight:"700",opacity:loading?0.7:1}}>{loading?(progressNote||"⏳ רץ..."):"🔄 הפעל שוב"}</button>
-                        </>
-                      )}
-                    </div>
+                    {n!==4&&(
+                      <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center"}}>
+                        {approved?(
+                          <div style={{fontSize:"11px",color:"#64748b",padding:"6px 0"}}>👁 מצב עיון בלבד. להרצה מחדש או שינוי — לחצי "בטל אישור" למעלה.</div>
+                        ):hasResult.status==="שגיאה"?(
+                          <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 18px",borderRadius:"7px",border:"none",cursor:loading?"wait":"pointer",background:loading?"#475569":"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700",opacity:loading?0.7:1}}>{loading?(progressNote||"⏳ רץ..."):"🔄 הפעל שוב"}</button>
+                        ):(
+                          <>
+                            <button onClick={()=>approveStage(n)} disabled={loading} style={{padding:"8px 16px",borderRadius:"7px",border:"none",cursor:loading?"not-allowed":"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700",opacity:loading?0.5:1}}>✓ אשר {n<7?"ועבור לשלב הבא":"סיים ניתוח"}</button>
+                            <button onClick={()=>runStage(n)} disabled={loading} style={{padding:"8px 16px",borderRadius:"7px",border:`1px solid ${loading?"#475569":"#ef4444"}`,cursor:loading?"wait":"pointer",background:loading?"#1e293b":"transparent",color:loading?"#94a3b8":"#ef4444",fontSize:"12px",fontWeight:"700",opacity:loading?0.7:1}}>{loading?(progressNote||"⏳ רץ..."):"🔄 הפעל שוב"}</button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
