@@ -2215,14 +2215,20 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,sta
     const text=(clarDraft||"").trim();
     if(!text){ alert("ההבהרה לא יכולה להיות ריקה."); return; }
     const now=new Date().toISOString();
+    // שמירת גרסה קודמת כדי לא לאבד
+    const prevList=Array.isArray(conceptDef.previous_clarifications)?conceptDef.previous_clarifications:[];
+    const prevClar=conceptDef.clarification;
+    const updatedPrevList=(prevClar&&prevClar.text!==text)?[...prevList,{...prevClar,archivedAt:now}]:prevList;
+    const newId=prevClar&&prevClar.text===text?prevClar.id:`clar_${Date.now()}`;
     const updated={
       ...conceptDef,
+      previous_clarifications:updatedPrevList,
       clarification:{
         ...(conceptDef.clarification||{}),
+        id:newId,
         text,
         editedByUser:true,
         editedAt:now,
-        // שומרים את ה-usage/cost המקוריים לידיעה; אם החוקרת ערכה — זה לא עולה כסף
         basedOnDefinitionAt:conceptDef.editedAt||conceptDef.savedAt||now
       }
     };
@@ -2231,34 +2237,61 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,sta
     setClarEditing(false);
   }
 
+  const CLARIFICATION_PROMPT_VERSION="v3-general-template-2026-10-22";
   async function generateClarification(){
     if(!conceptDef||!conceptDef.text){ alert("יש להזין ולשמור הגדרה קודם."); return; }
     setClarError(""); setClarLoading(true);
-    const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דמויות דוד ושלמה בדברי הימים לאור החזון הנבואי. לפניך הגדרה מחקרית של המושג "${concept}" כפי שנוסחה בפרק ב׳ של התזה.
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דמויות דוד ושלמה בדברי הימים לאור החזון הנבואי.
+
+גרסת פרומפט: ${CLARIFICATION_PROMPT_VERSION}
+
+להלן הגדרת המושג "${concept}" מפרק ב׳ של התזה. יש לנסח הבהרת יישום לפי הכללים הבאים:
 
 ### ההגדרה:
 ${conceptDef.text}
 
-### המשימה:
-בלי לשנות את ההגדרה ובלי להוסיף לה תנאים, הסבר בקצרה (3-6 שורות) כיצד יש ליישם אותה בעת בחינת הממצאים הטקסטואליים בספר דברי הימים. ציין במפורש:
+### הנחיה כללית להבהרת יישום הגדרת המושג
+קרא את הגדרת המושג מתוך פרק ב׳ ונסח הבהרה קצרה כיצד ליישמה בבחינת דמות המלך בדברי הימים.
+ההבהרה חייבת לשמור על משמעות ההגדרה, ההבחנות והתנאים שנקבעו בה. אין להוסיף תנאי זיהוי חדשים, להרחיב את המושג או להחמיר את דרישותיו.
 
-1. אילו מאפיינים נדרשים לזיהוי המושג (רק ככל שהדבר עולה מההגדרה).
-2. אילו מאפיינים אינם מספיקים כשלעצמם (רק ככל שהדבר עולה מההגדרה).
-3. אם ההגדרה מותירה עניין פתוח או דורשת שיקול דעת — ציין זאת במפורש.
+### אופן זיהוי המושג
+אפשר לזהות ביטוי מושגי באמצעות לשון מפורשת או באמצעות ראיות עקיפות המעוגנות בפעולות, באמירות, בהכרעות, בתוצאות או בעיצוב הספרותי — בהתאם לאופיו של המושג ולהגדרתו. אין להפוך דרך זיהוי אחת, כגון תיאור תהליך מחשבתי, לדרישה כללית.
 
-### חשוב:
-- ההבהרה אינה הגדרה חדשה. היא רק מתווה יישום.
-- אל תוסיף דרישות שאינן בהגדרה.
-- אל תחליף מילים בהגדרה.
-- אם ההגדרה אינה מפרטת תנאי כלשהו, אל תמציא אותו.
+כאשר ההגדרה כוללת כמה רכיבים, יש לשמר את היחס ביניהם כפי שנוסח בה. אין לדרוש שכולם ייאמרו במפורש או יופיעו באותו פסוק. אפשר לבסס את הקשר מתוך היחידה והקשרה שסופק, תוך הסבר הראיות וההסקה.
 
-הגב בעברית, בפסקאות קצרות וברורות. ללא כותרות משנה.`;
+הופעת מילה מן השדה הסמנטי אינה מוכיחה לבדה את המושג, והיעדרה אינו מוכיח את היעדרו. יש לבדוק את משמעות הביטוי, את ההקשר ואת הדמות או הגורם שאליהם הוא מיוחס.
+
+### התאמת הראיות להגדרה
+ציין אילו ראיות עשויות לבסס את המושג ואילו אינן מספיקות כשלעצמן, לפי ההגדרה המסוימת בלבד. אין להחיל על כלל המושגים דרישות השייכות למושג אחר, כגון הכוונה אלוהית, שיקול דעת, הצלחה או פעולה מתמשכת.
+
+כאשר נדרשת זיקה בין רכיבים, אין להסתפק באמירה כללית שהם מתיישבים זה עם זה. יש להצביע על העיגון הטקסטואלי או הפרשני לקשר. ניתן להשתמש בפרשנות המתועדת בחומר, תוך שמירת מחלוקות.
+
+### גבולות ההכרעה
+הבחן בין מה שהטקסט מציג לבין מה שמוסק ממנו. אל תשלים מניעים, כוונות, תהליכים או תוצאות שאינם מבוססים בחומר.
+אם ההגדרה מאפשרת יותר מיישום סביר אחד, ציין את האפשרויות ואת אי־הוודאות. אל תהפוך עמימות לתנאי מחמיר חדש או להיתר לקבל כל זיקה אפשרית.
+
+### התוצר
+הצג בקצרה:
+- **מה ייבחן** לפי ההגדרה
+- **כיצד ניתן לזהותו** (סוגי ראיות)
+- **אילו ראיות אינן מספיקות** כשלעצמן
+- **אילו שאלות נשארות** לבחינה פרטנית
+
+ההגדרה המקורית תישמר ותוצג בנפרד מהבהרת היישום.
+החזר רק את ההבהרה המובנית — בלי מבוא, בלי סיכום, בלי התייחסות להוראות אלה.`;
     try{
-      const r=await aiCallDirectWithUsage(prompt,2000);
+      const r=await aiCallDirectWithUsage(prompt,2500);
       const now=new Date().toISOString();
+      // שמירת ההבהרה הקודמת כגרסה קודמת
+      const prevList=Array.isArray(conceptDef.previous_clarifications)?conceptDef.previous_clarifications:[];
+      const updatedPrevList=conceptDef.clarification?[...prevList,{...conceptDef.clarification,archivedAt:now}]:prevList;
+      const clarificationId=`clar_${Date.now()}`;
       const updated={
         ...conceptDef,
+        previous_clarifications:updatedPrevList,
         clarification:{
+          id:clarificationId,
+          promptVersion:CLARIFICATION_PROMPT_VERSION,
           text:r.text.trim(),
           generatedAt:now,
           basedOnDefinitionAt:conceptDef.editedAt||conceptDef.savedAt||now,
@@ -2352,6 +2385,9 @@ ${conceptDef.clarification.text}
 
 **ג. אין ברירת מחדל סיווג:**
 כל סיווג חייב לעמוד בקריטריון שלו. אסור "להעדיף מסויגת כדי לא להיות חמורה" — ההיפך: "מסויגת" מחייבת בסיס חיובי מזוהה. "חורגת" מציינת הרחבה מעבר לראיות. חוסר מידע = "insufficient" (נפרד).
+
+**ד. אין להחיל דרישות ממושג אחר:**
+בחן את המסקנה **אך ורק** לפי ההגדרה וההבהרה של "${concept}". אין להחיל דרישות השייכות למושג אחר (כגון הכוונה אלוהית אם היא לא בהגדרה, שיקול דעת אם לא נדרש, הצלחה או פעולה מתמשכת כתנאים לא מוזכרים). הופעת מילה מן השדה הסמנטי אינה מוכיחה לבדה את המושג, והיעדרה אינו מוכיח את היעדרו.
 
 ### סיווגים — קריטריונים מדויקים (לא היררכיה; כל אחד עצמאי)
 
@@ -2462,7 +2498,7 @@ ${buildUnitBlock(unit)}
             console.error(`JSON parse failed for unit ${unit.unitName}:`,parseError,"\nResponse (first 500):",r.text.substring(0,500));
             throw new Error(`JSON parse — ${parseError?parseError.message:"לא נמצא JSON"}`);
           }
-          allPerUnit.push({...parsed,uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter,promptVersion:PROMPT_VERSION_P2,generatedAt:new Date().toISOString()});
+          allPerUnit.push({...parsed,uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter,promptVersion:PROMPT_VERSION_P2,clarificationId:conceptDef.clarification?.id||null,clarificationGeneratedAt:conceptDef.clarification?.generatedAt||conceptDef.clarification?.editedAt||null,generatedAt:new Date().toISOString()});
         }catch(unitErr){
           // דילוג על יחידה שנכשלה — שומרים רשומת שגיאה וממשיכים
           skippedCount++;
@@ -2476,6 +2512,8 @@ ${buildUnitBlock(unit)}
             error:true,
             errorMessage:String(unitErr.message||unitErr),
             promptVersion:PROMPT_VERSION_P2,
+            clarificationId:conceptDef.clarification?.id||null,
+            clarificationGeneratedAt:conceptDef.clarification?.generatedAt||conceptDef.clarification?.editedAt||null,
             generatedAt:new Date().toISOString()
           });
         }
@@ -3511,6 +3549,25 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 {clarError&&<div style={{marginTop:"8px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {clarError}</div>}
                               </>
                             )}
+                            {/* גרסאות קודמות של ההבהרה */}
+                            {Array.isArray(conceptDef.previous_clarifications)&&conceptDef.previous_clarifications.length>0&&(
+                              <details style={{marginTop:"10px",padding:"8px 10px",background:"#1e1b4b22",borderRadius:"5px",border:"1px dashed #818cf855"}}>
+                                <summary style={{cursor:"pointer",fontSize:"10px",color:"#a5b4fc",fontWeight:"700"}}>📜 {conceptDef.previous_clarifications.length} גרסאות קודמות של ההבהרה — לחצי להרחבה</summary>
+                                <div style={{marginTop:"8px",display:"flex",flexDirection:"column",gap:"6px"}}>
+                                  {conceptDef.previous_clarifications.map((pc,pi)=>(
+                                    <div key={pi} style={{padding:"8px 10px",background:"#0f172a",borderRadius:"4px",fontSize:"10px"}}>
+                                      <div style={{color:"#64748b",marginBottom:"4px"}}>
+                                        {pc.promptVersion?`גרסת פרומפט: ${pc.promptVersion} · `:""}
+                                        נוצר: {(pc.generatedAt||pc.editedAt||"").slice(0,16).replace("T"," ")}
+                                        {pc.archivedAt?` · הועבר לארכיון: ${pc.archivedAt.slice(0,16).replace("T"," ")}`:""}
+                                        {pc.editedByUser?" · נערך ידנית":""}
+                                      </div>
+                                      <div style={{color:"#94a3b8",lineHeight:"1.6",whiteSpace:"pre-wrap",maxHeight:"150px",overflowY:"auto"}}>{(pc.text||"").replace(/^#+\s*/gm,"").replace(/\*\*(.*?)\*\*/g,"$1")}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
                           </div>
                         )}
 
@@ -3676,6 +3733,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                           </div>
                                         </div>
                                         {u.summary&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",marginBottom:"6px"}}>{u.summary}</div>}
+                                        {u.clarificationId&&conceptDef&&conceptDef.clarification&&u.clarificationId!==conceptDef.clarification.id&&<div style={{fontSize:"9px",color:"#fcd34d",marginBottom:"4px"}}>⚠ נותח לפי הבהרה קודמת (לא הגרסה הנוכחית). יש להריץ שוב דרך "בדיקת קבלה סלקטיבית".</div>}
                                         {Array.isArray(u.perClaim)&&u.perClaim.length>0&&(
                                           <details style={{marginTop:"4px"}} open={u.perClaim.length<=3}>
                                             <summary style={{cursor:"pointer",fontSize:"10px",color:"#94a3b8",fontWeight:"700"}}>▸ פירוט לפי טענות ({u.perClaim.length})</summary>
