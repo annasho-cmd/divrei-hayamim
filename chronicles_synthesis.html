@@ -2329,6 +2329,41 @@ ${conceptDef.text}
   const [p2Progress,setP2Progress]=useState("");
   const [acceptTestOpen,setAcceptTestOpen]=useState(false);
   const [acceptTestSelected,setAcceptTestSelected]=useState([]);
+  const [previewPrompt,setPreviewPrompt]=useState(null); // {unitName, text}
+
+  // תצוגה מקדימה של הקלט המדויק שיעבור ל-AI ליחידה אחת (בלי להריץ)
+  function buildPreviewForUnit(uid){
+    const s2=stageData.stage2, s3=stageData.stage3;
+    if(!conceptDef||!conceptDef.text||!conceptDef.clarification||!s2||!s3||!s3.detailedConclusions){ alert("נתונים חסרים לתצוגה מקדימה."); return; }
+    const unit=s3.detailedConclusions.find(c=>c.uid===uid);
+    if(!unit){ alert("יחידה לא נמצאה."); return; }
+    const indicatorsByUnit={};
+    (s2.indicatorDetails||[]).forEach(ud=>{ indicatorsByUnit[ud.unitId]=ud; });
+    const unitDataByUid={};
+    (raw.units||[]).forEach(u=>{ unitDataByUid[String(u.id)]=u; });
+    // משחזר את אותה פונקציה buildPromptSingleUnit — אבל בלי שליחה
+    const indRec=indicatorsByUnit[unit.uid];
+    const indLines=indRec?indRec.indicators.map(ind=>`  - [${ind.paramLabel}] "${ind.q}"${ind.verse?` [פסוק ${ind.verse}]`:""}${ind.note?`\n    הסבר חוקרת: ${ind.note}`:""}`).join("\n"):"  (אין פירוט אינדיקטורים)";
+    const rawU=unitDataByUid[unit.uid]||{};
+    const chrText=rawU.chroniclesText||"";
+    const srcText=rawU.sourceText||"";
+    const unitCommentary=(raw.commentary&&raw.commentary[unit.uid])||"";
+    const ec=(raw.analysis_chronicles&&raw.analysis_chronicles[unit.uid]&&raw.analysis_chronicles[unit.uid][concept])||{};
+    const scholarRec=ec.scholarRecommendations||{};
+    const factual=(raw.compareFactual&&raw.compareFactual[unit.uid]&&raw.compareFactual[unit.uid][concept])||"";
+    const sections=[
+      {k:"הגדרה (פרק ב')",v:conceptDef.text,ok:true},
+      {k:"הבהרת יישום",v:conceptDef.clarification.text,ok:true},
+      {k:"טקסט דה\"י המלא",v:chrText,ok:!!chrText},
+      {k:"טקסט המקבילה",v:srcText||"(סונדרגוט או לא נטען)",ok:!!srcText||!unit.hasParallel},
+      {k:"פרשנות מתועדת ליחידה (raw.commentary)",v:unitCommentary,ok:!!unitCommentary},
+      {k:"המלצות פרשנים (scholarRecommendations)",v:Object.keys(scholarRec).length?JSON.stringify(scholarRec,null,2):"",ok:Object.keys(scholarRec).length>0},
+      {k:"ניתוח עובדתי משלב ב' (compareFactual)",v:factual,ok:!!factual},
+      {k:"אינדיקטורים משלב 2",v:indLines,ok:!!indRec},
+      {k:"מסקנה מחקרית משלב 3",v:unit.hasConclusion?unit.conclusion:"(אין מסקנה)",ok:unit.hasConclusion}
+    ];
+    setPreviewPrompt({unitName:unit.unitName,chapter:unit.chapter,sections,hasParallel:unit.hasParallel});
+  }
   // p2Data: {aiProposal: {perUnit:[...], runAt, usage, costUsd, promptSize, outputSize, truncated?}, researcherDecisions: {uid: {status, note, editedClaims:[...]}}}
   const stage4Data=stageData.stage4||{};
   const p2Proposal=stage4Data.phase2_ai_proposal||null;
@@ -2350,7 +2385,7 @@ ${conceptDef.text}
     fbSaveStageResults(updated);
   }
 
-  const PROMPT_VERSION_P2="v4-2026-10-22-full-context";
+  const PROMPT_VERSION_P2="v5-2026-10-22-engage-conclusion";
   async function runPhase2(resetFromScratch=false,restrictToUids=null){
     if(!conceptDef||!conceptDef.text){ setP2Error("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
     if(!conceptDef.clarification||!conceptDef.clarification.text){ setP2Error("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
@@ -2361,7 +2396,6 @@ ${conceptDef.text}
 
     const indicatorsByUnit={};
     (s2.indicatorDetails||[]).forEach(ud=>{ indicatorsByUnit[ud.unitId]=ud; });
-    // טעינת רקע מלא ליחידות מ-raw.units — כולל טקסט דה"י המלא, טקסט המקבילה, פרשנות
     const unitDataByUid={};
     (raw.units||[]).forEach(u=>{ unitDataByUid[String(u.id)]=u; });
     const buildUnitBlock=(cu)=>{
@@ -2370,17 +2404,27 @@ ${conceptDef.text}
       const rawU=unitDataByUid[cu.uid]||{};
       const chrText=rawU.chroniclesText||"";
       const srcText=rawU.sourceText||"";
-      const commentary=rawU.commentary||"";
+      // פרשנות: ב-raw.commentary[uid] (לכל יחידה) + ב-raw.analysis_chronicles[uid][concept].scholarRecommendations (לכל מושג-יחידה)
+      const unitCommentary=(raw.commentary&&raw.commentary[cu.uid])||"";
+      const ec=(raw.analysis_chronicles&&raw.analysis_chronicles[cu.uid]&&raw.analysis_chronicles[cu.uid][concept])||{};
+      const scholarRec=ec.scholarRecommendations||{};
+      const scholarLines=Object.keys(scholarRec).map(k=>{
+        const v=scholarRec[k];
+        if(typeof v==="string") return `  - ${k}: ${v}`;
+        if(v&&typeof v==="object") return `  - ${k}: ${JSON.stringify(v).replace(/[{}"\]]/g,"")}`;
+        return `  - ${k}: ${v}`;
+      }).join("\n");
+      const factual=(raw.compareFactual&&raw.compareFactual[cu.uid]&&raw.compareFactual[cu.uid][concept])||"";
       return `יחידה: ${cu.unitName} (${cu.chapter})
 מזהה: ${cu.uid}
 ${cu.hasParallel?`מקבילה: ${cu.sourceRef}`:"סונדרגוט (אין מקבילה בשמואל/מלכים)"}
 
 ### טקסט דה"י המלא
-${chrText||"(לא נטען)"}
+${chrText||"(לא נטען בחומר)"}
 
-${srcText?`### טקסט המקבילה המלא\n${srcText}\n`:""}
-${commentary?`### פרשנות מתועדת (כפי שסופקה בחומר המחקר — יש לשמר שם מחבר, חיבור ועמוד אם מופיעים)\n${commentary}\n`:""}
-### אינדיקטורים חיוביים משלב 2
+${srcText?`### טקסט המקבילה המלא\n${srcText}\n`:"### טקסט המקבילה\n(אין מקבילה)\n"}
+${unitCommentary?`### פרשנות מתועדת ליחידה (מהכלי האנליטי — יש לשמר שם מחבר, חיבור ועמוד)\n${unitCommentary}\n`:""}${scholarLines?`### המלצות פרשנים לפי החוקרת (סימונים ליחידה×מושג)\n${scholarLines}\n`:""}${factual?`### ניתוח עובדתי השוואתי משלב ב'\n${factual}\n`:""}
+### אינדיקטורים חיוביים משלב 2 (${indRec?indRec.indicators.length:0} אינדיקטורים)
 ${indLines}
 
 ### מסקנה מחקרית משלב 3 (${cu.hasConclusion?"קיימת":"חסרה"})
@@ -2443,6 +2487,15 @@ ${conceptDef.clarification.text}
 
 **יג. הסיכום הכולל חובה ומחייב:**
 הסיכום הכולל של היחידה (summary ו-conclusionStatus) חייב לשקף את ההכרעות המפורטות בטענות המשנה, ולא להתנתק מהן. **אסור לסכם ב-exceeded כאשר חלק מהטענות נתמכות** — יש להסביר במפורש את הפער בין הממצאים הנתמכים לבין הסקת המושג. הסינתזה בשלבים הבאים עלולה להסתמך על הסיכום הזה, אז הוא חייב להיות מדויק.
+
+**יד. התייחסות ישירה למסקנת החוקרת ולראיות שהיא ציטטה:**
+המסקנה המחקרית בשלב 3 היא **תשתית מחקרית שנבדקה ואושרה**. כאשר המסקנה מנמקת זיקה למושג באמצעות פסוקים, פרשנים או ציטוטים ספציפיים — **חובה להתייחס להנמקה הזאת במפורש בנימוק**. אם מציע לסייג או לקבוע חורגת, יש להסביר **בדיוק** איזה מעבר מהממצא להסקה אינו מבוסס דיו, תוך התייחסות ישירה לתמיכה שכבר תועדה במסקנה. **אסור להסתפק באמירה כללית** כמו "אין תהליך של שיקול דעת" או "אין זיקה אלוהית מפורשת". יש להצביע: "המסקנה מצטטת את X ואת Y מעמ' Z; מה שחסר כדי לגשר לאישור ההסקה הוא ..."
+
+**טו. אין כללים אוטומטיים לפי נוכחות/היעדר ביטוי:**
+**אין לקבוע** ש"ויהוה צבאות עמו" או ביטויים דומים מחייבים לפחות "מסויגת" אוטומטית. **אין לקבוע** שהיעדר הכוונה אלוהית מפורשת מחייב "חורגת" אוטומטית. הסיווג חייב לנבוע **מהטענה המסוימת וממכלול הראיות המסופקות** — כולל הטקסט המלא, הפרשנות המתועדת, האינדיקטורים והמסקנה המחקרית.
+
+**טז. נאמנות להגדרה ולראיות — לא נטייה מראש:**
+אין נטייה מראש להחמרה או להקלה. אמת המידה היא **נאמנות להגדרה מפרק ב׳** ולמלוא הראיות המסופקות. יש להבחין בין **הדרישה המושגית** (רכיבי ההגדרה) ובין **דרך הוכחתה בטקסט**: אין לוותר על רכיבי ההגדרה, אך אין לדרוש תיאור מפורש של תהליך מחשבתי או ציווי אלוהי. אפשר לבסס יכולת וזיקה באמצעות פעולה, הקשר, עיצוב ספרותי — כאשר הקשר מוסבר ומעוגן בראיות.
 
 ### סיווגים — קריטריונים מדויקים (לא היררכיה; כל אחד עצמאי)
 
@@ -3649,12 +3702,13 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                         {allConcs.map((c,ci)=>{
                                           const checked=acceptTestSelected.includes(c.uid);
                                           return (
-                                            <label key={ci} style={{display:"flex",alignItems:"center",gap:"6px",padding:"3px 6px",cursor:"pointer",borderRadius:"3px",background:checked?"#1e293b":"transparent",fontSize:"10px"}}>
+                                            <div key={ci} style={{display:"flex",alignItems:"center",gap:"6px",padding:"3px 6px",borderRadius:"3px",background:checked?"#1e293b":"transparent",fontSize:"10px"}}>
                                               <input type="checkbox" checked={checked} onChange={e=>setAcceptTestSelected(prev=>e.target.checked?[...prev,c.uid]:prev.filter(x=>x!==c.uid))}/>
-                                              <span style={{color:"#cbd5e1",flex:1}}>{c.unitName} <span style={{color:"#64748b"}}>({c.chapter})</span></span>
+                                              <span style={{color:"#cbd5e1",flex:1,cursor:"pointer"}} onClick={()=>setAcceptTestSelected(prev=>checked?prev.filter(x=>x!==c.uid):[...prev,c.uid])}>{c.unitName} <span style={{color:"#64748b"}}>({c.chapter})</span></span>
                                               {!c.hasConclusion&&<span style={{fontSize:"9px",color:"#f59e0b"}}>אין מסקנה</span>}
                                               {!c.hasParallel&&<span style={{fontSize:"9px",color:"#64748b"}}>סונדרגוט</span>}
-                                            </label>
+                                              <button onClick={e=>{e.stopPropagation(); buildPreviewForUnit(c.uid);}} style={{fontSize:"9px",padding:"1px 6px",borderRadius:"3px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#60a5fa"}}>👁 קלט</button>
+                                            </div>
                                           );
                                         })}
                                       </div>
@@ -3851,6 +3905,28 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         )}
 
                         {/* ד'1 הישן נשמר ב-Firebase אבל לא מוצג בכלי יותר (נדרש ע״י החוקרת, 22.10.2026) */}
+
+                        {/* דיאלוג תצוגה מקדימה של הקלט */}
+                        {previewPrompt&&(
+                          <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"#000c",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:"20px"}} onClick={()=>setPreviewPrompt(null)}>
+                            <div onClick={e=>e.stopPropagation()} style={{background:"#1e293b",borderRadius:"10px",padding:"20px",maxWidth:"900px",width:"100%",maxHeight:"90vh",overflowY:"auto",border:"1px solid #475569"}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"12px",flexWrap:"wrap",gap:"8px"}}>
+                                <div style={{fontSize:"14px",fontWeight:"700",color:"#f1f5f9"}}>👁 תצוגה מקדימה: קלט ל-{previewPrompt.unitName} ({previewPrompt.chapter})</div>
+                                <button onClick={()=>setPreviewPrompt(null)} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>✖ סגור</button>
+                              </div>
+                              <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"12px"}}>הקלט שיישלח ל-AI מורכב מ-9 מקטעים. ✅ = קיים, ⚠ = חסר/לא נטען.</div>
+                              <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
+                                {previewPrompt.sections.map((s,si)=>(
+                                  <div key={si} style={{padding:"8px 10px",background:s.ok?"#0f172a":"#78350f22",borderRadius:"5px",border:s.ok?"1px solid #334155":"1px solid #f59e0b55"}}>
+                                    <div style={{fontSize:"11px",fontWeight:"700",color:s.ok?"#86efac":"#fcd34d",marginBottom:"4px"}}>{s.ok?"✅":"⚠ חסר"} — {s.k}{s.v?` (${(s.v+"").length} תווים)`:""}</div>
+                                    {s.v&&<pre style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5",whiteSpace:"pre-wrap",maxHeight:"150px",overflowY:"auto",direction:"rtl",fontFamily:"inherit",margin:0}}>{(s.v+"").substring(0,2000)}{(s.v+"").length>2000?`\n\n... (${(s.v+"").length-2000} תווים נוספים)`:""}</pre>}
+                                  </div>
+                                ))}
+                              </div>
+                              <div style={{marginTop:"14px",padding:"8px 10px",background:"#1e3a5f22",borderRadius:"5px",fontSize:"11px",color:"#93c5fd"}}>💡 אם חסר מקטע חשוב — זה הזמן להוסיף אותו לנתוני הכלי האנליטי לפני ההרצה. פרטי המקטעים: raw.commentary[uid], raw.analysis_chronicles[uid][concept].scholarRecommendations, raw.compareFactual[uid][concept].</div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
