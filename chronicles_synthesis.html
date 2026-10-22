@@ -2381,9 +2381,9 @@ ${conceptDef.clarification.text}
 ### היחידה:
 ${buildUnitBlock(unit)}
 
-### פורמט התשובה (JSON תקין בלבד):
+### פורמט התשובה (JSON תקין בלבד — אל תכלול שם יחידה, מזהה או פרק; הם ייווספו אוטומטית):
 
-{"uid":"${unit.uid}","unitName":"${unit.unitName}","chapter":"${unit.chapter}","conclusionStatus":"supported|qualified|exceeded|insufficient|no_conclusion","summary":"הערכת המסקנה המרכזית והסבר כיצד היא נשענת על טענות המשנה","perClaim":[{"claim":"ציטוט או ניסוח של טענה בודדת מהמסקנה המקורית","findingStatus":"supported|qualified|exceeded|insufficient","findingJustification":"נימוק עם הצבעה על ראיה: פסוק/אינדיקטור/פרשן מתועד","conceptualStatus":"supported|qualified|exceeded|insufficient|irrelevant","conceptualJustification":"נימוק להסקה המושגית ממצא זה (או 'הטענה היא ממצא בלבד ללא הסקה מושגית' אם irrelevant)","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"תיאור הראיה","detail":"הסבר קצר (בלי גרשיים כפולים)"}]}]}`;
+{"conclusionStatus":"supported|qualified|exceeded|insufficient|no_conclusion","summary":"הערכת המסקנה המרכזית והסבר כיצד היא נשענת על טענות המשנה","perClaim":[{"claim":"ציטוט או ניסוח של טענה בודדת מהמסקנה המקורית","findingStatus":"supported|qualified|exceeded|insufficient","findingJustification":"נימוק עם הצבעה על ראיה: פסוק/אינדיקטור/פרשן מתועד","conceptualStatus":"supported|qualified|exceeded|insufficient|irrelevant","conceptualJustification":"נימוק להסקה המושגית ממצא זה (או 'הטענה היא ממצא בלבד ללא הסקה מושגית' אם irrelevant)","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"תיאור הראיה","detail":"הסבר קצר (בלי גרשיים כפולים)"}]}]}`;
     };
 
     const allUnits=s3.detailedConclusions;
@@ -2422,66 +2422,64 @@ ${buildUnitBlock(unit)}
     let totalCost=((!resetFromScratch&&p2Proposal&&p2Proposal.costUsd)||0);
     const runStartedAt=(!resetFromScratch&&p2Proposal&&p2Proposal.runAt)||new Date().toISOString();
 
+    let skippedCount=0;
+    const skippedUnits=[];
     try{
       for(let i=0;i<unitsToDo.length;i++){
         const unit=unitsToDo[i];
         const absoluteIdx=allUnits.findIndex(u=>u.uid===unit.uid)+1;
-        setP2Progress(`יחידה ${absoluteIdx}/${allUnits.length}: ${unit.unitName}... (${allPerUnit.length}/${allUnits.length} הושלמו)`);
-        const prompt=buildPromptSingleUnit(unit,absoluteIdx,allUnits.length);
-        const r=await aiCallDirectWithUsage(prompt,6000); // 6K מספיק ליחידה אחת, מרווח מהגבול
-        totalUsage.input_tokens+=(r.usage?.input_tokens||0);
-        totalUsage.output_tokens+=(r.usage?.output_tokens||0);
-        totalCost+=(r.costUsd||0);
-        let parsed=null; let parseError=null;
-        // ─ שלב 1: ניסיון סטנדרטי ─
+        setP2Progress(`יחידה ${absoluteIdx}/${allUnits.length}: ${unit.unitName}... (${allPerUnit.length}/${allUnits.length} הושלמו${skippedCount>0?`, ${skippedCount} נכשלו ודולגו`:""})`);
         try{
-          const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,"");
-          parsed=JSON.parse(clean);
-        }catch(e){ parseError=e; }
-        // ─ שלב 2: חילוץ JSON עם המחרוזת הראשונה { עד האחרונה } ─
-        if(!parsed){
-          const first=r.text.indexOf("{"), last=r.text.lastIndexOf("}");
-          if(first>=0&&last>first){
-            const extract=r.text.substring(first,last+1);
-            try{ parsed=JSON.parse(extract); parseError=null; }catch(e){ parseError=e; }
+          const prompt=buildPromptSingleUnit(unit,absoluteIdx,allUnits.length);
+          const r=await aiCallDirectWithUsage(prompt,6000);
+          totalUsage.input_tokens+=(r.usage?.input_tokens||0);
+          totalUsage.output_tokens+=(r.usage?.output_tokens||0);
+          totalCost+=(r.costUsd||0);
+          let parsed=null; let parseError=null;
+          // 4 שלבי פיענוח JSON
+          try{ const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,""); parsed=JSON.parse(clean); }catch(e){ parseError=e; }
+          if(!parsed){
+            const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
+            if(first>=0&&last>first){ try{ parsed=JSON.parse(r.text.substring(first,last+1)); parseError=null; }catch(e){ parseError=e; } }
           }
-        }
-        // ─ שלב 3: תיקונים מצטברים (פסיקים אחרונים, גרשיים חכמים) ─
-        if(!parsed){
-          const first=r.text.indexOf("{"), last=r.text.lastIndexOf("}");
-          if(first>=0&&last>first){
-            let fixed=r.text.substring(first,last+1);
-            // הסרת פסיק לפני סגירת סוגריים
-            fixed=fixed.replace(/,(\s*[}\]])/g,"$1");
-            // המרת גרשיים חכמים טיפוגרפיים לגרש בודד (בטוח יותר מניסיון להבריח)
-            fixed=fixed.replace(/[“”״]/g,"ʼ"); // „ ״
-            try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+          if(!parsed){
+            const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
+            if(first>=0&&last>first){
+              let fixed=r.text.substring(first,last+1);
+              fixed=fixed.replace(/,(\s*[}\]])/g,"$1").replace(/[“”״]/g,"ʼ");
+              try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+            }
           }
-        }
-        // ─ שלב 4: ניסיון להבריח גרשיים כפולים בתוך ערכי מחרוזת בעברית ─
-        if(!parsed){
-          const first=r.text.indexOf("{"), last=r.text.lastIndexOf("}");
-          if(first>=0&&last>first){
-            let fixed=r.text.substring(first,last+1);
-            // גרשיים כפולים אחרי אות עברית ולפני אות עברית → להבריח
-            fixed=fixed.replace(/([֐-׿])"([֐-׿])/g,"$1\\\"$2");
-            // גרשיים כפולים אחרי רווח ולפני אות עברית (פתיחה) → להבריח
-            fixed=fixed.replace(/\s"([֐-׿])/g," \\\"$1");
-            // גרשיים כפולים אחרי אות עברית ולפני רווח/פיסוק (סגירה) → להבריח
-            fixed=fixed.replace(/([֐-׿])"(?=[\s.,;])/g,"$1\\\"");
-            fixed=fixed.replace(/,(\s*[}\]])/g,"$1");
-            try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+          if(!parsed){
+            const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
+            if(first>=0&&last>first){
+              let fixed=r.text.substring(first,last+1);
+              fixed=fixed.replace(/([֐-׿])"([֐-׿])/g,"$1\\\"$2").replace(/\s"([֐-׿])/g," \\\"$1").replace(/([֐-׿])"(?=[\s.,;])/g,"$1\\\"").replace(/,(\s*[}\]])/g,"$1");
+              try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+            }
           }
+          if(!parsed){
+            console.error(`JSON parse failed for unit ${unit.unitName}:`,parseError,"\nResponse (first 500):",r.text.substring(0,500));
+            throw new Error(`JSON parse — ${parseError?parseError.message:"לא נמצא JSON"}`);
+          }
+          allPerUnit.push({...parsed,uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter,promptVersion:PROMPT_VERSION_P2,generatedAt:new Date().toISOString()});
+        }catch(unitErr){
+          // דילוג על יחידה שנכשלה — שומרים רשומת שגיאה וממשיכים
+          skippedCount++;
+          skippedUnits.push(unit.unitName);
+          console.error(`Unit "${unit.unitName}" skipped due to error:`,unitErr);
+          allPerUnit.push({
+            uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter,
+            conclusionStatus:"error",
+            summary:`⚠ שגיאה בעיבוד היחידה: ${unitErr.message||unitErr}. דילוג אוטומטי — אפשר להריץ שוב דרך "בדיקת קבלה סלקטיבית".`,
+            perClaim:[],
+            error:true,
+            errorMessage:String(unitErr.message||unitErr),
+            promptVersion:PROMPT_VERSION_P2,
+            generatedAt:new Date().toISOString()
+          });
         }
-        if(!parsed){
-          // שומרים את התגובה הגולמית לדיבוג (עד 2000 תווים)
-          const snippet=r.text.substring(0,2000);
-          console.error(`JSON parse failed for unit ${unit.unitName}:`,parseError,"\nResponse:",r.text);
-          throw new Error(`יחידה "${unit.unitName}": לא ניתן לפענח JSON — ${parseError?parseError.message:"שגיאה לא ידועה"}. ראי קונסול למעקב.`);
-        }
-        // יישור המזהה והשם מהנתונים המקוריים (כדי להבטיח התאמה) + גרסת פרומפט
-        allPerUnit.push({...parsed,uid:unit.uid,unitName:unit.unitName,chapter:unit.chapter,promptVersion:PROMPT_VERSION_P2,generatedAt:new Date().toISOString()});
-        // ─ שמירה אחרי כל יחידה ─
+        // ─ שמירה אחרי כל יחידה (גם שגיאות) ─
         const aiProposal={
           perUnit:allPerUnit,
           coverage:{totalUnits:allUnits.length,withConclusion:allUnits.filter(c=>c.hasConclusion).length,withoutConclusion:allUnits.filter(c=>!c.hasConclusion).length},
@@ -2492,10 +2490,10 @@ ${buildUnitBlock(unit)}
           processedUnits:allPerUnit.length,
           totalUnits:allUnits.length,
           completed:allPerUnit.length===allUnits.length,
+          skippedCount,
           perUnitProcessing:true,
           promptVersion:PROMPT_VERSION_P2
         };
-        // אם זו הרצה סלקטיבית — שמור גם את הארכיון של הגרסה הקודמת
         if(window.__pendingArchive){
           const newStage4={...stage4Data,phase2_ai_proposal:aiProposal,phase2_researcher_decisions:p2Decisions,phase2_previous_proposal_v1:window.__pendingArchive,lastUpdated:Date.now()};
           const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
@@ -2509,10 +2507,13 @@ ${buildUnitBlock(unit)}
           savePhase2(aiProposal,p2Decisions);
         }
       }
-      window.__pendingArchive=null; // ניקוי אחרי השלמת כל הרצה
+      window.__pendingArchive=null;
       setP2Progress("");
+      if(skippedCount>0){
+        setP2Error(`הושלם ${allPerUnit.length}/${allUnits.length}. ⚠ ${skippedCount} יחידות דולגו בגלל שגיאות: ${skippedUnits.join(", ")}. השתמשי ב"בדיקת קבלה סלקטיבית" כדי להריץ אותן שוב.`);
+      }
     }catch(e){
-      setP2Error(`${e.message||e}. נשמרה התקדמות עד ליחידה ${allPerUnit.length}/${allUnits.length}. לחצי "המשך" כדי להמשיך.`);
+      setP2Error(`שגיאה כללית (לא דילוג יחידה): ${e.message||e}. נשמרה התקדמות עד ליחידה ${allPerUnit.length}/${allUnits.length}.`);
     }
     setP2Loading(false);
   }
@@ -3573,7 +3574,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
                                 {/* ספירת סיווגים */}
                                 {(()=>{
-                                  const counts={supported:0,qualified:0,exceeded:0,insufficient:0,no_conclusion:0,insufficient_evidence:0};
+                                  const counts={supported:0,qualified:0,exceeded:0,insufficient:0,no_conclusion:0,insufficient_evidence:0,error:0};
                                   p2Proposal.perUnit.forEach(u=>{ if(counts[u.conclusionStatus]!==undefined) counts[u.conclusionStatus]++; });
                                   const dec={approved:0,edited:0,review:0,pending:0};
                                   p2Proposal.perUnit.forEach(u=>{ const d=p2Decisions[u.uid]; if(!d||!d.status) dec.pending++; else if(d.status==="approved") dec.approved++; else if(d.status==="edited") dec.edited++; else if(d.status==="review") dec.review++; });
@@ -3583,7 +3584,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                       <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"6px"}}>
                                         <div style={{fontSize:"10px",color:"#64748b",fontWeight:"700",marginBottom:"4px"}}>סיווגי AI (יחידות)</div>
                                         <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5"}}>
-                                          <span style={{color:"#34d399"}}>נתמכת: {counts.supported}</span> · <span style={{color:"#fbbf24"}}>מסויגת: {counts.qualified}</span> · <span style={{color:"#f87171"}}>חורגת: {counts.exceeded}</span> · <span style={{color:"#60a5fa"}}>אין מספיק מידע: {insufficientTotal}</span> · <span style={{color:"#94a3b8"}}>אין מסקנה: {counts.no_conclusion}</span>
+                                          <span style={{color:"#34d399"}}>נתמכת: {counts.supported}</span> · <span style={{color:"#fbbf24"}}>מסויגת: {counts.qualified}</span> · <span style={{color:"#f87171"}}>חורגת: {counts.exceeded}</span> · <span style={{color:"#60a5fa"}}>אין מספיק מידע: {insufficientTotal}</span> · <span style={{color:"#94a3b8"}}>אין מסקנה: {counts.no_conclusion}</span>{counts.error>0&&<> · <span style={{color:"#ef4444",fontWeight:"700"}}>⚠ שגיאה: {counts.error}</span></>}
                                         </div>
                                       </div>
                                       <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"6px"}}>
@@ -3650,8 +3651,8 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 <div style={{maxHeight:"700px",overflowY:"auto",display:"flex",flexDirection:"column",gap:"8px"}}>
                                   {p2Proposal.perUnit.map((u,ui)=>{
                                     const dec=p2Decisions[u.uid]||{};
-                                    const statusColor={supported:"#34d399",qualified:"#fbbf24",exceeded:"#f87171",no_conclusion:"#94a3b8",insufficient_evidence:"#60a5fa"}[u.conclusionStatus]||"#64748b";
-                                    const statusLabel={supported:"נתמכת",qualified:"מסויגת",exceeded:"חורגת",no_conclusion:"אין מסקנה",insufficient_evidence:"לא ניתן להכריע"}[u.conclusionStatus]||u.conclusionStatus;
+                                    const statusColor={supported:"#34d399",qualified:"#fbbf24",exceeded:"#f87171",no_conclusion:"#94a3b8",insufficient:"#60a5fa",insufficient_evidence:"#60a5fa",error:"#ef4444"}[u.conclusionStatus]||"#64748b";
+                                    const statusLabel={supported:"נתמכת",qualified:"מסויגת",exceeded:"חורגת",no_conclusion:"אין מסקנה",insufficient:"אין מספיק מידע",insufficient_evidence:"אין מספיק מידע",error:"⚠ שגיאה — דלג"}[u.conclusionStatus]||u.conclusionStatus;
                                     const decColor=dec.status==="approved"?"#86efac":dec.status==="edited"?"#fcd34d":dec.status==="review"?"#f59e0b":"#64748b";
                                     return (
                                       <div key={ui} style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${statusColor}`}}>
