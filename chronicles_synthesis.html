@@ -2237,18 +2237,60 @@ function AnalysisScreen({raw,character,dimId,concept,apiKey,onBackToSelector,sta
     setClarEditing(false);
   }
 
-  const CLARIFICATION_PROMPT_VERSION="v5-no-complexity-requirement-2026-10-22";
+  const CLARIFICATION_PROMPT_VERSION="v7-no-new-prophetic-claims-2026-10-22";
   async function generateClarification(){
     if(!conceptDef||!conceptDef.text){ alert("יש להזין ולשמור הגדרה קודם."); return; }
     setClarError(""); setClarLoading(true);
+
+    // טעינת חומר מחקרי משלבים 2+3 של שתי הדמויות (אם זמין)
+    const allRes=stageResults||{};
+    const buildCharMaterial=(ch)=>{
+      const key=`${ch}__${dimId}__${concept}`;
+      const sd=allRes[key];
+      if(!sd) return null;
+      const s2=sd.stage2, s3=sd.stage3;
+      if(!s2||!Array.isArray(s2.indicatorDetails)||!s3||!Array.isArray(s3.detailedConclusions)) return null;
+      // תמצות: רשימת סוגי אינדיקטורים (paramLabel ייחודיים) + דגימת מסקנות
+      const allParams=new Set();
+      let totalInds=0;
+      s2.indicatorDetails.forEach(ud=>ud.indicators.forEach(ind=>{allParams.add(ind.paramLabel||"כללי"); totalInds++;}));
+      const conclSummary=s3.detailedConclusions.filter(c=>c.hasConclusion).map(c=>`- ${c.unitName} (${c.chapter}): ${(c.conclusion||"").substring(0,300)}${(c.conclusion||"").length>300?"...":""}`).join("\n");
+      const totalConcls=s3.detailedConclusions.filter(c=>c.hasConclusion).length;
+      return {
+        char:ch==="solomon"?"שלמה":"דוד",
+        totalUnits:s3.detailedConclusions.length,
+        totalIndicators:totalInds,
+        totalConclusions:totalConcls,
+        paramLabels:[...allParams],
+        conclSummary
+      };
+    };
+    const davidMat=buildCharMaterial("david");
+    const solomonMat=buildCharMaterial("solomon");
+    const materials=[davidMat,solomonMat].filter(Boolean);
+    const hasMaterial=materials.length>0;
+    const materialSection=hasMaterial?materials.map(m=>`
+#### חומר מחקרי של ${m.char} (${m.totalUnits} יחידות)
+- קטגוריות פרמטרים ששימשו בשלב 2: ${m.paramLabels.join(", ")||"—"}
+- סך אינדיקטורים חיוביים שסומנו: ${m.totalIndicators}
+- מסקנות מחקריות שנכתבו (${m.totalConclusions} מתוך ${m.totalUnits}):
+${m.conclSummary||"(אין מסקנות שנכתבו)"}
+`).join("\n"):"";
+
     const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דמויות דוד ושלמה בדברי הימים לאור החזון הנבואי.
 
 גרסת פרומפט: ${CLARIFICATION_PROMPT_VERSION}
 
-להלן הגדרת המושג "${concept}" מפרק ב׳ של התזה. יש לנסח הבהרת יישום לפי הכללים הבאים:
+להלן הגדרת המושג "${concept}" מפרק ב׳ של התזה, בצירוף חומר מחקרי שהחוקרת כבר אספה בשלבים 2 ו-3. יש לנסח הבהרת יישום לפי הכללים הבאים:
 
 ### ההגדרה:
 ${conceptDef.text}
+
+${hasMaterial?`### חומר מחקרי קיים (רקע בלבד — אין להגדיר מחדש):
+${materialSection}
+
+**חשוב מתודולוגית**: החומר לעיל מוצג כדי שתבין איזה סוגי ראיות עולים בפועל במחקר של החוקרת (אילו פרמטרים היא בחרה, אילו מסקנות היא כתבה). **ההגדרה המקורית נשארת העוגן המחייב** — אסור לך לשנותה או להרחיב/לצמצם את המושג על בסיס החומר. החומר רק מסייע להבין איזה דרכי זיהוי אפשריות בדה"י, כדי שההבהרה תהיה פרקטית ולא תיאורטית בלבד.
+`:"### חומר מחקרי קיים:\n(לא זמין — ההבהרה תיוצר על בסיס ההגדרה בלבד)\n"}
 
 ### הנחיה כללית להבהרת יישום הגדרת המושג
 קרא את הגדרת המושג מתוך פרק ב׳ ונסח הבהרה קצרה כיצד ליישמה בבחינת דמות המלך בדברי הימים.
@@ -2285,6 +2327,9 @@ ${conceptDef.text}
 **מעמד הפרשנות המתועדת:** פרשנות המתועדת בחומר המחקר יכולה לתמוך בזיהוי, אך אינה מעניקה לו אישור אוטומטי. אל תמנה פרשנים ספציפיים (רש"י, רד"ק וכו') — אין לדעת מראש אילו פרשנים נכללו. אם הפרשנות היא הראיה היחידה, יש לציין זאת כסייג מפורש.
 
 **דרכי זיהוי = אפשרויות, לא תנאים:** דרכי הזיהוי שאת מציינת הן דוגמאות לאופנים אפשריים לזיהוי המושג, לא רשימת תנאים שחייבים להתקיים בכל יחידה. אל תהפוך אותן לרשימת check-list מחייבת.
+
+**איסור מפורש — אין לייצר דרכי זיהוי המבוססות על הקבלות לנביאים:**
+גם אם ההגדרה מתייחסת למקורות נבואיים (ישעיהו, ירמיהו, יחזקאל, שמואל ואחרים), **אל תמנה בהבהרה "זיהוי לפי הקבלה לישעיהו/ירמיהו וכו׳" כדרך זיהוי**. הטמנת הקבלות נבואיות חדשות היא לא תפקידה של ההבהרה ולא תפקידה של בדיקת ההתאמה. האזכורים הנבואיים בהגדרה מסבירים את יסוד המושג — אין מהם דרך זיהוי מתודית. דרכי הזיהוי צריכות להתבסס על: הטקסט בדה"י, הפרמטרים והאינדיקטורים שהוגדרו בכלי האנליטי, הפרשנות המתועדת, וההשוואה למקבילה בשמואל/מלכים.
 
 ### התוצר
 הצג בקצרה:
@@ -2385,7 +2430,7 @@ ${conceptDef.text}
     fbSaveStageResults(updated);
   }
 
-  const PROMPT_VERSION_P2="v5-2026-10-22-engage-conclusion";
+  const PROMPT_VERSION_P2="v6-2026-10-22-no-prophetic-claims";
   async function runPhase2(resetFromScratch=false,restrictToUids=null){
     if(!conceptDef||!conceptDef.text){ setP2Error("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
     if(!conceptDef.clarification||!conceptDef.clarification.text){ setP2Error("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
@@ -2496,6 +2541,29 @@ ${conceptDef.clarification.text}
 
 **טז. נאמנות להגדרה ולראיות — לא נטייה מראש:**
 אין נטייה מראש להחמרה או להקלה. אמת המידה היא **נאמנות להגדרה מפרק ב׳** ולמלוא הראיות המסופקות. יש להבחין בין **הדרישה המושגית** (רכיבי ההגדרה) ובין **דרך הוכחתה בטקסט**: אין לוותר על רכיבי ההגדרה, אך אין לדרוש תיאור מפורש של תהליך מחשבתי או ציווי אלוהי. אפשר לבסס יכולת וזיקה באמצעות פעולה, הקשר, עיצוב ספרותי — כאשר הקשר מוסבר ומעוגן בראיות.
+
+**יז. איסור ייצור טענות חדשות על הנביאים — חשוב מאוד:**
+שלב 4 **אינו המקום** לייצר טענות חדשות על:
+- הקבלה לנביאים (ישעיהו, ירמיהו, יחזקאל, שמואל, אחרים)
+- התאמה לדגם הנבואי של המלך האידיאלי
+- השפעה נבואית על הכרוניסט או על עיצוב הדמות
+
+האזכורים הנבואיים שבהגדרת המושג מפרק ב׳ **מסבירים את יסודו המחקרי** של המושג. הם **אינם מחייבים דיון השוואתי נוסף בכל יחידה**. אל תוסיף טענות כגון "ההקבלה לישעיהו י"א מראה ש-..." או "הדמות הולמת את המלך האידיאלי של ירמיהו ש-..." — **אלה טענות חדשות שאתה ממציא**, לא הערכה של טענות קיימות.
+
+**יח. ההשוואה למקבילה (שמואל/מלכים) — זה כן תפקידך:**
+תרומת ההשוואה בשלב 4 תעסוק אך ורק ב:
+- **מה נשמר** מהמקבילה
+- **מה השתנה** בדה"י ביחס אליה
+- **מה נוסף** בדה"י שאינו במקבילה
+- **ומשמעות הדבר לעיצוב דמות המלך**
+
+אסור להרחיב מכאן ל"השפעה נבואית" או "דגם מלכותי" כלשהו — אלא אם המסקנה המקורית של החוקרת עשתה זאת במפורש.
+
+**יט. טענות על נביאים במסקנה המקורית — שמר במקור, הפרד מההכרעה:**
+אם המסקנה המחקרית של החוקרת כוללת טענה על הנביאים (למשל: "ההקבלה לישעיהו ברורה"), **שמר את הטענה במקור בציטוטי הכרעה**, אך **הפרד אותה מההכרעה המושגית על ביטוי המושג ביחידה**. סווג את הטענה הנבואית בנפרד (findingStatus/conceptualStatus משלה), אל תערבב אותה בסיווג הכולל של היחידה.
+
+**כ. שלב 4 משרת את כתיבת פרקי דוד ושלמה:**
+מטרת הפלט היא **לשרת ישירות את כתיבת פרקי התזה** על דוד ושלמה. אין לחזור בכל יחידה על ביסוס המסגרת שכבר הוצגה בפרק ב'. המסגרת הנבואית **כבר הוכחה שם**. כאן אנחנו רק בוחנים: *האם היחידה הזאת מבטאת את המושג הזה — לפי ההגדרה — על בסיס החומר שלפניך?*
 
 ### סיווגים — קריטריונים מדויקים (לא היררכיה; כל אחד עצמאי)
 
@@ -3548,13 +3616,54 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                       <div style={{marginBottom:"14px"}}>
                         {/* הסבר המהלך */}
                         <div style={{padding:"10px 14px",background:`${dimColor}11`,borderRadius:"7px",border:`1px dashed ${dimColor}44`,fontSize:"11px",color:"#cbd5e1",marginBottom:"12px",lineHeight:"1.6"}}>
-                          <strong style={{color:dimColor}}>שלב 4 החדש:</strong> מהלך מחקרי בן 6 צעדים לסינתזה של מושג אחד בדמות אחת (לפי המפרט שאישרת ב-19.10). הפאנל כאן מכסה כרגע את <strong>פאזה 1</strong>: הגדרת המושג, הבהרת יישום, ובדיקת זמינות שלבים 2+3. פאזות 2 ו-3 יבנו לאחר אישורך את התוצר של פאזה 1.
+                          <strong style={{color:dimColor}}>שלב 4:</strong> הסדר המתודולוגי — תחילה בודקים זמינות חומר משלבים 2+3; לאחר מכן מכניסים הגדרה מפרק ב׳; ואז יוצרים הבהרת יישום (ה-AI קורא גם את ההגדרה וגם את החומר).
                         </div>
 
-                        {/* צעד א': הגדרת המושג (משותפת לדוד ולשלמה) */}
+                        {/* צעד 1: בדיקת זמינות שלבים 2+3 (לדוד ולשלמה) */}
+                        {(()=>{
+                          const allRes=stageResults||{};
+                          const checkChar=(ch)=>{
+                            const key=`${ch}__${dimId}__${concept}`;
+                            const sd=allRes[key]||{};
+                            return {
+                              hasS2:!!(sd.stage2&&Array.isArray(sd.stage2.tableRows)&&sd.stage2.tableRows.length),
+                              s2Approved:(sd.approvedStages||[]).includes(2),
+                              hasS2New:!!(sd.stage2&&Array.isArray(sd.stage2.indicatorDetails)&&sd.stage2.indicatorDetails.length),
+                              hasS3:!!(sd.stage3&&Array.isArray(sd.stage3.tableRows)&&sd.stage3.tableRows.length),
+                              s3Approved:(sd.approvedStages||[]).includes(3),
+                              hasS3New:sd.stage3&&sd.stage3.source==="compareNotes",
+                              conclusions:(sd.stage3&&sd.stage3.coverage&&sd.stage3.coverage.conclusionsCollected)||0
+                            };
+                          };
+                          const dv=checkChar("david"), sl=checkChar("solomon");
+                          const bothReady=(dv.hasS2New&&dv.hasS3New)||(sl.hasS2New&&sl.hasS3New);
+                          return (
+                            <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
+                              <div style={{fontSize:"13px",fontWeight:"700",color:dimColor,marginBottom:"10px"}}>📊 1. בדיקת זמינות שלבים 2 + 3 — תנאי לכניסת ההגדרה והבהרת היישום</div>
+                              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px",marginBottom:"10px"}}>
+                                {[["דוד",dv,"david"],["שלמה",sl,"solomon"]].map(([lbl,st,ch])=>(
+                                  <div key={ch} style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${(st.hasS2New&&st.hasS3New)?"#34d399":st.hasS2||st.hasS3?"#fbbf24":"#64748b"}`}}>
+                                    <div style={{fontSize:"11px",fontWeight:"700",color:character===ch?"#f1f5f9":"#94a3b8",marginBottom:"6px"}}>{lbl}{character===ch?" (הדמות הנוכחית)":""}</div>
+                                    <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6"}}>
+                                      <div>שלב 2: {st.hasS2?(st.hasS2New?"✅ חדש":"⚠ ישן"):"❌"} {st.s2Approved?"· מאושר":""}</div>
+                                      <div>שלב 3: {st.hasS3?(st.hasS3New?`✅ מהכלי האנליטי · ${st.conclusions} מסקנות`:"⚠ ישן (AI)"):"❌"} {st.s3Approved?"· מאושר":""}</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                              {bothReady?(
+                                <div style={{padding:"8px 10px",background:"#064e3b33",borderRadius:"5px",fontSize:"11px",color:"#86efac"}}>✅ יש חומר מחקרי זמין. אפשר להמשיך להגדרה ולהבהרה — ה-AI יקרא את החומר של {dv.hasS2New&&dv.hasS3New?"דוד":""}{dv.hasS2New&&dv.hasS3New&&sl.hasS2New&&sl.hasS3New?" ו-":""}{sl.hasS2New&&sl.hasS3New?"שלמה":""}.</div>
+                              ):(
+                                <div style={{padding:"8px 10px",background:"#78350f22",borderRadius:"5px",fontSize:"11px",color:"#fcd34d"}}>⚠ אין חומר מחקרי בפורמט החדש אצל אף אחת מהדמויות. השלימי שלבים 2+3 של "{concept}" לפחות אצל דמות אחת לפני יצירת ההבהרה.</div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* צעד 2: הגדרת המושג (משותפת לדוד ולשלמה) */}
                         <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
-                            <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>📘 הגדרת המושג "{concept}" מפרק ב׳ של התזה</div>
+                            <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>📘 2. הגדרת המושג "{concept}" מפרק ב׳ של התזה</div>
                             <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>משותפת לדוד ולשלמה · נשמרת כנוסח מקורי, ללא שינוי</div>
                           </div>
                           {defEditing?(
@@ -3582,8 +3691,8 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                         {conceptDef&&conceptDef.text&&(
                           <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
-                              <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>💡 הבהרת יישום (AI)</div>
-                              <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>מתבצע ב-AI על ההגדרה בלבד · לא משנה את ההגדרה · לא מוסיף תנאים</div>
+                              <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>💡 3. הבהרת יישום (AI)</div>
+                              <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>ה-AI קורא את ההגדרה + חומר משלבים 2+3 (דוד ושלמה) · לא משנה את ההגדרה · לא מוסיף תנאים</div>
                             </div>
                             {conceptDef.clarification&&conceptDef.clarification.text?(
                               <>
@@ -3643,36 +3752,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                           </div>
                         )}
 
-                        {/* צעד ג': בדיקת זמינות שלבים 2+3 */}
-                        <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
-                          <div style={{fontSize:"13px",fontWeight:"700",color:dimColor,marginBottom:"10px"}}>📊 בדיקת זמינות נתוני שלבים 2 + 3 (לדמות: {character==="solomon"?"שלמה":"דוד"})</div>
-                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px"}}>
-                            {/* שלב 2 */}
-                            <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${stage4Availability.stage2HasData?"#34d399":"#64748b"}`}}>
-                              <div style={{fontSize:"11px",fontWeight:"700",color:"#f1f5f9",marginBottom:"6px"}}>שלב 2 — אינדיקטורים</div>
-                              <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6"}}>
-                                <div>{stage4Availability.stage2HasData?"✅ יש נתונים":"❌ אין נתונים — יש להריץ"}</div>
-                                <div>{stage4Availability.stage2Approved?"✅ מאושר":"⚠ טרם אושר"}</div>
-                                <div>{stage4Availability.stage2IsNewFormat?"✅ כולל פירוט אינדיקטורים":"⚠ בפורמט ישן — בטלי אישור והריצי שוב לקבלת פירוט"}</div>
-                              </div>
-                            </div>
-                            {/* שלב 3 */}
-                            <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${stage4Availability.stage3HasData?"#34d399":"#64748b"}`}}>
-                              <div style={{fontSize:"11px",fontWeight:"700",color:"#f1f5f9",marginBottom:"6px"}}>שלב 3 — מסקנות מחקריות</div>
-                              <div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6"}}>
-                                <div>{stage4Availability.stage3HasData?"✅ יש נתונים":"❌ אין נתונים — יש להריץ"}</div>
-                                <div>{stage4Availability.stage3Approved?"✅ מאושר":"⚠ טרם אושר"}</div>
-                                <div>{stage4Availability.stage3IsNewFormat?`✅ מהכלי האנליטי · ${stage4Availability.stage3ConclusionsCount} מסקנות${stage4Availability.stage3MissingCount>0?` · ${stage4Availability.stage3MissingCount} ללא מסקנה`:""}`:"⚠ פורמט ישן (AI) — בטלי אישור והריצי שוב"}</div>
-                              </div>
-                            </div>
-                          </div>
-                          {(!stage4Availability.stage2HasData||!stage4Availability.stage3HasData||!stage4Availability.stage3IsNewFormat)&&(
-                            <div style={{marginTop:"10px",padding:"8px 10px",background:"#78350f22",borderRadius:"5px",fontSize:"11px",color:"#fcd34d"}}>⚠ לפני המעבר לפאזה 2: יש להשלים ואשר את שלבים 2 ו-3 בפורמט החדש.</div>
-                          )}
-                          {stage4Availability.stage2HasData&&stage4Availability.stage3HasData&&stage4Availability.stage3IsNewFormat&&conceptDef&&conceptDef.text&&conceptDef.clarification&&(
-                            <div style={{marginTop:"10px",padding:"8px 10px",background:"#064e3b33",borderRadius:"5px",fontSize:"11px",color:"#86efac"}}>✅ פאזה 1 הושלמה. נתוני המחקר זמינים, הגדרה והבהרה שמורות.</div>
-                          )}
-                        </div>
+                        {/* בדיקת זמינות הועברה למעלה (לפני ההגדרה) — נדרש ע״י החוקרת, 22.10.2026 */}
 
                         {/* ═══ פאזה 2 — בדיקת התאמה ═══ */}
                         {conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&(
@@ -3780,42 +3860,64 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   {p2Error&&<div style={{padding:"4px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"10px",color:"#fca5a5"}}>❌ {p2Error}</div>}
                                 </div>
 
-                                {/* ─ רשימת יחידות עם checkbox (למעלה, לא מודל) ─ */}
-                                <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",marginBottom:"10px",border:"1px solid #334155"}}>
-                                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#f1f5f9"}}>📋 רשימת היחידות — בחרי להרצה חוזרת (הגרסה הקיימת תועבר לארכיון)</div>
-                                    <div style={{display:"flex",gap:"6px",fontSize:"10px"}}>
-                                      <button onClick={()=>setAcceptTestSelected(p2Proposal.perUnit.map(u=>u.uid))} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1"}}>בחר הכל</button>
-                                      <button onClick={()=>setAcceptTestSelected(p2Proposal.perUnit.filter(u=>u.promptVersion!==PROMPT_VERSION_P2).map(u=>u.uid))} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1"}}>בחר גרסאות ישנות</button>
-                                      <button onClick={()=>setAcceptTestSelected(p2Proposal.perUnit.filter(u=>u.conclusionStatus==="error").map(u=>u.uid))} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#fca5a5"}}>בחר שגיאות</button>
-                                      <button onClick={()=>setAcceptTestSelected([])} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1"}}>נקה</button>
+                                {/* ─ רשימת יחידות עם checkbox (כל יחידות שלב 3, כולל כאלה שעדיין לא נותחו) ─ */}
+                                {(()=>{
+                                  const allConcs=(stageData.stage3&&stageData.stage3.detailedConclusions)||[];
+                                  const processedMap={};
+                                  p2Proposal.perUnit.forEach(u=>{ processedMap[u.uid]=u; });
+                                  const unprocessedUids=allConcs.filter(c=>!processedMap[c.uid]).map(c=>c.uid);
+                                  const oldVersionUids=p2Proposal.perUnit.filter(u=>u.promptVersion!==PROMPT_VERSION_P2).map(u=>u.uid);
+                                  const errorUids=p2Proposal.perUnit.filter(u=>u.conclusionStatus==="error").map(u=>u.uid);
+                                  return (
+                                    <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",marginBottom:"10px",border:"1px solid #334155"}}>
+                                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                                        <div style={{fontSize:"12px",fontWeight:"700",color:"#f1f5f9"}}>📋 רשימת היחידות — בחרי יחידות להרצה (חדשות או חוזרות) · {p2Proposal.perUnit.length}/{allConcs.length} עובדו</div>
+                                        <div style={{display:"flex",gap:"6px",fontSize:"10px",flexWrap:"wrap"}}>
+                                          <button onClick={()=>setAcceptTestSelected(allConcs.map(c=>c.uid))} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1"}}>בחר הכל</button>
+                                          {unprocessedUids.length>0&&<button onClick={()=>setAcceptTestSelected(unprocessedUids)} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#93c5fd"}}>בחר לא עובדו ({unprocessedUids.length})</button>}
+                                          {oldVersionUids.length>0&&<button onClick={()=>setAcceptTestSelected(oldVersionUids)} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1"}}>גרסאות ישנות ({oldVersionUids.length})</button>}
+                                          {errorUids.length>0&&<button onClick={()=>setAcceptTestSelected(errorUids)} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#fca5a5"}}>שגיאות ({errorUids.length})</button>}
+                                          <button onClick={()=>setAcceptTestSelected([])} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1"}}>נקה</button>
+                                        </div>
+                                      </div>
+                                      <div style={{maxHeight:"280px",overflowY:"auto",padding:"4px"}}>
+                                        {allConcs.map((c,ci)=>{
+                                          const u=processedMap[c.uid];
+                                          const checked=acceptTestSelected.includes(c.uid);
+                                          const isProcessed=!!u;
+                                          const stColor=isProcessed?({supported:"#34d399",qualified:"#fbbf24",exceeded:"#f87171",no_conclusion:"#94a3b8",insufficient:"#60a5fa",insufficient_evidence:"#60a5fa",error:"#ef4444"}[u.conclusionStatus]||"#64748b"):"#475569";
+                                          const stLabel=isProcessed?({supported:"נתמכת",qualified:"מסויגת",exceeded:"חורגת",no_conclusion:"אין מסקנה",insufficient:"אין די מידע",insufficient_evidence:"אין די מידע",error:"⚠ שגיאה"}[u.conclusionStatus]||u.conclusionStatus):"○ לא עובדה";
+                                          return (
+                                            <label key={ci} style={{display:"flex",alignItems:"center",gap:"6px",padding:"4px 6px",cursor:"pointer",borderRadius:"3px",background:checked?"#1e293b":"transparent"}}>
+                                              <input type="checkbox" checked={checked} onChange={e=>setAcceptTestSelected(prev=>e.target.checked?[...prev,c.uid]:prev.filter(x=>x!==c.uid))}/>
+                                              <span style={{fontSize:"10px",color:isProcessed?"#cbd5e1":"#94a3b8",flex:1,fontStyle:isProcessed?"normal":"italic"}}>{c.unitName} <span style={{color:"#64748b"}}>({c.chapter})</span></span>
+                                              <span style={{fontSize:"9px",color:stColor,background:`${stColor}22`,padding:"1px 6px",borderRadius:"3px",fontWeight:"700"}}>{stLabel}</span>
+                                              {isProcessed&&u.promptVersion&&<span style={{fontSize:"9px",color:u.promptVersion===PROMPT_VERSION_P2?"#86efac":"#fcd34d"}}>{u.promptVersion}</span>}
+                                              {!c.hasConclusion&&<span style={{fontSize:"9px",color:"#f59e0b"}}>אין מסקנה</span>}
+                                              <button onClick={e=>{e.stopPropagation(); e.preventDefault(); buildPreviewForUnit(c.uid);}} style={{fontSize:"9px",padding:"1px 6px",borderRadius:"3px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#60a5fa"}}>👁 קלט</button>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                      <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center",marginTop:"10px",paddingTop:"8px",borderTop:"1px solid #334155"}}>
+                                        <span style={{fontSize:"10px",color:"#94a3b8"}}>נבחרו: <strong>{acceptTestSelected.length}</strong> מתוך {allConcs.length}</span>
+                                        <button onClick={()=>{
+                                          if(acceptTestSelected.length===0){ alert("לא נבחרו יחידות."); return; }
+                                          const selReprocess=acceptTestSelected.filter(uid=>processedMap[uid]).length;
+                                          const selNew=acceptTestSelected.length-selReprocess;
+                                          const msg=selReprocess>0&&selNew>0
+                                            ?`להריץ ${acceptTestSelected.length} יחידות (${selNew} חדשות + ${selReprocess} חוזרות)? הגרסה הקיימת של החוזרות תועבר לארכיון.`
+                                            :selReprocess>0
+                                              ?`להריץ מחדש ${selReprocess} יחידות? הגרסה הקיימת תועבר לארכיון.`
+                                              :`להריץ ${selNew} יחידות חדשות?`;
+                                          if(confirm(msg)){
+                                            runPhase2(false,acceptTestSelected);
+                                          }
+                                        }} disabled={acceptTestSelected.length===0||p2Loading} style={{padding:"6px 14px",borderRadius:"5px",border:"none",cursor:(acceptTestSelected.length===0||p2Loading)?"not-allowed":"pointer",background:(acceptTestSelected.length===0||p2Loading)?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>▶ הרץ {acceptTestSelected.length} נבחרות</button>
+                                      </div>
                                     </div>
-                                  </div>
-                                  <div style={{maxHeight:"240px",overflowY:"auto",padding:"4px"}}>
-                                    {p2Proposal.perUnit.map((u,ui)=>{
-                                      const checked=acceptTestSelected.includes(u.uid);
-                                      const stColor={supported:"#34d399",qualified:"#fbbf24",exceeded:"#f87171",no_conclusion:"#94a3b8",insufficient:"#60a5fa",insufficient_evidence:"#60a5fa",error:"#ef4444"}[u.conclusionStatus]||"#64748b";
-                                      const stLabel={supported:"נתמכת",qualified:"מסויגת",exceeded:"חורגת",no_conclusion:"אין מסקנה",insufficient:"אין די מידע",insufficient_evidence:"אין די מידע",error:"⚠ שגיאה"}[u.conclusionStatus]||u.conclusionStatus;
-                                      return (
-                                        <label key={ui} style={{display:"flex",alignItems:"center",gap:"6px",padding:"4px 6px",cursor:"pointer",borderRadius:"3px",background:checked?"#1e293b":"transparent"}}>
-                                          <input type="checkbox" checked={checked} onChange={e=>setAcceptTestSelected(prev=>e.target.checked?[...prev,u.uid]:prev.filter(x=>x!==u.uid))}/>
-                                          <span style={{fontSize:"10px",color:"#cbd5e1",flex:1}}>{u.unitName} <span style={{color:"#64748b"}}>({u.chapter})</span></span>
-                                          <span style={{fontSize:"9px",color:stColor,background:`${stColor}22`,padding:"1px 6px",borderRadius:"3px",fontWeight:"700"}}>{stLabel}</span>
-                                          {u.promptVersion&&<span style={{fontSize:"9px",color:u.promptVersion===PROMPT_VERSION_P2?"#86efac":"#fcd34d"}}>{u.promptVersion}</span>}
-                                        </label>
-                                      );
-                                    })}
-                                  </div>
-                                  <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center",marginTop:"10px",paddingTop:"8px",borderTop:"1px solid #334155"}}>
-                                    <span style={{fontSize:"10px",color:"#94a3b8"}}>נבחרו: <strong>{acceptTestSelected.length}</strong> מתוך {p2Proposal.perUnit.length}</span>
-                                    <button onClick={()=>{
-                                      if(acceptTestSelected.length===0){ alert("לא נבחרו יחידות."); return; }
-                                      if(confirm(`להריץ ${acceptTestSelected.length} יחידות עם פרומפט ${PROMPT_VERSION_P2}? הגרסה הקיימת שלהן תועבר לארכיון.`)){
-                                        runPhase2(false,acceptTestSelected);
-                                      }
-                                    }} disabled={acceptTestSelected.length===0||p2Loading} style={{padding:"6px 14px",borderRadius:"5px",border:"none",cursor:(acceptTestSelected.length===0||p2Loading)?"not-allowed":"pointer",background:(acceptTestSelected.length===0||p2Loading)?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>▶ הרץ {acceptTestSelected.length} נבחרות</button>
-                                  </div>
-                                </div>
+                                  );
+                                })()}
 
                                 {/* הודעה אם יש ארכיון של גרסאות קודמות */}
                                 {stage4Data.phase2_previous_proposal_v1&&Array.isArray(stage4Data.phase2_previous_proposal_v1.perUnit)&&stage4Data.phase2_previous_proposal_v1.perUnit.length>0&&(
