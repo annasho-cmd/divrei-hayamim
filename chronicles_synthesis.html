@@ -2693,7 +2693,7 @@ ${buildUnitBlock(unit)}
   }
 
   // ─ שלב 4 פאזה 3: סינתזה ─
-  const PROMPT_VERSION_P3="v2-2026-10-23-two-fields";
+  const PROMPT_VERSION_P3="v3-2026-10-23-no-implicit-note-duplicate";
   const p3Synthesis=stage4Data.phase3_synthesis||null;
 
   function savePhase3(synthesis){
@@ -2742,41 +2742,35 @@ ${buildUnitBlock(unit)}
       return lines.join("\n");
     };
 
-    // יחידות: מועבר אך ורק החומר שאיננו חוזר על עצמו
+    // יחידות: מועבר אך ורק החומר הייחודי שלא חוזר על עצמו ב-compareNotes
+    // implicit_note הוסר (23.10.2026) — הוא חזרה נרטיבית של פרמטרי שלב 2;
+    // המסקנה המחקרית שלך כבר כוללת פירוש של השדה הנרמז.
     const unitBlocks=s3.detailedConclusions.map((cu,i)=>{
       const ac=(raw.analysis_chronicles&&raw.analysis_chronicles[cu.uid]&&raw.analysis_chronicles[cu.uid][concept])||{};
       const asrc=(raw.analysis_source&&raw.analysis_source[cu.uid]&&raw.analysis_source[cu.uid][concept])||{};
       const cn=cu.hasConclusion?cu.conclusion:"";
       const cf=(raw.compareFactual&&raw.compareFactual[cu.uid]&&raw.compareFactual[cu.uid][concept])||"";
       const expChr=ac.explicit_note||"";
-      const impChr=ac.implicit_note||"";
       const expSrc=asrc.explicit_note||"";
-      const impSrc=asrc.implicit_note||"";
       const scholarChr=compactScholarRec(ac.scholarRecommendations);
       const scholarSrc=compactScholarRec(asrc.scholarRecommendations);
-      const hasAny=cn||expChr||impChr||expSrc||impSrc||cf;
+      const hasAny=cn||expChr||expSrc||cf;
       if(!hasAny) return `━━━ יחידה [${i+1}/${s3.detailedConclusions.length}]: ${cu.unitName} (${cu.chapter}) — אין חומר\n`;
       return `━━━ יחידה [${i+1}/${s3.detailedConclusions.length}]: ${cu.unitName} (${cu.chapter}) ${cu.hasParallel?"[מקבילה: "+cu.sourceRef+"]":"[סונדרגוט — אין מקבילה]"}
 
-[שדה גלוי · דה"י]
+[שדה גלוי · דה"י — ממצא לשוני ישיר]
 ${expChr||"(לא תועד)"}
 
-${isEternal?"":`[שדה נרמז · דה"י]
-${impChr||"(לא תועד)"}
-`}
-${cu.hasParallel?`[שדה גלוי · מקבילה]
+${cu.hasParallel?`[שדה גלוי · מקבילה — ממצא לשוני ישיר]
 ${expSrc||"(לא תועד)"}
-
-${isEternal?"":`[שדה נרמז · מקבילה]
-${impSrc||"(לא תועד)"}
-`}`:""}
+`:""}
 ${scholarChr?`[פרשנות מתועדת · דה"י — אומצה ע״י החוקרת]
 ${scholarChr}
 `:""}${scholarSrc?`[פרשנות מתועדת · מקבילה — אומצה ע״י החוקרת]
 ${scholarSrc}
 `:""}${cf?`[ניתוח עובדתי השוואתי משלב ב']
 ${cf}
-`:""}[המסקנה המחקרית — compareNotes]
+`:""}[המסקנה המחקרית — compareNotes (כוללת פירוש השדה הנרמז)]
 ${cn||"(לא נכתבה מסקנה)"}
 `;
     }).join("\n");
@@ -2802,12 +2796,12 @@ ${conceptDef.clarification.text}
 ${eternalInstruction}
 ### שני השדות — שומרת זהב מתודית
 
-לכל יחידה סופק חומר משני שדות:
-- **שדה גלוי** (explicit) — מילים מהשדה הסמנטי של המושג שאכן מופיעות בטקסט, בציטוט ישיר של פסוק.
-- **שדה נרמז** (implicit) — הסקה דרך פרמטרים, פעולות דמות, אינדיקטורים ועיצוב ספרותי. **לא** לשון מפורשת של המושג.
+החוקרת עובדת לפי שני שדות ראיה:
+- **שדה גלוי** (explicit) — מילים מהשדה הסמנטי של המושג שאכן מופיעות בטקסט, בציטוט ישיר של פסוק. בחומר שסופק: תחת הכותרת "שדה גלוי · דה"י" ו"שדה גלוי · מקבילה".
+- **שדה נרמז** (implicit) — הסקה דרך פעולות דמות, בחירות ספרותיות, פרמטרי המושג ועיצוב הכרוניסט. **לא** לשון מפורשת של המושג. **הפירוש של השדה הנרמז לכל יחידה כבר כלול במסקנה המחקרית (compareNotes) של החוקרת** — אין לו שדה נפרד בחומר שסופק, כי לרוב החוקרת עצמה מבחינה בטקסט המסקנה בין "השדה הגלוי" ל"השדה הנרמז" (ולעתים נוקטת לשון "בשדה הסמוי").
 
-**חובת ההפרדה:** כל טענת משנה חייבת לציין את מקור ראיותיה (fieldBasis: "explicit" / "implicit" / "both"). כאשר "both" — פרט בנפרד את הראיות משני השדות.
-**בתרומת ההשוואה למקבילה:** הבחן בין שינויים בשדה הגלוי (למשל: השמטת/תוספת מילה, שינוי לשון) לבין שינויים בשדה הנרמז (למשל: הוספת פעולה, שינוי נושא הפעולה).
+**חובת ההפרדה:** כל טענת משנה חייבת לציין את מקור ראיותיה (fieldBasis: "explicit" / "implicit" / "both"). ראיות לשדה הגלוי שאב מהסעיפים המיוחדים "שדה גלוי · דה"י"/"שדה גלוי · מקבילה". ראיות לשדה הנרמז שאב מתוך המסקנה המחקרית של החוקרת לאותה יחידה, שם היא פירשה את הפעולות והאינדיקטורים.
+**בתרומת ההשוואה למקבילה:** הבחן בין שינויים בשדה הגלוי (למשל: השמטת/תוספת מילה, שינוי לשון) לבין שינויים בשדה הנרמז (למשל: הוספת פעולה, שינוי נושא הפעולה), כפי שהחוקרת מתארת אותם במסקנותיה.
 
 ### הוראות קבועות — חלות על כל המושגים
 
