@@ -152,6 +152,240 @@ function LS_set(k,v){
 }
 function escapeHtml(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
 
+// ── הורדת קבצים (markdown/טקסט) ────────────────────────────────────────
+function downloadTextFile(filename,content,mimeType){
+  try{
+    const type=mimeType||"text/markdown;charset=utf-8";
+    const blob=new Blob(["﻿"+content],{type}); // BOM לתמיכה בעברית ב-Word
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download=filename; a.style.display="none";
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); },100);
+    return true;
+  }catch(e){ alert("שגיאה בהורדה: "+(e.message||e)); return false; }
+}
+
+// שם קובץ בטוח (ללא תווים אסורים במערכות קבצים)
+function safeFilename(s){
+  return String(s||"").replace(/[\/\\:\*\?"<>\|]/g,"-").replace(/\s+/g," ").trim().substring(0,80);
+}
+
+// פורמט תאריך לשם קובץ: YYYY-MM-DD
+function todayStamp(){
+  const d=new Date(); const p=(n)=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+
+// המר אובייקט סינתזה (פאזה 3) ל-Markdown
+function synthesisToMarkdown(syn,meta){
+  const {character,concept,dimLabel,conceptDef}=meta||{};
+  const who=character==="solomon"?"שלמה":"דוד";
+  const lines=[];
+  lines.push(`# סינתזה: ${concept} · ${who}`);
+  lines.push("");
+  if(dimLabel) lines.push(`**ממד:** ${dimLabel}`);
+  lines.push(`**הופק:** ${syn.generatedAt?syn.generatedAt.slice(0,16).replace("T"," "):todayStamp()}`);
+  if(syn.promptVersion) lines.push(`**גרסת פרומפט:** ${syn.promptVersion}`);
+  if(syn.totalUnits) lines.push(`**יחידות שסוכמו:** ${syn.totalUnits}`);
+  if(syn.batchCount) lines.push(`**קבוצות:** ${syn.batchCount} × ${syn.batchSize||"?"} יחידות`);
+  if(syn.usage) lines.push(`**שימוש:** קלט ${syn.usage.input_tokens||0} tok · פלט ${syn.usage.output_tokens||0} tok · עלות $${(syn.costUsd||0).toFixed(4)}`);
+  lines.push("");
+
+  if(conceptDef&&conceptDef.text){
+    lines.push("## ההגדרה (פרק ב׳)");
+    lines.push("");
+    lines.push(conceptDef.text);
+    lines.push("");
+  }
+  if(conceptDef&&conceptDef.clarification&&conceptDef.clarification.text){
+    lines.push("## הבהרת היישום");
+    lines.push("");
+    lines.push(conceptDef.clarification.text);
+    lines.push("");
+  }
+
+  lines.push("---");
+  lines.push("");
+  lines.push("## 1. מסקנה מרכזית");
+  lines.push("");
+  lines.push(syn.centralConclusion||"(חסר)");
+  lines.push("");
+
+  if(Array.isArray(syn.subClaims)&&syn.subClaims.length){
+    lines.push("## 2. טענות משנה");
+    lines.push("");
+    syn.subClaims.forEach((sc,si)=>{
+      const fbLabel={explicit:"שדה גלוי",implicit:"שדה נרמז",both:"שני השדות"}[sc.fieldBasis]||sc.fieldBasis||"";
+      lines.push(`### ${si+1}. ${sc.claim||"(ללא ניסוח)"}`);
+      lines.push("");
+      if(fbLabel) lines.push(`**בסיס ראיות:** ${fbLabel}`);
+      lines.push("");
+      if(sc.explicitEvidence){ lines.push(`**ראיות מהשדה הגלוי:** ${sc.explicitEvidence}`); lines.push(""); }
+      if(sc.implicitEvidence){ lines.push(`**ראיות מהשדה הנרמז:** ${sc.implicitEvidence}`); lines.push(""); }
+      if(Array.isArray(sc.supportingUnits)&&sc.supportingUnits.length){
+        lines.push("**יחידות תומכות:**");
+        sc.supportingUnits.forEach(su=>{
+          const q=su.quote?` — \"${su.quote}\"`:"";
+          lines.push(`- **${su.unitName||"?"}** (${su.chapter||"?"})${q}`);
+        });
+        lines.push("");
+      }
+      if(Array.isArray(sc.commentary)&&sc.commentary.length){
+        lines.push("**פרשנות תומכת:**");
+        sc.commentary.forEach(cm=>{
+          const w=cm.work?`, ${cm.work}`:"";
+          const p=cm.page?`, עמ' ${cm.page}`:"";
+          const q=cm.quote?` — \"${cm.quote}\"`:"";
+          lines.push(`- **${cm.author||"?"}**${w}${p}${q}`);
+        });
+        lines.push("");
+      }
+      if(sc.differences){ lines.push(`**הבדלים בין יחידות:** ${sc.differences}`); lines.push(""); }
+    });
+  }
+
+  if(syn.comparativeContribution){
+    lines.push("## 3. תרומת ההשוואה למקבילה");
+    lines.push("");
+    const cc=syn.comparativeContribution;
+    const sect=(label,data)=>{
+      if(!data) return;
+      lines.push(`### ${label}`);
+      if(typeof data==="string"){ lines.push(data); lines.push(""); return; }
+      if(data.explicit){ lines.push(`**שדה גלוי:** ${data.explicit}`); lines.push(""); }
+      if(data.implicit){ lines.push(`**שדה נרמז:** ${data.implicit}`); lines.push(""); }
+    };
+    sect("נשמר",cc.preserved);
+    sect("השתנה",cc.changes);
+    sect("סונדרגוט",cc.sondergut);
+  }
+
+  if(Array.isArray(syn.qualifications)&&syn.qualifications.length){
+    lines.push("## 4. סייגים, ראיות נגד וחוסרים");
+    lines.push("");
+    syn.qualifications.forEach((q,qi)=>{
+      const lb={sayag:"סייג","counter-evidence":"ראיית נגד",gap:"חוסר"}[q.type]||q.type||"";
+      const au=Array.isArray(q.affectedUnits)&&q.affectedUnits.length?` _(יחידות: ${q.affectedUnits.join(", ")})_`:"";
+      lines.push(`- **[${lb}]** ${q.text||""}${au}`);
+    });
+    lines.push("");
+  }
+
+  if(Array.isArray(syn.flaggedIssues)&&syn.flaggedIssues.length){
+    lines.push("## 5. בעיות נקודתיות (לבדיקתך)");
+    lines.push("");
+    syn.flaggedIssues.forEach(fi=>{
+      lines.push(`- **${fi.unitName||"?"}** _(${fi.severity||"?"})_: ${fi.issue||""}`);
+    });
+    lines.push("");
+  }
+
+  if(syn.suggestedOrder){
+    lines.push("## 6. סדר מוצע לכתיבת הדיון");
+    lines.push("");
+    lines.push(syn.suggestedOrder);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+// המר מסקנות מחקריות (שלב 3) ל-Markdown
+function stage3ToMarkdown(detailedConclusions,meta){
+  const {character,concept,dimLabel}=meta||{};
+  const who=character==="solomon"?"שלמה":"דוד";
+  const lines=[];
+  lines.push(`# מסקנות מחקריות: ${concept} · ${who}`);
+  if(dimLabel) lines.push(`**ממד:** ${dimLabel}`);
+  lines.push(`**הופק:** ${todayStamp()}  `);
+  lines.push(`**סה"כ יחידות:** ${detailedConclusions.length}  `);
+  lines.push(`**יחידות עם מסקנה:** ${detailedConclusions.filter(c=>c.hasConclusion).length}`);
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  detailedConclusions.forEach((ud,i)=>{
+    lines.push(`## ${i+1}. ${ud.unitName} (${ud.chapter})`);
+    lines.push("");
+    lines.push(ud.hasParallel?`**מקבילה:** ${ud.sourceRef}  `:"**סונדרגוט** — אין מקבילה בשמואל/מלכים  ");
+    lines.push("");
+    if(ud.hasConclusion){
+      lines.push(ud.conclusion);
+    }else{
+      lines.push("_(לא נכתבה מסקנה מחקרית)_");
+    }
+    lines.push("");
+  });
+  return lines.join("\n");
+}
+
+// המר אינדיקטורים מצטברים (שלב 2) ל-Markdown
+function stage2ToMarkdown(stage2,meta){
+  const {character,concept,dimLabel}=meta||{};
+  const who=character==="solomon"?"שלמה":"דוד";
+  const lines=[];
+  lines.push(`# אינדיקטורים מצטברים: ${concept} · ${who}`);
+  if(dimLabel) lines.push(`**ממד:** ${dimLabel}`);
+  lines.push(`**הופק:** ${todayStamp()}`);
+  lines.push("");
+  if(stage2.summary){ lines.push(`**סיכום:** ${stage2.summary}`); lines.push(""); }
+  lines.push("---");
+  lines.push("");
+  if(Array.isArray(stage2.tableHeaders)&&Array.isArray(stage2.tableRows)){
+    lines.push("## טבלת ספירה");
+    lines.push("");
+    lines.push("| "+stage2.tableHeaders.join(" | ")+" |");
+    lines.push("|"+stage2.tableHeaders.map(()=>"---").join("|")+"|");
+    stage2.tableRows.forEach(r=>{
+      lines.push("| "+r.join(" | ")+" |");
+    });
+    lines.push("");
+  }
+  if(Array.isArray(stage2.indicatorDetails)&&stage2.indicatorDetails.length){
+    lines.push("## פירוט אינדיקטורים לפי יחידה");
+    lines.push("");
+    stage2.indicatorDetails.forEach(ud=>{
+      lines.push(`### ${ud.unitName||"?"} (${ud.chapter||"?"})`);
+      lines.push("");
+      if(Array.isArray(ud.indicators)){
+        ud.indicators.forEach(ind=>{
+          const verse=ind.verse?` [פסוק ${ind.verse}]`:"";
+          lines.push(`- **[${ind.paramLabel||"כללי"}]** "${ind.q||""}"${verse}`);
+          if(ind.note) lines.push(`  - _הסבר חוקרת:_ ${ind.note}`);
+        });
+      }
+      lines.push("");
+    });
+  }
+  return lines.join("\n");
+}
+
+// המר הגדרה + הבהרה ל-Markdown
+function definitionToMarkdown(conceptDef,meta){
+  const {concept}=meta||{};
+  const lines=[];
+  lines.push(`# הגדרת המושג: ${concept}`);
+  lines.push(`**הופק:** ${todayStamp()}`);
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  lines.push("## ההגדרה (פרק ב׳)");
+  lines.push("");
+  lines.push(conceptDef.text||"(ריק)");
+  lines.push("");
+  if(conceptDef.clarification&&conceptDef.clarification.text){
+    lines.push("## הבהרת היישום");
+    lines.push("");
+    if(conceptDef.clarification.promptVersion) lines.push(`_גרסת פרומפט: ${conceptDef.clarification.promptVersion}_`);
+    if(conceptDef.clarification.generatedAt) lines.push(`_הופק: ${conceptDef.clarification.generatedAt.slice(0,16).replace("T"," ")}_`);
+    if(conceptDef.clarification.editedByUser) lines.push(`_נערך ידנית: ${(conceptDef.clarification.editedAt||"").slice(0,16).replace("T"," ")}_`);
+    lines.push("");
+    lines.push(conceptDef.clarification.text);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 // ── Firebase ─────────────────────────────────────────────────────────────
 // הכלי האנליטי שומר ב-"research2" (sharded + lz-string). הסינתזה קוראת משם ל-raw,
 // ושומרת את תוצאות השלבים ב-"synthesis_v1" הנפרד (בלי להתנגש עם האנליטי).
@@ -4243,6 +4477,10 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                       <div style={{display:"flex",gap:"6px"}}>
                                         <button onClick={()=>{setClarDraft(conceptDef.clarification.text);setClarEditing(true);}} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>✏ ערוך</button>
                                         <button onClick={generateClarification} disabled={clarLoading} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:clarLoading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{clarLoading?"⏳":"🔄 חדש מ-AI"}</button>
+                                        <button onClick={()=>{
+                                          const md=definitionToMarkdown(conceptDef,{concept});
+                                          downloadTextFile(safeFilename(`הגדרה_והבהרה_${concept}_${todayStamp()}.md`),md);
+                                        }} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"11px",fontWeight:"700"}}>⬇ הורד</button>
                                       </div>
                                     </div>
                                   </>
@@ -4381,6 +4619,12 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 {/* פעולות */}
                                 <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
                                   <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||""}`:"🔄 הרץ שוב (הקיים לארכיון)"}</button>
+                                  <button onClick={()=>{
+                                    const md=synthesisToMarkdown(p3Synthesis,{character,concept,dimLabel,conceptDef});
+                                    const who=character==="solomon"?"שלמה":"דוד";
+                                    const fn=safeFilename(`סינתזה_${who}_${concept}_${todayStamp()}.md`);
+                                    downloadTextFile(fn,md);
+                                  }} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"11px",fontWeight:"700"}}>⬇ הורד כקובץ Markdown</button>
                                   <button onClick={()=>setP3ShowPrompt(!p3ShowPrompt)} disabled={p3Loading} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{p3ShowPrompt?"🔽 הסתר פרומפט":"👁 פרומפט שהורץ"}</button>
                                   {(stage4Data.phase3_previous_syntheses||[]).length>0&&<span style={{padding:"5px 10px",background:"#1e1b4b22",borderRadius:"5px",fontSize:"10px",color:"#a5b4fc",alignSelf:"center"}}>📜 {stage4Data.phase3_previous_syntheses.length} גרסאות קודמות בארכיון</span>}
                                 </div>
@@ -4818,7 +5062,14 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                     {/* ─ שלב 3 חדש: תצוגת מסקנות מפורטת לפי יחידה ─ */}
                     {n===3&&hasResult.source==="compareNotes"&&Array.isArray(hasResult.detailedConclusions)&&hasResult.detailedConclusions.length>0&&(
                       <div style={{marginBottom:"12px",padding:"12px 14px",background:"#0f172a",borderRadius:"7px",border:`1px solid ${dimColor}44`}}>
-                        <div style={{fontSize:"11px",color:dimColor,fontWeight:"700",marginBottom:"8px"}}>📚 מסקנות מחקריות מפורטות (מהכלי האנליטי — ללא AI, ללא שינוי)</div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"8px"}}>
+                          <div style={{fontSize:"11px",color:dimColor,fontWeight:"700"}}>📚 מסקנות מחקריות מפורטות (מהכלי האנליטי — ללא AI, ללא שינוי)</div>
+                          <button onClick={()=>{
+                            const md=stage3ToMarkdown(hasResult.detailedConclusions,{character,concept,dimLabel});
+                            const who=character==="solomon"?"שלמה":"דוד";
+                            downloadTextFile(safeFilename(`שלב3_מסקנות_${who}_${concept}_${todayStamp()}.md`),md);
+                          }} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"10px",fontWeight:"700"}}>⬇ הורד</button>
+                        </div>
                         {hasResult.coverage&&(
                           <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"10px",fontSize:"10px"}}>
                             <span style={{padding:"4px 8px",background:"#1e293b",borderRadius:"5px",color:"#cbd5e1"}}>נבדקו: <strong>{hasResult.coverage.unitsChecked}</strong></span>
@@ -4881,7 +5132,14 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                     {/* פירוט אינדיקטורים חיוביים לפי יחידה (שלב 2) */}
                     {n===2&&hasResult.indicatorDetails&&hasResult.indicatorDetails.length>0&&(
                       <div style={{marginBottom:"12px",padding:"12px 14px",background:"#0f172a",borderRadius:"7px",border:`1px solid ${dimColor}44`}}>
-                        <div style={{fontSize:"11px",color:dimColor,fontWeight:"700",marginBottom:"8px"}}>📋 פירוט אינדיקטורים חיוביים לפי יחידה (מהכלי האנליטי)</div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"8px"}}>
+                          <div style={{fontSize:"11px",color:dimColor,fontWeight:"700"}}>📋 פירוט אינדיקטורים חיוביים לפי יחידה (מהכלי האנליטי)</div>
+                          <button onClick={()=>{
+                            const md=stage2ToMarkdown(hasResult,{character,concept,dimLabel});
+                            const who=character==="solomon"?"שלמה":"דוד";
+                            downloadTextFile(safeFilename(`שלב2_אינדיקטורים_${who}_${concept}_${todayStamp()}.md`),md);
+                          }} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"10px",fontWeight:"700"}}>⬇ הורד</button>
+                        </div>
                         <div style={{maxHeight:"500px",overflowY:"auto",display:"flex",flexDirection:"column",gap:"10px"}}>
                           {hasResult.indicatorDetails.map((ud,ui)=>(
                             <div key={ui} style={{padding:"10px",background:"#1e293b",borderRadius:"6px",borderRight:`2px solid ${dimColor}66`}}>
