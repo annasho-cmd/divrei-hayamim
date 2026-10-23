@@ -2706,6 +2706,12 @@ ${materialSection}
   const [p3Error,setP3Error]=useState("");
   const [p3Progress,setP3Progress]=useState("");
   const [p3ShowPrompt,setP3ShowPrompt]=useState(false);
+  // ─ פאזה 3 — ווידוא ציטוטים ועריכה ─
+  const [p3VerifyLoading,setP3VerifyLoading]=useState(false);
+  const [p3VerifyError,setP3VerifyError]=useState("");
+  const [p3VerifyProgress,setP3VerifyProgress]=useState("");
+  const [p3Editing,setP3Editing]=useState(false);
+  const [p3Draft,setP3Draft]=useState(null);
 
   // תצוגה מקדימה של הקלט המדויק שיעבור ל-AI ליחידה אחת (בלי להריץ)
   function buildPreviewForUnit(uid){
@@ -3585,6 +3591,261 @@ ${unitBlocks}
       setP3Error(`שגיאה כללית: ${e.message||e}`);
     }
     setP3Loading(false);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // פאזה 3 — ווידוא ציטוטים מול כלי ההשוואה (raw.commentary + טקסטים)
+  // ═══════════════════════════════════════════════════════════════
+  const VERIFY_PROMPT_VERSION="v1-2026-10-23-citation-verify";
+  const p3Verification=stage4Data.phase3_verification||null;
+
+  function saveP3Verification(verification){
+    const newStage4={...stage4Data,phase3_verification:verification,lastUpdated:Date.now()};
+    const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+    setStageData(newData);
+    const all=stageResults||LS_get("stageResults",{});
+    const updated={...all,[resultsKey]:newData};
+    if(setStageResults) setStageResults(updated);
+    LS_set("stageResults",updated);
+    fbSaveStageResults(updated);
+  }
+
+  function buildVerifyPrompt(synthesis,unitsData){
+    const who=character==="solomon"?"שלמה":"דוד";
+    const unitsSection=Object.entries(unitsData).map(([uid,data])=>{
+      const commentaryText=data.commentary&&typeof data.commentary==="object"
+        ? Object.entries(data.commentary).map(([author,text])=>`─── ${author} ───\n${text}`).join("\n\n")
+        : (typeof data.commentary==="string"?data.commentary:"");
+      return `━━━ יחידה [uid: ${uid}]: ${data.unitName} (${data.chapter}) ${data.sourceRef?"[מקבילה: "+data.sourceRef+"]":"[סונדרגוט]"}
+
+[טקסט דה"י המלא]
+${data.chroniclesText||"(לא נטען)"}
+
+${data.sourceText?`[טקסט המקבילה המלא]\n${data.sourceText}\n`:""}
+[פרשנות מלאה — כל המחברים ליחידה זו]
+${commentaryText||"(אין פרשנות מתועדת)"}
+`;
+    }).join("\n");
+
+    return `אתה עוזר מחקר. מטרתך: לבצע **בדיקת תקינות ציטוטים** של סינתזה שהופקה למושג "${concept}" בפרקי ${who} בדברי הימים.
+
+גרסת פרומפט ווידוא: ${VERIFY_PROMPT_VERSION}
+
+### ההנחיה הכללית
+אתה **לא** כותב סינתזה חדשה. אתה **רק** בודק את תקינות הציטוטים בסינתזה הנתונה מול חומר המקור שסופק. אם ציטוט מופיע במדויק — אשר אותו. אם הוא חלקי/שגוי/לא נמצא — דווח על כך בלבד, אל תעצב מסקנות חדשות.
+
+### הסינתזה לווידוא (לא לשנות)
+${JSON.stringify(synthesis,null,2)}
+
+### חומר המקור מהכלי האנליטי (הטקסטים המלאים + פרשנות מלאה לכל יחידה שמצוטטת בסינתזה)
+
+${unitsSection}
+
+### קריטריוני בדיקה
+
+לכל ציטוט בסינתזה, הגדר אחד משלושה סוגים:
+
+**(A) ציטוט פסוק** — תוכן מצוטט שמוצג כפסוק מדה״י/שמואל/מלכים.
+בדיקה: האם הטקסט הזה אכן קיים ביחידה המדווחת (uid) בטקסט דה״י או במקבילה?
+
+**(B) שיוך ליחידה** — טענה שאירוע/תוכן/ביטוי "נמצא" או "מתבטא" ביחידה מסוימת (ב-supportingUnits.quote).
+בדיקה: האם הציטוט quote באמת מתאר את מה שקורה ביחידה המדווחת?
+
+**(C) ציטוט פרשן** — טענה שהמחבר X אומר Y בעמוד Z.
+בדיקה: האם הטקסט המיוחס למחבר X אכן מופיע בפרשנות המלאה של אותו מחבר (באותה יחידה)? האם זה המחבר הנכון?
+
+### קטגוריות ווידוא
+- **verified**: הציטוט תקין לחלוטין.
+- **partial**: רוב הציטוט תקין, דורש דיוק קטן בנוסח או ניסוח.
+- **misassigned**: הציטוט נכון מבחינת תוכן, אך משויך ליחידה הלא נכונה או למחבר הלא נכון.
+- **not_found**: הציטוט אינו נמצא בחומר שסופק.
+- **not_verifiable**: אין בחומר שסופק מספיק מידע לוודא (יחידה בלי פרשנות, פרשן שאין לו טקסט, וכו').
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״) או בגרש בודד ʼ.
+- אל תשבור שורה בתוך ערך מחרוזת.
+- פלט רק JSON, ללא טקסט או markdown.
+
+### פלט נדרש
+
+{
+  "unitAssignmentChecks": [
+    {
+      "subClaimIndex": מספר הטענה (1-based),
+      "unitUid": "uid היחידה שהוזכרה",
+      "quote": "הציטוט מתוך supportingUnits.quote",
+      "status": "verified|misassigned|not_found|not_verifiable",
+      "actualUnitUid": "uid אמיתי אם שונה (או ריק)",
+      "suggestion": "הסבר קצר ותיקון מוצע"
+    }
+  ],
+  "scholarCitationChecks": [
+    {
+      "subClaimIndex": מספר,
+      "author": "שם מחבר בסינתזה",
+      "page": "עמוד בסינתזה",
+      "quotedAs": "הציטוט שבסינתזה",
+      "unitUid": "uid היחידה שבהקשרה הציטוט",
+      "status": "verified|partial|misassigned|not_found|not_verifiable",
+      "actualAuthor": "מחבר אמיתי אם שונה",
+      "actualPage": "עמוד נכון אם קיים",
+      "actualQuote": "ציטוט מדויק מהחומר (אם זמין)",
+      "suggestion": "המלצה לתיקון"
+    }
+  ],
+  "verseCitationChecks": [
+    {
+      "subClaimIndex": מספר,
+      "verseRef": "ציון הפסוק",
+      "quotedText": "הטקסט שצוטט",
+      "reportedUnitUid": "uid היחידה שבה נטען שנמצא",
+      "status": "verified|misassigned|not_found",
+      "actualUnitUid": "uid אמיתי אם שונה",
+      "suggestion": "המלצה"
+    }
+  ],
+  "summary": "סיכום ממצאים: X ציטוטים אומתו במלואם, Y דורשים תיקון חלקי, Z לא נמצאו, W לא היה חומר לווידוא.",
+  "overallRecommendation": "accept_as_is|accept_with_fixes|regenerate"
+}`;
+  }
+
+  async function verifyCitations(){
+    if(!p3Synthesis){ setP3VerifyError("אין סינתזה לוודא."); return; }
+    setP3VerifyError(""); setP3VerifyLoading(true); setP3VerifyProgress("אוסף ציטוטים ויחידות...");
+    try{
+      // איסוף כל ה-uids שמצוטטים בסינתזה
+      const citedUids=new Set();
+      (p3Synthesis.subClaims||[]).forEach(sc=>{
+        (sc.supportingUnits||[]).forEach(su=>{ if(su&&su.uid) citedUids.add(String(su.uid)); });
+      });
+      if(citedUids.size===0){
+        setP3VerifyError("לא נמצאו ציטוטים לוודא בסינתזה.");
+        setP3VerifyLoading(false); setP3VerifyProgress(""); return;
+      }
+      // לכל uid — טעינת טקסט + פרשנות
+      const unitsData={};
+      const unitsByIdSyn={};
+      (raw.units||[]).forEach(u=>{ unitsByIdSyn[String(u.id)]=u; });
+      citedUids.forEach(uid=>{
+        const u=unitsByIdSyn[uid]||{};
+        const commentary=(raw.commentary&&raw.commentary[uid])||{};
+        unitsData[uid]={
+          unitName:u.name||"?",
+          chapter:u.chapter||"?",
+          chroniclesText:u.chroniclesText||"",
+          sourceText:u.sourceText||"",
+          sourceRef:u.sourceRef||null,
+          commentary
+        };
+      });
+      setP3VerifyProgress(`בונה פרומפט (${citedUids.size} יחידות)...`);
+      const prompt=buildVerifyPrompt(p3Synthesis,unitsData);
+      setP3VerifyProgress(`שולח ל-AI (${prompt.length.toLocaleString()} תווים)...`);
+      const r=await aiCallDirectWithUsage(prompt,16000);
+      setP3VerifyProgress("מפענח פלט...");
+      const {parsed,error}=tryParseJson(r.text);
+      if(!parsed){
+        setP3VerifyError(`JSON parse — ${error?error.message:"לא נמצא"}. פלט (500 תווים ראשונים): ${r.text.substring(0,500)}`);
+        setP3VerifyLoading(false); setP3VerifyProgress(""); return;
+      }
+      const report={
+        ...parsed,
+        verifiedAt:new Date().toISOString(),
+        promptVersion:VERIFY_PROMPT_VERSION,
+        sourceSynthesisGeneratedAt:p3Synthesis.generatedAt||null,
+        usage:r.usage,
+        costUsd:r.costUsd,
+        unitsChecked:citedUids.size,
+        _promptLength:prompt.length,
+        _promptSent:prompt.substring(0,15000)
+      };
+      saveP3Verification(report);
+      setP3VerifyProgress("");
+    }catch(e){
+      setP3VerifyError(`שגיאה: ${e.message||e}`);
+    }
+    setP3VerifyLoading(false);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // פאזה 3 — מצב עריכה בכרטיס
+  // ═══════════════════════════════════════════════════════════════
+  function enterEditMode(){
+    if(!p3Synthesis) return;
+    // deep clone הסינתזה הנוכחית לטיוטה
+    const draft=JSON.parse(JSON.stringify(p3Synthesis));
+    setP3Draft(draft);
+    setP3Editing(true);
+  }
+
+  function cancelEditMode(){
+    if(p3Draft&&confirm("לבטל את העריכות שעשית מאז הכניסה למצב עריכה?")){
+      setP3Editing(false); setP3Draft(null);
+    }else if(!p3Draft){
+      setP3Editing(false);
+    }
+  }
+
+  function saveEditMode(){
+    if(!p3Draft) return;
+    // ארכוב של הגרסה הנוכחית
+    const prevList=Array.isArray(stage4Data.phase3_previous_syntheses)?stage4Data.phase3_previous_syntheses:[];
+    const newPrev=[...prevList,{...p3Synthesis,archivedAt:new Date().toISOString(),archivedReason:"user_edit"}];
+    const updated={
+      ...p3Draft,
+      _editedByUser:true,
+      _lastEditAt:new Date().toISOString(),
+      _editCount:((p3Synthesis._editCount||0)+1)
+    };
+    const newStage4={
+      ...stage4Data,
+      phase3_synthesis:updated,
+      phase3_previous_syntheses:newPrev,
+      lastUpdated:Date.now()
+    };
+    const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+    setStageData(newData);
+    const all=stageResults||LS_get("stageResults",{});
+    const updatedResults={...all,[resultsKey]:newData};
+    if(setStageResults) setStageResults(updatedResults);
+    LS_set("stageResults",updatedResults);
+    fbSaveStageResults(updatedResults);
+    setP3Editing(false); setP3Draft(null);
+  }
+
+  // עדכון נקודתי ב-p3Draft דרך path
+  function updateDraft(path,value){
+    setP3Draft(prev=>{
+      if(!prev) return prev;
+      const copy=JSON.parse(JSON.stringify(prev));
+      const parts=path.split(".");
+      let cur=copy;
+      for(let i=0;i<parts.length-1;i++){
+        const p=parts[i];
+        const match=p.match(/^(\w+)\[(\d+)\]$/);
+        if(match){ cur=cur[match[1]][parseInt(match[2])]; }
+        else{ cur=cur[p]; }
+      }
+      const last=parts[parts.length-1];
+      const lastMatch=last.match(/^(\w+)\[(\d+)\]$/);
+      if(lastMatch){ cur[lastMatch[1]][parseInt(lastMatch[2])]=value; }
+      else{ cur[last]=value; }
+      return copy;
+    });
+  }
+
+  // מחיקת פריט מרשימה (subClaims/qualifications/flaggedIssues) ב-p3Draft
+  function deleteDraftItem(arrayPath,index){
+    setP3Draft(prev=>{
+      if(!prev) return prev;
+      const copy=JSON.parse(JSON.stringify(prev));
+      const parts=arrayPath.split(".");
+      let cur=copy;
+      for(let i=0;i<parts.length-1;i++){ cur=cur[parts[i]]; }
+      const key=parts[parts.length-1];
+      if(Array.isArray(cur[key])) cur[key]=cur[key].filter((_,i)=>i!==index);
+      return copy;
+    });
   }
 
   // בדיקת זמינות נתוני שלבים 2+3 לדמות הזאת + למושג הזה
@@ -4717,7 +4978,19 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
                                 {/* פעולות */}
                                 <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
-                                  <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||""}`:"🔄 הרץ שוב (הקיים לארכיון)"}</button>
+                                  {p3Editing?(
+                                    <>
+                                      <button onClick={saveEditMode} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:"pointer",background:"#059669",color:"white",fontSize:"11px",fontWeight:"700"}}>💾 שמור עריכות</button>
+                                      <button onClick={cancelEditMode} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"11px"}}>✖ בטל</button>
+                                      <span style={{padding:"6px 12px",background:"#78350f22",borderRadius:"5px",fontSize:"10px",color:"#fcd34d",alignSelf:"center",fontWeight:"700"}}>⚠ מצב עריכה פעיל — שינוייך לא נשמרו עדיין</span>
+                                    </>
+                                  ):(
+                                    <>
+                                      <button onClick={enterEditMode} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #f59e0b",cursor:"pointer",background:"#78350f22",color:"#fcd34d",fontSize:"11px",fontWeight:"700"}}>✏ ערוך</button>
+                                      <button onClick={verifyCitations} disabled={p3VerifyLoading} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #06b6d4",cursor:p3VerifyLoading?"wait":"pointer",background:"#083344",color:"#67e8f9",fontSize:"11px",fontWeight:"700"}}>{p3VerifyLoading?`⏳ ${p3VerifyProgress||"מוודא..."}`:(p3Verification?"📎 ווידוא מחדש":"📎 אמת ציטוטים מול כלי ההשוואה")}</button>
+                                      <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||""}`:"🔄 הרץ שוב (הקיים לארכיון)"}</button>
+                                    </>
+                                  )}
                                   {(()=>{
                                     const md=synthesisToMarkdown(p3Synthesis,{character,concept,dimLabel,conceptDef});
                                     const who=character==="solomon"?"שלמה":"דוד";
@@ -4735,6 +5008,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   {(stage4Data.phase3_previous_syntheses||[]).length>0&&<span style={{padding:"5px 10px",background:"#1e1b4b22",borderRadius:"5px",fontSize:"10px",color:"#a5b4fc",alignSelf:"center"}}>📜 {stage4Data.phase3_previous_syntheses.length} גרסאות קודמות בארכיון</span>}
                                 </div>
                                 {p3Error&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3Error}</div>}
+                                {p3VerifyError&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ ווידוא: {p3VerifyError}</div>}
                                 {p3ShowPrompt&&p3Synthesis._promptSent&&(
                                   <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
                                     <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"6px"}}>אורך פרומפט שהורץ: {p3Synthesis._promptLength?.toLocaleString()||"?"} תווים</div>
@@ -4742,38 +5016,137 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   </div>
                                 )}
 
+                                {/* ─ דו"ח ווידוא ציטוטים ─ */}
+                                {p3Verification&&(
+                                  <div style={{marginBottom:"12px",padding:"12px 14px",background:"#083344",borderRadius:"7px",border:"1px solid #06b6d4"}}>
+                                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"8px"}}>
+                                      <div style={{fontSize:"13px",fontWeight:"700",color:"#67e8f9"}}>📎 דו"ח ווידוא ציטוטים</div>
+                                      <div style={{fontSize:"10px",color:"#cbd5e1"}}>הופק: {p3Verification.verifiedAt?p3Verification.verifiedAt.slice(0,16).replace("T"," "):"—"} · {p3Verification.unitsChecked||0} יחידות · עלות: ${(p3Verification.costUsd||0).toFixed(4)}</div>
+                                    </div>
+                                    {p3Verification.summary&&<div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"8px"}}>{p3Verification.summary}</div>}
+                                    {p3Verification.overallRecommendation&&(()=>{
+                                      const lbl={accept_as_is:"✓ לקבל כפי שהוא",accept_with_fixes:"⚠ לקבל עם תיקונים נקודתיים",regenerate:"❌ לייצר מחדש"}[p3Verification.overallRecommendation]||p3Verification.overallRecommendation;
+                                      const col={accept_as_is:"#86efac",accept_with_fixes:"#fcd34d",regenerate:"#f87171"}[p3Verification.overallRecommendation]||"#cbd5e1";
+                                      return <div style={{padding:"6px 10px",background:`${col}22`,color:col,borderRadius:"5px",fontSize:"11px",fontWeight:"700",marginBottom:"8px",display:"inline-block"}}>המלצה: {lbl}</div>;
+                                    })()}
+                                    {["unitAssignmentChecks","scholarCitationChecks","verseCitationChecks"].map(key=>{
+                                      const items=p3Verification[key]||[];
+                                      if(items.length===0) return null;
+                                      const title={unitAssignmentChecks:"שיוך ליחידות",scholarCitationChecks:"ציטוטי פרשנים",verseCitationChecks:"ציטוטי פסוקים"}[key];
+                                      const counts={verified:0,partial:0,misassigned:0,not_found:0,not_verifiable:0};
+                                      items.forEach(it=>{ if(counts[it.status]!==undefined) counts[it.status]++; });
+                                      return (
+                                        <details key={key} style={{marginBottom:"6px"}} open={counts.misassigned+counts.not_found+counts.partial>0}>
+                                          <summary style={{cursor:"pointer",fontSize:"11px",color:"#f1f5f9",fontWeight:"700",padding:"6px 8px",background:"#0f172a",borderRadius:"4px"}}>
+                                            {title} ({items.length}): <span style={{color:"#86efac"}}>✓ {counts.verified}</span>{counts.partial>0&&<> · <span style={{color:"#fcd34d"}}>⚠ חלקי {counts.partial}</span></>}{counts.misassigned>0&&<> · <span style={{color:"#f87171"}}>⇄ שיוך שגוי {counts.misassigned}</span></>}{counts.not_found>0&&<> · <span style={{color:"#f87171"}}>✗ לא נמצא {counts.not_found}</span></>}{counts.not_verifiable>0&&<> · <span style={{color:"#94a3b8"}}>○ לא נבדק {counts.not_verifiable}</span></>}
+                                          </summary>
+                                          <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
+                                            {items.map((it,ii)=>{
+                                              const col={verified:"#86efac",partial:"#fcd34d",misassigned:"#f87171",not_found:"#f87171",not_verifiable:"#94a3b8"}[it.status]||"#cbd5e1";
+                                              const stLbl={verified:"✓ אומת",partial:"⚠ חלקי",misassigned:"⇄ שיוך שגוי",not_found:"✗ לא נמצא",not_verifiable:"○ לא נבדק"}[it.status]||it.status;
+                                              return (
+                                                <div key={ii} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${col}`,fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5"}}>
+                                                  <div style={{display:"flex",gap:"6px",alignItems:"flex-start",flexWrap:"wrap",marginBottom:"3px"}}>
+                                                    <span style={{color:col,fontWeight:"700",whiteSpace:"nowrap"}}>{stLbl}</span>
+                                                    {it.subClaimIndex&&<span style={{color:"#64748b"}}>טענה #{it.subClaimIndex}</span>}
+                                                    {it.author&&<span style={{color:"#fcd34d"}}>{it.author}{it.page?`, עמ' ${it.page}`:""}</span>}
+                                                    {it.unitUid&&<span style={{color:"#94a3b8"}}>uid: {it.unitUid}</span>}
+                                                    {it.verseRef&&<span style={{color:"#93c5fd"}}>{it.verseRef}</span>}
+                                                  </div>
+                                                  {it.quotedAs&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>בסינתזה: "{it.quotedAs}"</div>}
+                                                  {it.quote&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>ציטוט: "{it.quote}"</div>}
+                                                  {it.quotedText&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>טקסט: "{it.quotedText}"</div>}
+                                                  {it.actualAuthor&&<div style={{color:"#86efac"}}>מחבר אמיתי: {it.actualAuthor}</div>}
+                                                  {it.actualPage&&<div style={{color:"#86efac"}}>עמוד נכון: {it.actualPage}</div>}
+                                                  {it.actualUnitUid&&<div style={{color:"#86efac"}}>uid נכון: {it.actualUnitUid}</div>}
+                                                  {it.actualQuote&&<div style={{color:"#86efac",marginTop:"2px"}}>ציטוט מדויק: "{it.actualQuote}"</div>}
+                                                  {it.suggestion&&<div style={{marginTop:"3px",color:col}}>💡 {it.suggestion}</div>}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </details>
+                                      );
+                                    })}
+                                    <div style={{marginTop:"6px",fontSize:"9px",color:"#67e8f9",fontStyle:"italic"}}>לחצי "✏ ערוך" כדי להחיל את התיקונים בכרטיס.</div>
+                                  </div>
+                                )}
+
+                                {(()=>{ const displaySyn=p3Editing&&p3Draft?p3Draft:p3Synthesis; return (
+                                <>
                                 {/* 1. מסקנה מרכזית */}
-                                {p3Synthesis.centralConclusion&&(
+                                {displaySyn.centralConclusion!==undefined&&(
                                   <div style={{padding:"12px 14px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px",borderRight:`4px solid ${dimColor}`}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"6px"}}>1️⃣ מסקנה מרכזית</div>
-                                    <div style={{fontSize:"13px",color:"#f1f5f9",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{p3Synthesis.centralConclusion}</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"6px"}}>1️⃣ מסקנה מרכזית{p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה</span>}</div>
+                                    {p3Editing?(
+                                      <textarea value={displaySyn.centralConclusion||""} onChange={e=>updateDraft("centralConclusion",e.target.value)} rows={5} style={{width:"100%",padding:"8px 10px",background:"#1e293b",color:"#f1f5f9",border:"1px solid #f59e0b55",borderRadius:"4px",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                    ):(
+                                      <div style={{fontSize:"13px",color:"#f1f5f9",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{displaySyn.centralConclusion}</div>
+                                    )}
                                   </div>
                                 )}
 
                                 {/* 2. טענות משנה */}
-                                {Array.isArray(p3Synthesis.subClaims)&&p3Synthesis.subClaims.length>0&&(
+                                {Array.isArray(displaySyn.subClaims)&&displaySyn.subClaims.length>0&&(
                                   <div style={{marginBottom:"10px"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>2️⃣ טענות משנה ({p3Synthesis.subClaims.length})</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>2️⃣ טענות משנה ({displaySyn.subClaims.length}){p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה / מחיקה</span>}</div>
                                     <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
-                                      {p3Synthesis.subClaims.map((sc,si)=>{
+                                      {displaySyn.subClaims.map((sc,si)=>{
                                         const fbColor={explicit:"#60a5fa",implicit:"#a78bfa",both:"#f59e0b"}[sc.fieldBasis]||"#64748b";
                                         const fbLabel={explicit:"שדה גלוי",implicit:"שדה נרמז",both:"שני השדות"}[sc.fieldBasis]||sc.fieldBasis;
                                         return (
                                           <div key={si} style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${fbColor}`}}>
                                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"10px",flexWrap:"wrap",marginBottom:"6px"}}>
-                                              <div style={{fontSize:"12px",color:"#f1f5f9",fontWeight:"700",flex:1}}>{si+1}. {sc.claim}</div>
-                                              {sc.fieldBasis&&<span style={{fontSize:"10px",color:fbColor,background:`${fbColor}22`,padding:"2px 8px",borderRadius:"3px",fontWeight:"700"}}>{fbLabel}</span>}
+                                              {p3Editing?(
+                                                <textarea value={sc.claim||""} onChange={e=>updateDraft(`subClaims[${si}].claim`,e.target.value)} rows={2} style={{flex:1,padding:"6px 8px",background:"#1e293b",color:"#f1f5f9",border:"1px solid #f59e0b55",borderRadius:"4px",fontSize:"12px",lineHeight:"1.6",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box",fontWeight:"700"}}/>
+                                              ):(
+                                                <div style={{fontSize:"12px",color:"#f1f5f9",fontWeight:"700",flex:1}}>{si+1}. {sc.claim}</div>
+                                              )}
+                                              {sc.fieldBasis&&!p3Editing&&<span style={{fontSize:"10px",color:fbColor,background:`${fbColor}22`,padding:"2px 8px",borderRadius:"3px",fontWeight:"700"}}>{fbLabel}</span>}
+                                              {p3Editing&&(
+                                                <>
+                                                  <select value={sc.fieldBasis||""} onChange={e=>updateDraft(`subClaims[${si}].fieldBasis`,e.target.value)} style={{padding:"3px 6px",background:"#1e293b",color:"#f1f5f9",border:"1px solid #f59e0b55",borderRadius:"4px",fontSize:"10px"}}>
+                                                    <option value="">(ללא תגית)</option>
+                                                    <option value="explicit">שדה גלוי</option>
+                                                    <option value="implicit">שדה נרמז</option>
+                                                    <option value="both">שני השדות</option>
+                                                  </select>
+                                                  <button onClick={()=>{if(confirm(`למחוק את טענה ${si+1}?`)) deleteDraftItem("subClaims",si);}} style={{padding:"3px 8px",borderRadius:"4px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"10px"}}>🗑</button>
+                                                </>
+                                              )}
                                             </div>
-                                            {sc.explicitEvidence&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#1e3a5f22",borderRadius:"4px",marginTop:"4px"}}><strong style={{color:"#60a5fa"}}>שדה גלוי:</strong> {sc.explicitEvidence}</div>}
-                                            {sc.implicitEvidence&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#4c1d9522",borderRadius:"4px",marginTop:"4px"}}><strong style={{color:"#a78bfa"}}>שדה נרמז:</strong> {sc.implicitEvidence}</div>}
+                                            {(sc.explicitEvidence!==undefined||p3Editing)&&(
+                                              p3Editing?(
+                                                <div style={{marginTop:"4px"}}>
+                                                  <div style={{fontSize:"10px",color:"#60a5fa",marginBottom:"2px",fontWeight:"700"}}>שדה גלוי (ראיות):</div>
+                                                  <textarea value={sc.explicitEvidence||""} onChange={e=>updateDraft(`subClaims[${si}].explicitEvidence`,e.target.value)} rows={2} style={{width:"100%",padding:"6px 8px",background:"#1e3a5f44",color:"#cbd5e1",border:"1px solid #60a5fa55",borderRadius:"4px",fontSize:"11px",lineHeight:"1.6",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                                </div>
+                                              ):(
+                                                sc.explicitEvidence&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#1e3a5f22",borderRadius:"4px",marginTop:"4px"}}><strong style={{color:"#60a5fa"}}>שדה גלוי:</strong> {sc.explicitEvidence}</div>
+                                              )
+                                            )}
+                                            {(sc.implicitEvidence!==undefined||p3Editing)&&(
+                                              p3Editing?(
+                                                <div style={{marginTop:"4px"}}>
+                                                  <div style={{fontSize:"10px",color:"#a78bfa",marginBottom:"2px",fontWeight:"700"}}>שדה נרמז (ראיות):</div>
+                                                  <textarea value={sc.implicitEvidence||""} onChange={e=>updateDraft(`subClaims[${si}].implicitEvidence`,e.target.value)} rows={2} style={{width:"100%",padding:"6px 8px",background:"#4c1d9544",color:"#cbd5e1",border:"1px solid #a78bfa55",borderRadius:"4px",fontSize:"11px",lineHeight:"1.6",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                                </div>
+                                              ):(
+                                                sc.implicitEvidence&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#4c1d9522",borderRadius:"4px",marginTop:"4px"}}><strong style={{color:"#a78bfa"}}>שדה נרמז:</strong> {sc.implicitEvidence}</div>
+                                              )
+                                            )}
                                             {Array.isArray(sc.supportingUnits)&&sc.supportingUnits.length>0&&(
                                               <details style={{marginTop:"6px"}}>
                                                 <summary style={{cursor:"pointer",fontSize:"10px",color:"#94a3b8",fontWeight:"700"}}>▸ יחידות תומכות ({sc.supportingUnits.length})</summary>
                                                 <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
                                                   {sc.supportingUnits.map((su,sui)=>(
                                                     <div key={sui} style={{fontSize:"10px",color:"#cbd5e1",padding:"4px 6px",background:"#1e293b",borderRadius:"3px"}}>
-                                                      <strong>{su.unitName}</strong> <span style={{color:"#64748b"}}>({su.chapter})</span>
-                                                      {su.quote&&<div style={{marginTop:"2px",color:"#94a3b8",fontStyle:"italic"}}>"{su.quote}"</div>}
+                                                      <strong>{su.unitName}</strong> <span style={{color:"#64748b"}}>({su.chapter})</span> {su.uid&&<span style={{color:"#64748b",fontSize:"9px"}}>[{su.uid}]</span>}
+                                                      {p3Editing?(
+                                                        <textarea value={su.quote||""} onChange={e=>updateDraft(`subClaims[${si}].supportingUnits[${sui}].quote`,e.target.value)} rows={2} style={{width:"100%",marginTop:"4px",padding:"4px 6px",background:"#1e293b",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"10px",lineHeight:"1.5",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                                      ):(
+                                                        su.quote&&<div style={{marginTop:"2px",color:"#94a3b8",fontStyle:"italic"}}>"{su.quote}"</div>
+                                                      )}
                                                     </div>
                                                   ))}
                                                 </div>
@@ -4785,14 +5158,37 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                                 <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
                                                   {sc.commentary.map((cm,cmi)=>(
                                                     <div key={cmi} style={{fontSize:"10px",color:"#cbd5e1",padding:"4px 6px",background:"#1e293b",borderRadius:"3px"}}>
-                                                      <strong style={{color:"#fcd34d"}}>{cm.author}</strong>{cm.work?`, ${cm.work}`:""}{cm.page?`, עמ' ${cm.page}`:""}
-                                                      {cm.quote&&<div style={{marginTop:"2px",color:"#94a3b8"}}>"{cm.quote}"</div>}
+                                                      {p3Editing?(
+                                                        <div style={{display:"flex",flexDirection:"column",gap:"3px"}}>
+                                                          <div style={{display:"flex",gap:"4px",flexWrap:"wrap"}}>
+                                                            <input type="text" value={cm.author||""} onChange={e=>updateDraft(`subClaims[${si}].commentary[${cmi}].author`,e.target.value)} placeholder="שם מחבר" style={{flex:1,padding:"3px 6px",background:"#1e293b",color:"#fcd34d",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"10px",fontFamily:"inherit"}}/>
+                                                            <input type="text" value={cm.work||""} onChange={e=>updateDraft(`subClaims[${si}].commentary[${cmi}].work`,e.target.value)} placeholder="חיבור" style={{flex:1,padding:"3px 6px",background:"#1e293b",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"10px",fontFamily:"inherit"}}/>
+                                                            <input type="text" value={cm.page||""} onChange={e=>updateDraft(`subClaims[${si}].commentary[${cmi}].page`,e.target.value)} placeholder="עמוד" style={{width:"80px",padding:"3px 6px",background:"#1e293b",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"10px",fontFamily:"inherit"}}/>
+                                                            <button onClick={()=>deleteDraftItem(`subClaims[${si}].commentary`,cmi)} style={{padding:"3px 6px",borderRadius:"3px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"10px"}}>🗑</button>
+                                                          </div>
+                                                          <textarea value={cm.quote||""} onChange={e=>updateDraft(`subClaims[${si}].commentary[${cmi}].quote`,e.target.value)} rows={2} placeholder="ציטוט או תמצית" style={{width:"100%",padding:"4px 6px",background:"#1e293b",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"10px",lineHeight:"1.5",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                                        </div>
+                                                      ):(
+                                                        <>
+                                                          <strong style={{color:"#fcd34d"}}>{cm.author}</strong>{cm.work?`, ${cm.work}`:""}{cm.page?`, עמ' ${cm.page}`:""}
+                                                          {cm.quote&&<div style={{marginTop:"2px",color:"#94a3b8"}}>"{cm.quote}"</div>}
+                                                        </>
+                                                      )}
                                                     </div>
                                                   ))}
                                                 </div>
                                               </details>
                                             )}
-                                            {sc.differences&&<div style={{marginTop:"6px",padding:"6px 8px",background:"#78350f22",borderRadius:"4px",fontSize:"10px",color:"#fcd34d"}}><strong>הבדלים בין יחידות:</strong> {sc.differences}</div>}
+                                            {(sc.differences!==undefined||p3Editing)&&(
+                                              p3Editing?(
+                                                <div style={{marginTop:"6px"}}>
+                                                  <div style={{fontSize:"10px",color:"#fcd34d",marginBottom:"2px",fontWeight:"700"}}>הבדלים בין יחידות (אם רלוונטי):</div>
+                                                  <textarea value={sc.differences||""} onChange={e=>updateDraft(`subClaims[${si}].differences`,e.target.value)} rows={2} style={{width:"100%",padding:"6px 8px",background:"#78350f44",color:"#fcd34d",border:"1px solid #f59e0b55",borderRadius:"4px",fontSize:"10px",lineHeight:"1.5",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                                </div>
+                                              ):(
+                                                sc.differences&&<div style={{marginTop:"6px",padding:"6px 8px",background:"#78350f22",borderRadius:"4px",fontSize:"10px",color:"#fcd34d"}}><strong>הבדלים בין יחידות:</strong> {sc.differences}</div>
+                                              )
+                                            )}
                                           </div>
                                         );
                                       })}
@@ -4801,16 +5197,15 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 )}
 
                                 {/* 3. תרומת ההשוואה */}
-                                {p3Synthesis.comparativeContribution&&(
+                                {displaySyn.comparativeContribution&&(
                                   <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>3️⃣ תרומת ההשוואה למקבילה</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>3️⃣ תרומת ההשוואה למקבילה{p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה</span>}</div>
                                     {["preserved","changes","sondergut"].map(k=>{
-                                      const section=p3Synthesis.comparativeContribution[k];
-                                      if(!section) return null;
+                                      const section=displaySyn.comparativeContribution[k]||{};
                                       const label={preserved:"✓ נשמר",changes:"⇄ השתנה",sondergut:"★ סונדרגוט"}[k];
                                       const color={preserved:"#34d399",changes:"#fbbf24",sondergut:"#60a5fa"}[k];
-                                      // יכול להיות אובייקט עם explicit/implicit או מחרוזת
-                                      if(typeof section==="string"){
+                                      if(typeof section==="string"&&!p3Editing){
+                                        if(!section) return null;
                                         return (
                                           <div key={k} style={{marginBottom:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${color}`}}>
                                             <div style={{fontSize:"11px",fontWeight:"700",color:color,marginBottom:"3px"}}>{label}</div>
@@ -4818,11 +5213,27 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                           </div>
                                         );
                                       }
+                                      const sectionObj=typeof section==="string"?{explicit:"",implicit:section}:section;
                                       return (
                                         <div key={k} style={{marginBottom:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${color}`}}>
                                           <div style={{fontSize:"11px",fontWeight:"700",color:color,marginBottom:"4px"}}>{label}</div>
-                                          {section.explicit&&<div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"4px",padding:"4px 6px",background:"#1e3a5f22",borderRadius:"3px"}}><strong style={{color:"#60a5fa"}}>שדה גלוי:</strong> {section.explicit}</div>}
-                                          {section.implicit&&<div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6",padding:"4px 6px",background:"#4c1d9522",borderRadius:"3px"}}><strong style={{color:"#a78bfa"}}>שדה נרמז:</strong> {section.implicit}</div>}
+                                          {p3Editing?(
+                                            <>
+                                              <div style={{marginBottom:"4px"}}>
+                                                <div style={{fontSize:"9px",color:"#60a5fa",marginBottom:"2px"}}>שדה גלוי:</div>
+                                                <textarea value={sectionObj.explicit||""} onChange={e=>updateDraft(`comparativeContribution.${k}.explicit`,e.target.value)} rows={2} style={{width:"100%",padding:"4px 6px",background:"#1e3a5f44",color:"#cbd5e1",border:"1px solid #60a5fa55",borderRadius:"3px",fontSize:"10px",lineHeight:"1.5",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                              </div>
+                                              <div>
+                                                <div style={{fontSize:"9px",color:"#a78bfa",marginBottom:"2px"}}>שדה נרמז:</div>
+                                                <textarea value={sectionObj.implicit||""} onChange={e=>updateDraft(`comparativeContribution.${k}.implicit`,e.target.value)} rows={2} style={{width:"100%",padding:"4px 6px",background:"#4c1d9544",color:"#cbd5e1",border:"1px solid #a78bfa55",borderRadius:"3px",fontSize:"10px",lineHeight:"1.5",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                              </div>
+                                            </>
+                                          ):(
+                                            <>
+                                              {sectionObj.explicit&&<div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"4px",padding:"4px 6px",background:"#1e3a5f22",borderRadius:"3px"}}><strong style={{color:"#60a5fa"}}>שדה גלוי:</strong> {sectionObj.explicit}</div>}
+                                              {sectionObj.implicit&&<div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6",padding:"4px 6px",background:"#4c1d9522",borderRadius:"3px"}}><strong style={{color:"#a78bfa"}}>שדה נרמז:</strong> {sectionObj.implicit}</div>}
+                                            </>
+                                          )}
                                         </div>
                                       );
                                     })}
@@ -4830,20 +5241,33 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 )}
 
                                 {/* 4. סייגים */}
-                                {Array.isArray(p3Synthesis.qualifications)&&p3Synthesis.qualifications.length>0&&(
+                                {Array.isArray(displaySyn.qualifications)&&displaySyn.qualifications.length>0&&(
                                   <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>4️⃣ סייגים, ראיות נגד וחוסרים ({p3Synthesis.qualifications.length})</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>4️⃣ סייגים, ראיות נגד וחוסרים ({displaySyn.qualifications.length}){p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה / מחיקה</span>}</div>
                                     <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
-                                      {p3Synthesis.qualifications.map((q,qi)=>{
+                                      {displaySyn.qualifications.map((q,qi)=>{
                                         const label={sayag:"סייג","counter-evidence":"ראיית נגד",gap:"חוסר"}[q.type]||q.type;
                                         const color={sayag:"#fbbf24","counter-evidence":"#f87171",gap:"#60a5fa"}[q.type]||"#64748b";
                                         return (
                                           <div key={qi} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${color}`}}>
                                             <div style={{display:"flex",gap:"6px",alignItems:"flex-start"}}>
-                                              <span style={{fontSize:"9px",color:color,background:`${color}22`,padding:"2px 6px",borderRadius:"3px",fontWeight:"700",whiteSpace:"nowrap"}}>{label}</span>
-                                              <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",flex:1}}>{q.text}</div>
+                                              {p3Editing?(
+                                                <select value={q.type||""} onChange={e=>updateDraft(`qualifications[${qi}].type`,e.target.value)} style={{padding:"3px 6px",background:"#1e293b",color:color,border:`1px solid ${color}55`,borderRadius:"3px",fontSize:"10px",fontWeight:"700"}}>
+                                                  <option value="sayag">סייג</option>
+                                                  <option value="counter-evidence">ראיית נגד</option>
+                                                  <option value="gap">חוסר</option>
+                                                </select>
+                                              ):(
+                                                <span style={{fontSize:"9px",color:color,background:`${color}22`,padding:"2px 6px",borderRadius:"3px",fontWeight:"700",whiteSpace:"nowrap"}}>{label}</span>
+                                              )}
+                                              {p3Editing?(
+                                                <textarea value={q.text||""} onChange={e=>updateDraft(`qualifications[${qi}].text`,e.target.value)} rows={2} style={{flex:1,padding:"4px 6px",background:"#1e293b",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"11px",lineHeight:"1.6",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                              ):(
+                                                <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",flex:1}}>{q.text}</div>
+                                              )}
+                                              {p3Editing&&<button onClick={()=>{if(confirm("למחוק סייג זה?")) deleteDraftItem("qualifications",qi);}} style={{padding:"3px 6px",borderRadius:"3px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"10px"}}>🗑</button>}
                                             </div>
-                                            {Array.isArray(q.affectedUnits)&&q.affectedUnits.length>0&&<div style={{marginTop:"3px",fontSize:"9px",color:"#64748b"}}>יחידות: {q.affectedUnits.join(", ")}</div>}
+                                            {Array.isArray(q.affectedUnits)&&q.affectedUnits.length>0&&!p3Editing&&<div style={{marginTop:"3px",fontSize:"9px",color:"#64748b"}}>יחידות: {q.affectedUnits.join(", ")}</div>}
                                           </div>
                                         );
                                       })}
@@ -4852,19 +5276,24 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 )}
 
                                 {/* 5. בעיות נקודתיות */}
-                                {Array.isArray(p3Synthesis.flaggedIssues)&&p3Synthesis.flaggedIssues.length>0&&(
+                                {Array.isArray(displaySyn.flaggedIssues)&&displaySyn.flaggedIssues.length>0&&(
                                   <div style={{padding:"10px 12px",background:"#78350f22",borderRadius:"7px",marginBottom:"10px",border:"1px dashed #f59e0b55"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#fbbf24",marginBottom:"8px"}}>⚠ בעיות נקודתיות שעלו ({p3Synthesis.flaggedIssues.length}) — לבדיקתך</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#fbbf24",marginBottom:"8px"}}>⚠ בעיות נקודתיות שעלו ({displaySyn.flaggedIssues.length}) — לבדיקתך{p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה / מחיקה</span>}</div>
                                     <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
-                                      {p3Synthesis.flaggedIssues.map((fi,fii)=>{
+                                      {displaySyn.flaggedIssues.map((fi,fii)=>{
                                         const sevColor={low:"#60a5fa",medium:"#fbbf24",high:"#f87171"}[fi.severity]||"#94a3b8";
                                         return (
                                           <div key={fii} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px"}}>
                                             <div style={{display:"flex",gap:"6px",alignItems:"center",marginBottom:"3px"}}>
                                               <span style={{fontSize:"9px",color:sevColor,background:`${sevColor}22`,padding:"2px 6px",borderRadius:"3px",fontWeight:"700"}}>{fi.severity||"—"}</span>
-                                              <strong style={{fontSize:"11px",color:"#f1f5f9"}}>{fi.unitName}</strong>
+                                              <strong style={{fontSize:"11px",color:"#f1f5f9",flex:1}}>{fi.unitName}</strong>
+                                              {p3Editing&&<button onClick={()=>{if(confirm("למחוק בעיה נקודתית זו?")) deleteDraftItem("flaggedIssues",fii);}} style={{padding:"3px 6px",borderRadius:"3px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"10px"}}>🗑</button>}
                                             </div>
-                                            <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6"}}>{fi.issue}</div>
+                                            {p3Editing?(
+                                              <textarea value={fi.issue||""} onChange={e=>updateDraft(`flaggedIssues[${fii}].issue`,e.target.value)} rows={2} style={{width:"100%",padding:"4px 6px",background:"#1e293b",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"11px",lineHeight:"1.6",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                            ):(
+                                              <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6"}}>{fi.issue}</div>
+                                            )}
                                           </div>
                                         );
                                       })}
@@ -4873,12 +5302,18 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 )}
 
                                 {/* 6. סדר דיון */}
-                                {p3Synthesis.suggestedOrder&&(
+                                {(displaySyn.suggestedOrder!==undefined||p3Editing)&&(
                                   <div style={{padding:"10px 12px",background:"#064e3b22",borderRadius:"7px",marginBottom:"10px",border:"1px solid #065f4655"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#86efac",marginBottom:"6px"}}>6️⃣ סדר מוצע לכתיבת הדיון</div>
-                                    <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{p3Synthesis.suggestedOrder}</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#86efac",marginBottom:"6px"}}>6️⃣ סדר מוצע לכתיבת הדיון{p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה</span>}</div>
+                                    {p3Editing?(
+                                      <textarea value={displaySyn.suggestedOrder||""} onChange={e=>updateDraft("suggestedOrder",e.target.value)} rows={4} style={{width:"100%",padding:"6px 8px",background:"#1e293b",color:"#cbd5e1",border:"1px solid #065f4699",borderRadius:"4px",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                    ):(
+                                      <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{displaySyn.suggestedOrder}</div>
+                                    )}
                                   </div>
                                 )}
+                                </>
+                                ); })()}
                               </>
                             )}
                           </div>
