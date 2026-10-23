@@ -3024,8 +3024,11 @@ ${buildUnitBlock(unit)}
   }
 
   // ─ שלב 4 פאזה 3: סינתזה ─
-  const PROMPT_VERSION_P3="v4-2026-10-23-batched-resumable";
-  const P3_BATCH_SIZE=12;
+  const PROMPT_VERSION_P3="v5-2026-10-23-6-batches";
+  const P3_BATCH_COUNT=6;
+  const P3_BATCH_MAX_TOKENS=24000;
+  // חישוב גודל קבוצה לפי מספר יחידות ו-P3_BATCH_COUNT (מינימום 1 יחידה לקבוצה)
+  const p3BatchSizeFor=(n)=>Math.max(1,Math.ceil(n/P3_BATCH_COUNT));
   const p3Synthesis=stage4Data.phase3_synthesis||null;
   const p3InProgress=stage4Data.phase3_in_progress||null;
 
@@ -3052,10 +3055,11 @@ ${buildUnitBlock(unit)}
   function buildP3Preview(){
     const s3=stageData.stage3;
     const allUnits=s3?.detailedConclusions||[];
-    const totalBatches=Math.ceil(allUnits.length/P3_BATCH_SIZE);
-    const samplePrompt=totalBatches>0?buildBatchPrompt(0,allUnits.slice(0,P3_BATCH_SIZE),totalBatches,allUnits.length):"";
+    const batchSize=p3BatchSizeFor(allUnits.length);
+    const totalBatches=batchSize>0?Math.ceil(allUnits.length/batchSize):0;
+    const samplePrompt=totalBatches>0?buildBatchPrompt(0,allUnits.slice(0,batchSize),totalBatches,allUnits.length):"";
     const isEternal=(concept==="נצח"||concept==="עולם");
-    return {prompt:samplePrompt,promptLength:samplePrompt.length,unitsCount:allUnits.length,totalBatches,batchSize:P3_BATCH_SIZE,isEternal};
+    return {prompt:samplePrompt,promptLength:samplePrompt.length,unitsCount:allUnits.length,totalBatches,batchSize,isEternal};
   }
 
   // דחיסה של המלצות פרשנים — רק אומצו
@@ -3109,7 +3113,8 @@ ${cn||"(לא נכתבה מסקנה)"}
   function buildBatchPrompt(batchIdx,batchUnits,totalBatches,totalUnits){
     const who=character==="solomon"?"שלמה":"דוד";
     const isEternal=(concept==="נצח"||concept==="עולם");
-    const startGlobal=batchIdx*P3_BATCH_SIZE;
+    const batchSizeHere=p3BatchSizeFor(stageData.stage3?.detailedConclusions?.length||1);
+    const startGlobal=batchIdx*batchSizeHere;
     const unitBlocks=batchUnits.map((cu,i)=>buildUnitBlockP3(cu,startGlobal+i,totalUnits)).join("\n");
     const eternalNote=isEternal?`\n### הוראה מיוחדת: המושג "${concept}" הוא פרמטר תחת "ברית". הסתמך בעיקר על השדה הגלוי (הופעת המילים "נצח/לנצח/עולם/לעולם/לעולמים/עד עולם/לדור ודור").\n`:"";
 
@@ -3439,18 +3444,20 @@ ${unitBlocks}
   function initP3Plan(){
     const s3=stageData.stage3;
     const allUnits=s3.detailedConclusions;
+    const batchSize=p3BatchSizeFor(allUnits.length);
     const existing=stage4Data.phase3_in_progress;
-    if(existing&&existing.batchSize===P3_BATCH_SIZE&&existing.totalUnits===allUnits.length&&existing.promptVersion===PROMPT_VERSION_P3) return existing;
-    // תכנון חדש
+    if(existing&&existing.batchSize===batchSize&&existing.totalUnits===allUnits.length&&existing.promptVersion===PROMPT_VERSION_P3) return existing;
+    // תכנון חדש — תמיד 6 קבוצות (או פחות אם יש פחות מ-6 יחידות)
     const batches=[];
-    for(let i=0;i<allUnits.length;i+=P3_BATCH_SIZE){
-      const slice=allUnits.slice(i,i+P3_BATCH_SIZE);
+    for(let i=0;i<allUnits.length;i+=batchSize){
+      const slice=allUnits.slice(i,i+batchSize);
       batches.push({idx:batches.length,unitUids:slice.map(u=>u.uid),status:"pending"});
     }
     return {
       startedAt:new Date().toISOString(),
       promptVersion:PROMPT_VERSION_P3,
-      batchSize:P3_BATCH_SIZE,
+      batchSize,
+      batchCount:batches.length,
       totalUnits:allUnits.length,
       batches,
       mergeStatus:"pending",
@@ -3503,7 +3510,7 @@ ${unitBlocks}
         const batchUnits=plan.batches[bi].unitUids.map(uid=>unitsByUid[uid]).filter(Boolean);
         const prompt=buildBatchPrompt(bi,batchUnits,plan.batches.length,allUnits.length);
         try{
-          const r=await aiCallDirectWithUsage(prompt,16000);
+          const r=await aiCallDirectWithUsage(prompt,P3_BATCH_MAX_TOKENS);
           const {parsed,error}=tryParseJson(r.text);
           if(!parsed){
             plan.batches[bi]={...plan.batches[bi],status:"error",error:`JSON parse: ${error?error.message:"לא נמצא"}`,processedAt:new Date().toISOString()};
@@ -3562,7 +3569,8 @@ ${unitBlocks}
           costUsd:plan.totalCost,
           totalUnits:allUnits.length,
           batchCount:plan.batches.length,
-          batchSize:P3_BATCH_SIZE,
+          batchSize:p3BatchSizeFor(allUnits.length),
+          batchCount:plan.batches.length,
           _mergePromptLength:mergePrompt.length,
           _batchObservations:plan.batches.map(b=>({idx:b.idx,count:b.result?.unitObservations?.length||0,notes:b.result?.batchObservations||""}))
         };
@@ -4889,7 +4897,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                               <>
                                 <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.6"}}>
                                   מייצר סינתזה מכלל {(stageData.stage3?.detailedConclusions||[]).length} היחידות של {character==="solomon"?"שלמה":"דוד"} למושג <strong>"{concept}"</strong>.<br/>
-                                  <strong>עבודה בקבוצות של {P3_BATCH_SIZE} יחידות</strong> — כל קבוצה נשמרת מיד בסיום. אם נקטע באמצע, ניתן להמשיך מהקבוצה הבאה בלי לאבד את מה שכבר נעשה. בסוף מתבצע מיזוג סופי לפלט 6-חלקי.
+                                  <strong>עבודה ב-{P3_BATCH_COUNT} קבוצות</strong> (~{p3BatchSizeFor((stageData.stage3?.detailedConclusions||[]).length)} יחידות לקבוצה) — כל קבוצה נשמרת מיד בסיום. אם נקטע באמצע, ניתן להמשיך מהקבוצה הבאה בלי לאבד את מה שכבר נעשה. בסוף מתבצע מיזוג סופי לפלט 6-חלקי.
                                 </div>
 
                                 {/* פאנל התקדמות קבוצות — מוצג אם יש in_progress */}
@@ -4926,7 +4934,12 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"8px"}}>
                                   <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{(()=>{
                                     if(p3Loading) return `⏳ ${p3Progress||"יוצר סינתזה..."}`;
-                                    if(!p3InProgress) return `✨ צור סינתזה (${Math.ceil((stageData.stage3?.detailedConclusions||[]).length/P3_BATCH_SIZE)} קבוצות × ${P3_BATCH_SIZE} יחידות)`;
+                                    if(!p3InProgress){
+                                      const n=(stageData.stage3?.detailedConclusions||[]).length;
+                                      const bs=p3BatchSizeFor(n);
+                                      const bc=Math.ceil(n/bs);
+                                      return `✨ צור סינתזה (${bc} קבוצות × ~${bs} יחידות)`;
+                                    }
                                     const pendingBatches=p3InProgress.batches.filter(b=>b.status!=="done").length;
                                     if(pendingBatches>0) return `▶ המשך סינתזה (${pendingBatches} קבוצות נותרו)`;
                                     return `▶ הרץ מיזוג סופי`;
