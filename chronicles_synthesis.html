@@ -2666,7 +2666,7 @@ ${materialSection}
 ההגדרה המקורית תישמר ותוצג בנפרד מהבהרת היישום.
 החזר רק את ההבהרה המובנית — בלי מבוא, בלי סיכום, בלי התייחסות להוראות אלה.`;
     try{
-      const r=await aiCallDirectWithUsage(prompt,2500);
+      const r=await aiCallDirectWithUsage(prompt,10000);
       const now=new Date().toISOString();
       // שמירת ההבהרה הקודמת כגרסה קודמת
       const prevList=Array.isArray(conceptDef.previous_clarifications)?conceptDef.previous_clarifications:[];
