@@ -152,7 +152,7 @@ function LS_set(k,v){
 }
 function escapeHtml(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
 
-// ── הורדת קבצים (markdown/טקסט) ────────────────────────────────────────
+// ── הורדת קבצים (markdown/טקסט/Word/PDF) ────────────────────────────────
 function downloadTextFile(filename,content,mimeType){
   try{
     const type=mimeType||"text/markdown;charset=utf-8";
@@ -164,6 +164,97 @@ function downloadTextFile(filename,content,mimeType){
     setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); },100);
     return true;
   }catch(e){ alert("שגיאה בהורדה: "+(e.message||e)); return false; }
+}
+
+// המרה פשוטה של ה-markdown שלנו ל-HTML (כותרות, הדגשות, רשימות)
+function mdToSimpleHtml(md){
+  // חילוץ בלוקים לפי שורה ריקה כפולה
+  let html=md
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  // headers
+  html=html.replace(/^### (.+)$/gm,"<h3>$1</h3>");
+  html=html.replace(/^## (.+)$/gm,"<h2>$1</h2>");
+  html=html.replace(/^# (.+)$/gm,"<h1>$1</h1>");
+  // bold + italic
+  html=html.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>");
+  html=html.replace(/(^|\s)_([^_\n]+?)_(\s|[.,;:]|$)/g,"$1<em>$2</em>$3");
+  // horizontal rule
+  html=html.replace(/^---$/gm,"<hr/>");
+  // list items
+  html=html.replace(/^- (.+)$/gm,"<li>$1</li>");
+  html=html.replace(/^  - (.+)$/gm,"<li style='margin-right:1.2em;'>$1</li>");
+  // group consecutive <li>
+  html=html.replace(/(<li[\s\S]*?<\/li>)(\n(?!<li))/g,"$1</ul>$2").replace(/((^|\n)(?!<li))(<li)/g,"$1<ul>$3");
+  // paragraphs: wrap non-block lines
+  html=html.split(/\n\n+/).map(block=>{
+    const trimmed=block.trim();
+    if(!trimmed) return "";
+    if(trimmed.match(/^<(h\d|ul|hr|li|p)/)) return trimmed;
+    return "<p>"+trimmed.replace(/\n/g,"<br/>")+"</p>";
+  }).join("\n");
+  // תיקון <ul> לא סגורים
+  const openUls=(html.match(/<ul>/g)||[]).length;
+  const closeUls=(html.match(/<\/ul>/g)||[]).length;
+  for(let i=0;i<openUls-closeUls;i++) html+="</ul>";
+  return html;
+}
+
+// מסמך HTML מעוצב (לשימוש ב-Word וב-PDF)
+function styledHtmlDocument(title,bodyHtml,forPrint){
+  const printCss=forPrint?`@page { margin: 1.5cm; } @media print { body { max-width: none; margin: 0; } }`:"";
+  return `<!DOCTYPE html>
+<html lang="he" dir="rtl" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8"/>
+<title>${title}</title>
+<style>
+body { font-family: "David", "Times New Roman", "DejaVu Serif", serif; font-size: 12pt; line-height: 1.65; direction: rtl; max-width: 800px; margin: 2em auto; padding: 0 2em; color: #1a1a1a; }
+h1 { font-size: 20pt; color: #1e3a5f; border-bottom: 2px solid #64748b; padding-bottom: 8px; margin-top: 0; }
+h2 { font-size: 15pt; color: #065f46; margin-top: 1.5em; margin-bottom: 0.4em; }
+h3 { font-size: 13pt; color: #334155; margin-top: 1.2em; margin-bottom: 0.3em; }
+p { margin: 0.4em 0; }
+strong { font-weight: 700; color: #0f172a; }
+em { font-style: italic; color: #475569; }
+ul { padding-right: 1.5em; margin: 0.4em 0; }
+li { margin: 0.25em 0; }
+hr { border: none; border-top: 1px solid #cbd5e1; margin: 1.2em 0; }
+${printCss}
+</style>
+</head>
+<body dir="rtl">
+${bodyHtml}
+</body>
+</html>`;
+}
+
+// הורדה כקובץ Word (.doc שנפתח ב-Word עם RTL)
+function downloadAsWord(markdown,filename){
+  const bodyHtml=mdToSimpleHtml(markdown);
+  const title=filename.replace(/\.(doc|docx)$/i,"");
+  const html=styledHtmlDocument(title,bodyHtml,false);
+  downloadTextFile(filename,html,"application/msword");
+}
+
+// פתיחת חלון מעוצב להדפסה (המשתמשת בוחרת "שמור כ-PDF" בדיאלוג ההדפסה)
+function openPrintableWindow(markdown,title){
+  const bodyHtml=mdToSimpleHtml(markdown);
+  const htmlDoc=styledHtmlDocument(title,bodyHtml,true);
+  const w=window.open("","_blank");
+  if(!w){ alert("לא ניתן לפתוח חלון חדש — אפשרי שחסום על ידי הדפדפן. בדקי בסרגל הכלים."); return; }
+  w.document.open();
+  w.document.write(htmlDoc);
+  w.document.close();
+  // המתן לטעינה ואז פתח את דיאלוג ההדפסה
+  w.onload=()=>{ setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} },400); };
+}
+
+// פונקציית עזר אחת לכל הורדות — מחזירה 3 פעולות: md, word, pdf
+function downloadAllFormats(markdown,baseName,title){
+  return {
+    md: ()=>downloadTextFile(baseName+".md",markdown),
+    word: ()=>downloadAsWord(markdown,baseName+".doc"),
+    pdf: ()=>openPrintableWindow(markdown,title||baseName)
+  };
 }
 
 // שם קובץ בטוח (ללא תווים אסורים במערכות קבצים)
@@ -4477,10 +4568,18 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                       <div style={{display:"flex",gap:"6px"}}>
                                         <button onClick={()=>{setClarDraft(conceptDef.clarification.text);setClarEditing(true);}} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>✏ ערוך</button>
                                         <button onClick={generateClarification} disabled={clarLoading} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #475569",cursor:clarLoading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{clarLoading?"⏳":"🔄 חדש מ-AI"}</button>
-                                        <button onClick={()=>{
+                                        {(()=>{
                                           const md=definitionToMarkdown(conceptDef,{concept});
-                                          downloadTextFile(safeFilename(`הגדרה_והבהרה_${concept}_${todayStamp()}.md`),md);
-                                        }} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"11px",fontWeight:"700"}}>⬇ הורד</button>
+                                          const base=safeFilename(`הגדרה_והבהרה_${concept}_${todayStamp()}`);
+                                          const dl=downloadAllFormats(md,base,`הגדרה והבהרה — ${concept}`);
+                                          return (
+                                            <>
+                                              <button onClick={dl.word} title="הורד כקובץ Word" style={{padding:"5px 10px",borderRadius:"5px",border:"1px solid #2563eb",cursor:"pointer",background:"#1e3a8a22",color:"#93c5fd",fontSize:"11px",fontWeight:"700"}}>📄 Word</button>
+                                              <button onClick={dl.pdf} title="פתח להדפסה/שמירה כ-PDF" style={{padding:"5px 10px",borderRadius:"5px",border:"1px solid #dc2626",cursor:"pointer",background:"#7f1d1d22",color:"#fca5a5",fontSize:"11px",fontWeight:"700"}}>📑 PDF</button>
+                                              <button onClick={dl.md} title="הורד כקובץ Markdown" style={{padding:"5px 10px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"11px",fontWeight:"700"}}>📝 .md</button>
+                                            </>
+                                          );
+                                        })()}
                                       </div>
                                     </div>
                                   </>
@@ -4619,12 +4718,19 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 {/* פעולות */}
                                 <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
                                   <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||""}`:"🔄 הרץ שוב (הקיים לארכיון)"}</button>
-                                  <button onClick={()=>{
+                                  {(()=>{
                                     const md=synthesisToMarkdown(p3Synthesis,{character,concept,dimLabel,conceptDef});
                                     const who=character==="solomon"?"שלמה":"דוד";
-                                    const fn=safeFilename(`סינתזה_${who}_${concept}_${todayStamp()}.md`);
-                                    downloadTextFile(fn,md);
-                                  }} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"11px",fontWeight:"700"}}>⬇ הורד כקובץ Markdown</button>
+                                    const base=safeFilename(`סינתזה_${who}_${concept}_${todayStamp()}`);
+                                    const dl=downloadAllFormats(md,base,`סינתזה — ${concept} · ${who}`);
+                                    return (
+                                      <>
+                                        <button onClick={dl.word} title="הורד כקובץ Word" style={{padding:"7px 12px",borderRadius:"5px",border:"1px solid #2563eb",cursor:"pointer",background:"#1e3a8a22",color:"#93c5fd",fontSize:"11px",fontWeight:"700"}}>📄 Word</button>
+                                        <button onClick={dl.pdf} title="פתח להדפסה או שמירה כ-PDF" style={{padding:"7px 12px",borderRadius:"5px",border:"1px solid #dc2626",cursor:"pointer",background:"#7f1d1d22",color:"#fca5a5",fontSize:"11px",fontWeight:"700"}}>📑 PDF</button>
+                                        <button onClick={dl.md} title="הורד כקובץ Markdown" style={{padding:"7px 12px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"11px",fontWeight:"700"}}>📝 .md</button>
+                                      </>
+                                    );
+                                  })()}
                                   <button onClick={()=>setP3ShowPrompt(!p3ShowPrompt)} disabled={p3Loading} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{p3ShowPrompt?"🔽 הסתר פרומפט":"👁 פרומפט שהורץ"}</button>
                                   {(stage4Data.phase3_previous_syntheses||[]).length>0&&<span style={{padding:"5px 10px",background:"#1e1b4b22",borderRadius:"5px",fontSize:"10px",color:"#a5b4fc",alignSelf:"center"}}>📜 {stage4Data.phase3_previous_syntheses.length} גרסאות קודמות בארכיון</span>}
                                 </div>
@@ -5064,11 +5170,21 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                       <div style={{marginBottom:"12px",padding:"12px 14px",background:"#0f172a",borderRadius:"7px",border:`1px solid ${dimColor}44`}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"8px"}}>
                           <div style={{fontSize:"11px",color:dimColor,fontWeight:"700"}}>📚 מסקנות מחקריות מפורטות (מהכלי האנליטי — ללא AI, ללא שינוי)</div>
-                          <button onClick={()=>{
-                            const md=stage3ToMarkdown(hasResult.detailedConclusions,{character,concept,dimLabel});
-                            const who=character==="solomon"?"שלמה":"דוד";
-                            downloadTextFile(safeFilename(`שלב3_מסקנות_${who}_${concept}_${todayStamp()}.md`),md);
-                          }} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"10px",fontWeight:"700"}}>⬇ הורד</button>
+                          <div style={{display:"flex",gap:"5px"}}>
+                            {(()=>{
+                              const md=stage3ToMarkdown(hasResult.detailedConclusions,{character,concept,dimLabel});
+                              const who=character==="solomon"?"שלמה":"דוד";
+                              const base=safeFilename(`שלב3_מסקנות_${who}_${concept}_${todayStamp()}`);
+                              const dl=downloadAllFormats(md,base,`מסקנות מחקריות — ${concept} · ${who}`);
+                              return (
+                                <>
+                                  <button onClick={dl.word} title="Word" style={{padding:"4px 8px",borderRadius:"4px",border:"1px solid #2563eb",cursor:"pointer",background:"#1e3a8a22",color:"#93c5fd",fontSize:"10px",fontWeight:"700"}}>📄</button>
+                                  <button onClick={dl.pdf} title="PDF (הדפסה)" style={{padding:"4px 8px",borderRadius:"4px",border:"1px solid #dc2626",cursor:"pointer",background:"#7f1d1d22",color:"#fca5a5",fontSize:"10px",fontWeight:"700"}}>📑</button>
+                                  <button onClick={dl.md} title="Markdown" style={{padding:"4px 8px",borderRadius:"4px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"10px",fontWeight:"700"}}>📝</button>
+                                </>
+                              );
+                            })()}
+                          </div>
                         </div>
                         {hasResult.coverage&&(
                           <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"10px",fontSize:"10px"}}>
@@ -5134,11 +5250,21 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                       <div style={{marginBottom:"12px",padding:"12px 14px",background:"#0f172a",borderRadius:"7px",border:`1px solid ${dimColor}44`}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"8px"}}>
                           <div style={{fontSize:"11px",color:dimColor,fontWeight:"700"}}>📋 פירוט אינדיקטורים חיוביים לפי יחידה (מהכלי האנליטי)</div>
-                          <button onClick={()=>{
-                            const md=stage2ToMarkdown(hasResult,{character,concept,dimLabel});
-                            const who=character==="solomon"?"שלמה":"דוד";
-                            downloadTextFile(safeFilename(`שלב2_אינדיקטורים_${who}_${concept}_${todayStamp()}.md`),md);
-                          }} style={{padding:"5px 12px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"10px",fontWeight:"700"}}>⬇ הורד</button>
+                          <div style={{display:"flex",gap:"5px"}}>
+                            {(()=>{
+                              const md=stage2ToMarkdown(hasResult,{character,concept,dimLabel});
+                              const who=character==="solomon"?"שלמה":"דוד";
+                              const base=safeFilename(`שלב2_אינדיקטורים_${who}_${concept}_${todayStamp()}`);
+                              const dl=downloadAllFormats(md,base,`אינדיקטורים — ${concept} · ${who}`);
+                              return (
+                                <>
+                                  <button onClick={dl.word} title="Word" style={{padding:"4px 8px",borderRadius:"4px",border:"1px solid #2563eb",cursor:"pointer",background:"#1e3a8a22",color:"#93c5fd",fontSize:"10px",fontWeight:"700"}}>📄</button>
+                                  <button onClick={dl.pdf} title="PDF (הדפסה)" style={{padding:"4px 8px",borderRadius:"4px",border:"1px solid #dc2626",cursor:"pointer",background:"#7f1d1d22",color:"#fca5a5",fontSize:"10px",fontWeight:"700"}}>📑</button>
+                                  <button onClick={dl.md} title="Markdown" style={{padding:"4px 8px",borderRadius:"4px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"10px",fontWeight:"700"}}>📝</button>
+                                </>
+                              );
+                            })()}
+                          </div>
                         </div>
                         <div style={{maxHeight:"500px",overflowY:"auto",display:"flex",flexDirection:"column",gap:"10px"}}>
                           {hasResult.indicatorDetails.map((ud,ui)=>(
