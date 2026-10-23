@@ -2368,13 +2368,19 @@ ${materialSection}
     setClarLoading(false);
   }
 
-  // ─ שלב 4 פאזה 2: בדיקת התאמה ─
+  // ─ שלב 4 פאזה 2: בדיקת התאמה (ארכיון בלבד — לא נדרשת להמשך) ─
   const [p2Loading,setP2Loading]=useState(false);
   const [p2Error,setP2Error]=useState("");
   const [p2Progress,setP2Progress]=useState("");
   const [acceptTestOpen,setAcceptTestOpen]=useState(false);
   const [acceptTestSelected,setAcceptTestSelected]=useState([]);
   const [previewPrompt,setPreviewPrompt]=useState(null); // {unitName, text}
+
+  // ─ שלב 4 פאזה 3: סינתזה ─
+  const [p3Loading,setP3Loading]=useState(false);
+  const [p3Error,setP3Error]=useState("");
+  const [p3Progress,setP3Progress]=useState("");
+  const [p3ShowPrompt,setP3ShowPrompt]=useState(false);
 
   // תצוגה מקדימה של הקלט המדויק שיעבור ל-AI ליחידה אחת (בלי להריץ)
   function buildPreviewForUnit(uid){
@@ -2430,7 +2436,7 @@ ${materialSection}
     fbSaveStageResults(updated);
   }
 
-  const PROMPT_VERSION_P2="v6-2026-10-22-no-prophetic-claims";
+  const PROMPT_VERSION_P2="v7-2026-10-22-general-rules-only";
   async function runPhase2(resetFromScratch=false,restrictToUids=null){
     if(!conceptDef||!conceptDef.text){ setP2Error("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
     if(!conceptDef.clarification||!conceptDef.clarification.text){ setP2Error("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
@@ -2478,124 +2484,73 @@ ${cu.hasConclusion?cu.conclusion:"(אין מסקנה מחקרית — אין ל�
 
     const who=character==="solomon"?"שלמה":"דוד";
     const buildPromptSingleUnit=(unit,unitIdx,total)=>{
-      return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לבצע **בדיקת התאמה** בין המסקנה המחקרית (שנכתבה ידנית ע"י החוקרת), האינדיקטורים, הראיות הטקסטואליות וההגדרה המחקרית של המושג — ליחידה אחת.
+      return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לבצע **בדיקת התאמה** בין המסקנה המחקרית של החוקרת (שלב 3), לבין ההגדרה המחייבת והראיות — ליחידה אחת.
 
-גרסת פרומפט: v2 (22.10.2026)
+גרסת פרומפט: ${PROMPT_VERSION_P2}
 
 ### המושג הנבדק: "${concept}"
 ### הדמות: ${who}
 ### יחידה: ${unitIdx} מתוך ${total}
 
-### ההגדרה המחייבת (מפרק ב׳ של התזה — עוגן שלא ניתן לשנות):
+### ההגדרה המחייבת (מפרק ב׳ של התזה — העוגן):
 ${conceptDef.text}
 
-### הבהרת יישום (לא מוסיפה תנאים להגדרה):
+### הבהרת יישום (סיכום תפעולי של ההגדרה; אינה מוסיפה תנאים מחדש):
 ${conceptDef.clarification.text}
 
-### עקרונות מתודולוגיים (קריטיים — יש לציית לכולם)
+### הוראות קבועות לשלב 4 — חלות על כל המושגים ללא יוצא מן הכלל
 
-**א. יישום ההגדרה ללא החמרה נוספת:**
-הרכיבים בהגדרה אינם חייבים להיאמר במפורש בטקסט, להופיע באותו פסוק, או להיות מתוארים כמחשבת המלך. ניתן לבסס זיקה מושגית מתוך פעולות, בחירות ספרותיות, ניסוחים והקשר שסופקו — ובלבד שההסקה מנומקת. **אין להשלים שיקול דעת שאינו מבוסס בחומר** (זה הצד השני של אותו עיקרון).
+**1. ההגדרה מפרק ב׳ היא אמת המידה.** אין להוסיף לה תנאים מחייבים, כגון תהליך מחשבתי גלוי, מורכבות הפעולה או אזכור מפורש, אלא אם ההגדרה מחייבת זאת.
 
-**ב. הבחנה בין ממצא טקסטואלי להסקה מושגית:**
-כל טענה במסקנה כוללת לפעמים שני רכיבים נפרדים — טענה על הכתוב/שינוי, והסקה מושגית ממנה. יש לבדוק אותם בנפרד. למשל: "חלוקת האחריות בין המלך לזקנים מראה חכמה" — הטענה על חלוקת אחריות עשויה להיות **נתמכת**, בעוד שההסקה שהיא מוכיחה חכמה עשויה להיות **מסויגת** או **חורגת**. אין לדחות את כל הטענה בגלל אחד הרכיבים.
+**2. יש להשתמש במלוא החומר** המאושר משלבים 2 ו־3, בטקסט היחידה ובמקבילה, ולהתייחס להנמקות ולפרשנות המתועדת שסופקו.
 
-**ג. אין ברירת מחדל סיווג:**
-כל סיווג חייב לעמוד בקריטריון שלו. אסור "להעדיף מסויגת כדי לא להיות חמורה" — ההיפך: "מסויגת" מחייבת בסיס חיובי מזוהה. "חורגת" מציינת הרחבה מעבר לראיות. חוסר מידע = "insufficient" (נפרד).
+**3. יש להפריד בין ממצא טקסטואלי או השוואתי לבין ההסקה שהוא מבטא את המושג.** טענה מעורבת תפוצל לפי הצורך לרכיב ממצא (findingStatus) ולרכיב הסקה מושגית (conceptualStatus).
 
-**ד. אין להחיל דרישות ממושג אחר:**
-בחן את המסקנה **אך ורק** לפי ההגדרה וההבהרה של "${concept}". אין להחיל דרישות השייכות למושג אחר. הופעת מילה מן השדה הסמנטי אינה מוכיחה לבדה את המושג, והיעדרה אינו מוכיח את היעדרו.
+**4. היעדר מילה אינו מוכיח היעדר מושג; הופעתה אינה מספיקה לבדה לזיהויו.**
 
-**ה. סיווג המסקנה — לא הדמות:**
-את מסווג **את המסקנה המחקרית** שהחוקרת כתבה, לא את דמות המלך ולא את היחידה הטקסטואלית. גם אם המסקנה סווגה "חורגת" — אין פירוש הדבר שהדמות אינה מעוצבת לפי המושג. ייתכן שהניסוח המקורי של המסקנה דורש צמצום, בעוד שהדמות עצמה כן נענית לקריטריון. **ציין זאת במפורש בסיכום** כאשר רלוונטי.
+**5. היעדר תמיכה מספקת בטענה אינו מוכיח את היפוכה.** בפרט, אי־אפשר להסיק שהמושג נחלש רק משום שלא הוכח שהתחזק.
 
-**ו. יחידות ללא מסקנה אינן "חורגות":**
-יחידה שאין בה מסקנה מחקרית כתובה (״אין מסקנה״) אינה חורגת ולא נתמכת — פשוט אין בה מה לבדוק. סווג כ-"no_conclusion" בלבד. אין להסיק מהעדר מסקנה שהמסקנה הייתה חורגת לו נכתבה.
+**6. אין להעמיד פעולה אנושית והכוונה אלוהית כניגודים מעצם הגדרתן.** יש לבחון את הקשר ביניהן בהתאם למושג ולראיות.
 
-**ז. הסקת יכולת דורשת בסיס טקסטואלי מסוים:**
-אם ההגדרה מתארת "יכולת", אין לדרוש "תהליך מחשבתי מפורש שמוצג בטקסט". יכולת ניתנת להסקה מפעולה — ובלבד שההסקה נשענת על לפחות אחד מהבאים: נימוק מפורש של דמות, בחירה מודעת בין אפשרויות, התאמה מורכבת לנסיבות, תיקון טעות קודמת, או קשר מבוסס בין הנחיה (אלוהית/נבואית/מוסרית) לבין הכרעה. **הצלחה כשלעצמה, או התאמה כללית לאופי התיאולוגי של הספר, אינן מספיקות** להסקת היכולת.
+**7. יש לזהות במדויק** למי מיוחסים הכושר, הפעולה או האמירה, ולהבחין בין **כוונה, יכולת, פעולה ותוצאה**.
 
-**ח. מעמד הפרשנות המתועדת:**
-פרשנות מתועדת שסופקה בחומר יכולה לתמוך בזיהוי, אך אינה מעניקה לו אישור אוטומטי. **יש לשמר את שם המחבר, החיבור והעמודים כפי שהם מופיעים בחומר** — "פרשן מתועד" הוא תיאור מעמד ההפניה, לא תחליף לשם. ציטוט מדויק אינו הוכחה שההפניה נכונה. אם הפרשנות היא הראיה היחידה — ציין זאת כסייג בהנמקה.
+**8. הסיווג הכולל צריך להסביר מה נתמך ומה מסויג בטענה המרכזית,** ולא להיגזר מספירת הסיווגים או מטענות שוליות.
 
-**ט. מה שלא נמצא בחומר אינו "נעדר מהיחידה":**
-אם רכיב כלשהו של ההגדרה אינו מופיע בחומר שהועבר אליך (אינדיקטורים, מסקנה, טקסט, פרשנות), כתוב במפורש **"לא נמצא בחומר שסופק"**. **אסור לקבוע שהרכיב "נעדר מהיחידה"** — זה שונה בתכלית. אין לך גישה לכל החומר האפשרי על היחידה; יש לך רק מה שהועבר.
+**9. הבדיקה מתמקדת בדברי הימים, במקבילה ובפרשנות המתועדת.** אין לייצר השוואה עצמאית לנביאים; הגדרת פרק ב׳ כבר מספקת את המסגרת המושגית. אם המסקנה המקורית של החוקרת כוללת טענה על נביאים — שמר אותה במקור והערך אותה בנפרד; אין להוסיף טענות נבואיות משלך.
 
-**י. דרישת מפורשות אסורה:**
-ההגדרה מאפשרת לבסס קשר בין הרכיבים מתוך ההקשר, בתנאי שההסקה מנומקת. **אסור לדרוש שכל רכיב יתואר במפורש כדי לזהות את המושג.** הדרישה המחייבת היא עצם קיומו של הקשר, לא תיאור מפורש שלו.
+**10. אין להעדיף מראש סיווג מחמיר או מקל,** ואין לכוון להתפלגות מסוימת של תוצאות. אין לקבוע כללים אוטומטיים לפי נוכחות או היעדר של ביטוי מסוים.
 
-**יא. "לא רלוונטי" — שימוש מצומצם:**
-ערך irrelevant ל-conceptualStatus מותר **רק** כאשר הטענה היא תיאור טקסטואלי טהור ללא השתמעות מושגית כלשהי (למשל: ״הכרוניסט הוסיף פסוק ו״). טענה שמייחסת תכונה למלך (כגון ״חשיבה ניהולית״, ״מחשבה מערכתית״, ״מנהיגות מוסדית״) **כוללת השתמעות מושגית** וחייבת סיווג מושגי מפורש (supported/qualified/exceeded/insufficient). אם יש אי-ודאות — insufficient. **אסור לברוח ל-irrelevant כדי להתחמק מהכרעה.**
+### סיווגים (לא היררכיה; כל אחד עצמאי)
+- **supported** — הטענה נתמכת בראיות מזוהות שסופקו ובהגדרה.
+- **qualified** — יש בסיס חיובי מזוהה, אך נדרש צמצום, הבחנה או הכרה במחלוקת. ציין את הסייג המדויק.
+- **exceeded** — הטענה כוללת קביעה שהראיות שסופקו אינן מבססות (הרחבה מעבר לחומר).
+- **insufficient** — חסר מידע הנחוץ לבדיקה (אין מספיק נתונים — לא נקבע נגד הטענה).
+- **irrelevant** (רק ל-conceptualStatus) — הטענה היא ממצא טקסטואלי בלבד, ללא השתמעות מושגית. אין לברוח ל-irrelevant כדי להתחמק מהכרעה: טענה שמייחסת תכונה או קשר לדמות **אינה** irrelevant.
 
-**יב. ייחוס תכונה לא מוכיח לבדו:**
-ייחוס תכונה כלשהי (כגון "חשיבה ניהולית") אינו מוכיח כשלעצמו את המושג לפי ההגדרה. יש לבדוק את **המעבר** — האם הראיות אכן מראות את המושג כפי שהוגדר, לא רק את התכונה הכללית. פרט בהנמקה.
+### תפעול
 
-**יג. הסיכום הכולל חובה ומחייב:**
-הסיכום הכולל של היחידה (summary ו-conclusionStatus) חייב לשקף את ההכרעות המפורטות בטענות המשנה, ולא להתנתק מהן. **אסור לסכם ב-exceeded כאשר חלק מהטענות נתמכות** — יש להסביר במפורש את הפער בין הממצאים הנתמכים לבין הסקת המושג. הסינתזה בשלבים הבאים עלולה להסתמך על הסיכום הזה, אז הוא חייב להיות מדויק.
+**פירוק המסקנה לטענות:** פרק את המסקנה המחקרית של החוקרת לטענות עצמאיות ב-perClaim. אל תשנה את ניסוח הטענות המקוריות; צטט מתוך המסקנה.
 
-**יד. התייחסות ישירה למסקנת החוקרת ולראיות שהיא ציטטה:**
-המסקנה המחקרית בשלב 3 היא **תשתית מחקרית שנבדקה ואושרה**. כאשר המסקנה מנמקת זיקה למושג באמצעות פסוקים, פרשנים או ציטוטים ספציפיים — **חובה להתייחס להנמקה הזאת במפורש בנימוק**. אם מציע לסייג או לקבוע חורגת, יש להסביר **בדיוק** איזה מעבר מהממצא להסקה אינו מבוסס דיו, תוך התייחסות ישירה לתמיכה שכבר תועדה במסקנה. **אסור להסתפק באמירה כללית** כמו "אין תהליך של שיקול דעת" או "אין זיקה אלוהית מפורשת". יש להצביע: "המסקנה מצטטת את X ואת Y מעמ' Z; מה שחסר כדי לגשר לאישור ההסקה הוא ..."
+**הנמקות:** כל נימוק (findingJustification ו-conceptualJustification) חייב להצביע על ראיה ספציפית מתוך החומר שסופק — פסוק מזוהה, אינדיקטור משלב 2, פרשנות מתועדת. אין להמציא פסוקים, ציטוטים או פרשנים. פרשנות מתועדת יש להציג עם שם המחבר, החיבור והעמוד כפי שהם מופיעים בחומר.
 
-**טו. אין כללים אוטומטיים לפי נוכחות/היעדר ביטוי:**
-**אין לקבוע** ש"ויהוה צבאות עמו" או ביטויים דומים מחייבים לפחות "מסויגת" אוטומטית. **אין לקבוע** שהיעדר הכוונה אלוהית מפורשת מחייב "חורגת" אוטומטית. הסיווג חייב לנבוע **מהטענה המסוימת וממכלול הראיות המסופקות** — כולל הטקסט המלא, הפרשנות המתועדת, האינדיקטורים והמסקנה המחקרית.
+**חומר שלא סופק:** אם רכיב כלשהו של ההגדרה אינו מופיע בחומר שסופק (אינדיקטורים, מסקנה, טקסט, פרשנות) — כתוב במפורש "לא נמצא בחומר שסופק". אל תקבע שהרכיב "נעדר מהיחידה" — אין לך גישה למלוא החומר האפשרי על היחידה.
 
-**טז. נאמנות להגדרה ולראיות — לא נטייה מראש:**
-אין נטייה מראש להחמרה או להקלה. אמת המידה היא **נאמנות להגדרה מפרק ב׳** ולמלוא הראיות המסופקות. יש להבחין בין **הדרישה המושגית** (רכיבי ההגדרה) ובין **דרך הוכחתה בטקסט**: אין לוותר על רכיבי ההגדרה, אך אין לדרוש תיאור מפורש של תהליך מחשבתי או ציווי אלוהי. אפשר לבסס יכולת וזיקה באמצעות פעולה, הקשר, עיצוב ספרותי — כאשר הקשר מוסבר ומעוגן בראיות.
+**יחידה ללא מסקנה:** אם לא נכתבה מסקנה מחקרית בשלב 3 → conclusionStatus="no_conclusion", perClaim=[], summary="אין מסקנה מחקרית בשלב 3 — אין מה לבדוק". אין להסיק מהעדר מסקנה שהיא הייתה חורגת לו נכתבה.
 
-**יז. איסור ייצור טענות חדשות על הנביאים — חשוב מאוד:**
-שלב 4 **אינו המקום** לייצר טענות חדשות על:
-- הקבלה לנביאים (ישעיהו, ירמיהו, יחזקאל, שמואל, אחרים)
-- התאמה לדגם הנבואי של המלך האידיאלי
-- השפעה נבואית על הכרוניסט או על עיצוב הדמות
+**הסיכום הכולל (summary):** יסביר מה נתמך ומה מסויג בטענה המרכזית של המסקנה (כלל 8). אם יש פער בין ממצאים נתמכים להסקה שאינה נתמכת — הסבר את הפער במפורש. conclusionStatus נגזר מהסיכום, לא מספירת הסיווגים הפרטניים.
 
-האזכורים הנבואיים שבהגדרת המושג מפרק ב׳ **מסבירים את יסודו המחקרי** של המושג. הם **אינם מחייבים דיון השוואתי נוסף בכל יחידה**. אל תוסיף טענות כגון "ההקבלה לישעיהו י"א מראה ש-..." או "הדמות הולמת את המלך האידיאלי של ירמיהו ש-..." — **אלה טענות חדשות שאתה ממציא**, לא הערכה של טענות קיימות.
-
-**יח. ההשוואה למקבילה (שמואל/מלכים) — זה כן תפקידך:**
-תרומת ההשוואה בשלב 4 תעסוק אך ורק ב:
-- **מה נשמר** מהמקבילה
-- **מה השתנה** בדה"י ביחס אליה
-- **מה נוסף** בדה"י שאינו במקבילה
-- **ומשמעות הדבר לעיצוב דמות המלך**
-
-אסור להרחיב מכאן ל"השפעה נבואית" או "דגם מלכותי" כלשהו — אלא אם המסקנה המקורית של החוקרת עשתה זאת במפורש.
-
-**יט. טענות על נביאים במסקנה המקורית — שמר במקור, הפרד מההכרעה:**
-אם המסקנה המחקרית של החוקרת כוללת טענה על הנביאים (למשל: "ההקבלה לישעיהו ברורה"), **שמר את הטענה במקור בציטוטי הכרעה**, אך **הפרד אותה מההכרעה המושגית על ביטוי המושג ביחידה**. סווג את הטענה הנבואית בנפרד (findingStatus/conceptualStatus משלה), אל תערבב אותה בסיווג הכולל של היחידה.
-
-**כ. שלב 4 משרת את כתיבת פרקי דוד ושלמה:**
-מטרת הפלט היא **לשרת ישירות את כתיבת פרקי התזה** על דוד ושלמה. אין לחזור בכל יחידה על ביסוס המסגרת שכבר הוצגה בפרק ב'. המסגרת הנבואית **כבר הוכחה שם**. כאן אנחנו רק בוחנים: *האם היחידה הזאת מבטאת את המושג הזה — לפי ההגדרה — על בסיס החומר שלפניך?*
-
-### סיווגים — קריטריונים מדויקים (לא היררכיה; כל אחד עצמאי)
-
-- **"supported"**: הטענה (ממצא או הסקה) נתמכת בראיות מזוהות שסופקו ובהגדרה המחייבת.
-- **"qualified"**: יש **בסיס חיובי מזוהה**, אך נדרש צמצום, הבחנה או הכרה במחלוקת. ציין את הסייג המדויק.
-- **"exceeded"**: הטענה כוללת קביעה שהראיות שסופקו אינן מבססות (הרחבה מעבר לחומר).
-- **"insufficient"**: חסר מידע הנחוץ לבדיקה (אין מספיק נתונים — לא נקבע נגד הטענה).
-- **"irrelevant"** (רק ל-conceptualStatus): הטענה היא ממצא טקסטואלי בלבד ואינה כוללת הסקה מושגית.
-
-### חוקים מחייבים
-1. פרק כל מסקנה לטענות עצמאיות ב-perClaim. אם טענה מערבת ממצא והסקה — אל תשנה את המסקנה המקורית אבל סווג כל רכיב בנפרד.
-2. **כל נימוק** חייב להצביע על ראיה ספציפית: פסוק מזוהה, אינדיקטור משלב 2, או פרשנות מתועדת. אמירה כללית כמו "אין תהליך של הבנה" — אסורה. יש להסביר אילו ראיות נבדקו ומה הן מראות.
-3. ההגדרה היא העוגן, אין להוסיף תנאים.
-4. אין להמציא פסוקים, ציטוטים או ראיות. אין לטעון שמקור פרשני נבדק אם לא נבדק — יש לציין "הפניה מתועדת".
-5. בחן את **כלל היחידה והקשרה** לפני קביעה שרכיב נעדר. אם מתועד מרכיב רלוונטי (למשל "ויהוה צבאות עמו") — יש להתייחס אליו, גם אם אינו מוכיח לבדו את ההסקה המלאה.
-
-### סיכום (summary) — חוקים
-הסיכום יעריך את **המסקנה המרכזית** של היחידה ויסביר **כיצד היא נשענת על טענות המשנה**. אין להצביע לפי מספר/ספירת סיווגים ("3 מתוך 4 נתמכים לכן..."). אם יש פער בין הממצאים (נתמכים) להסקה (חורגת) — יש להסביר את הפער במפורש. למשל: "מסקנת החיזוק של החכמה חורגת; הממצאים על סמכות ואחריות נתמכים."
-האמן את הסיווג המסכם של היחידה (conclusionStatus) מהסיכום — לא ההיפך.
-
-### חוקי פורמט JSON קריטיים
-- **אל תשתמשי בגרשיים כפולים (") בתוך ערכי מחרוזת.** השתמשי בגרשיים טיפוגרפיים: ״ ״ (\\u05F4), גרש בודד ʼ, או סוגריים.
-- אל תשברי שורה בתוך ערך מחרוזת.
+### פורמט JSON
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״, u05F4) או בגרש בודד ʼ.
+- אל תשבור שורה בתוך ערך מחרוזת.
 - אין פסיק אחרי האלמנט האחרון.
-- פלט רק JSON, ללא טקסט או markdown.
+- פלט רק JSON, ללא טקסט מקדים או מסיים, ללא markdown.
 
-### היחידה:
+### היחידה הנבחנת:
 ${buildUnitBlock(unit)}
 
 ### פורמט התשובה (JSON תקין בלבד — אל תכלול שם יחידה, מזהה או פרק; הם ייווספו אוטומטית):
 
-{"conclusionStatus":"supported|qualified|exceeded|insufficient|no_conclusion","summary":"הערכת המסקנה המרכזית והסבר כיצד היא נשענת על טענות המשנה","perClaim":[{"claim":"ציטוט או ניסוח של טענה בודדת מהמסקנה המקורית","findingStatus":"supported|qualified|exceeded|insufficient","findingJustification":"נימוק עם הצבעה על ראיה: פסוק/אינדיקטור/פרשן מתועד","conceptualStatus":"supported|qualified|exceeded|insufficient|irrelevant","conceptualJustification":"נימוק להסקה המושגית ממצא זה (או 'הטענה היא ממצא בלבד ללא הסקה מושגית' אם irrelevant)","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"תיאור הראיה","detail":"הסבר קצר (בלי גרשיים כפולים)"}]}]}`;
+{"conclusionStatus":"supported|qualified|exceeded|insufficient|no_conclusion","summary":"הסבר מה נתמך ומה מסויג בטענה המרכזית, לפי כלל 8","perClaim":[{"claim":"ציטוט או ניסוח של טענה בודדת מהמסקנה המקורית","findingStatus":"supported|qualified|exceeded|insufficient","findingJustification":"נימוק עם הצבעה על ראיה ספציפית מהחומר","conceptualStatus":"supported|qualified|exceeded|insufficient|irrelevant","conceptualJustification":"נימוק להסקה המושגית ממצא זה","evidenceRefs":[{"type":"indicator|verse|commentary","ref":"תיאור הראיה","detail":"הסבר קצר"}]}]}`;
     };
 
     const allUnits=s3.detailedConclusions;
@@ -2735,6 +2690,259 @@ ${buildUnitBlock(unit)}
   function setResearcherDecision(uid,decision){
     const updated={...p2Decisions,[uid]:{...(p2Decisions[uid]||{}),...decision,decidedAt:new Date().toISOString()}};
     savePhase2(p2Proposal,updated);
+  }
+
+  // ─ שלב 4 פאזה 3: סינתזה ─
+  const PROMPT_VERSION_P3="v2-2026-10-23-two-fields";
+  const p3Synthesis=stage4Data.phase3_synthesis||null;
+
+  function savePhase3(synthesis){
+    const prevList=Array.isArray(stage4Data.phase3_previous_syntheses)?stage4Data.phase3_previous_syntheses:[];
+    const existing=stage4Data.phase3_synthesis;
+    const newPrev=existing?[...prevList,{...existing,archivedAt:new Date().toISOString()}]:prevList;
+    const newStage4={
+      ...stage4Data,
+      phase3_synthesis:synthesis,
+      phase3_previous_syntheses:newPrev,
+      lastUpdated:Date.now()
+    };
+    const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+    setStageData(newData);
+    const all=stageResults||LS_get("stageResults",{});
+    const updated={...all,[resultsKey]:newData};
+    if(setStageResults) setStageResults(updated);
+    LS_set("stageResults",updated);
+    fbSaveStageResults(updated);
+  }
+
+  // תצוגה מקדימה של הקלט המדויק שיישלח לפאזה 3 (לקביעת גודל ובדיקת שלמות)
+  function buildP3Preview(){
+    const built=buildSynthesisPrompt(true);
+    return built;
+  }
+
+  function buildSynthesisPrompt(returnMeta){
+    const s3=stageData.stage3;
+    const who=character==="solomon"?"שלמה":"דוד";
+    const isEternal=(concept==="נצח"||concept==="עולם");
+
+    // דחיסה: רק המלצות פרשנים שאומצו, רק שדה גלוי+נרמז בצורה טבעית
+    const compactScholarRec=(sr)=>{
+      if(!sr||typeof sr!=="object") return "";
+      const lines=[];
+      Object.keys(sr).forEach(k=>{
+        const v=sr[k];
+        if(!v||typeof v!=="object") return;
+        if(!v.adopted) return; // רק אומצו
+        const comm=Array.isArray(v.commentators)?v.commentators.join(", "):(v.commentators||"");
+        const verse=v.suggestVerse||"";
+        const text=(v.text||"").substring(0,250);
+        lines.push(`  - [${k}] ${comm?comm+" ":""}${verse?"פסוק "+verse+" ":""}${text?"— "+text:""}`);
+      });
+      return lines.join("\n");
+    };
+
+    // יחידות: מועבר אך ורק החומר שאיננו חוזר על עצמו
+    const unitBlocks=s3.detailedConclusions.map((cu,i)=>{
+      const ac=(raw.analysis_chronicles&&raw.analysis_chronicles[cu.uid]&&raw.analysis_chronicles[cu.uid][concept])||{};
+      const asrc=(raw.analysis_source&&raw.analysis_source[cu.uid]&&raw.analysis_source[cu.uid][concept])||{};
+      const cn=cu.hasConclusion?cu.conclusion:"";
+      const cf=(raw.compareFactual&&raw.compareFactual[cu.uid]&&raw.compareFactual[cu.uid][concept])||"";
+      const expChr=ac.explicit_note||"";
+      const impChr=ac.implicit_note||"";
+      const expSrc=asrc.explicit_note||"";
+      const impSrc=asrc.implicit_note||"";
+      const scholarChr=compactScholarRec(ac.scholarRecommendations);
+      const scholarSrc=compactScholarRec(asrc.scholarRecommendations);
+      const hasAny=cn||expChr||impChr||expSrc||impSrc||cf;
+      if(!hasAny) return `━━━ יחידה [${i+1}/${s3.detailedConclusions.length}]: ${cu.unitName} (${cu.chapter}) — אין חומר\n`;
+      return `━━━ יחידה [${i+1}/${s3.detailedConclusions.length}]: ${cu.unitName} (${cu.chapter}) ${cu.hasParallel?"[מקבילה: "+cu.sourceRef+"]":"[סונדרגוט — אין מקבילה]"}
+
+[שדה גלוי · דה"י]
+${expChr||"(לא תועד)"}
+
+${isEternal?"":`[שדה נרמז · דה"י]
+${impChr||"(לא תועד)"}
+`}
+${cu.hasParallel?`[שדה גלוי · מקבילה]
+${expSrc||"(לא תועד)"}
+
+${isEternal?"":`[שדה נרמז · מקבילה]
+${impSrc||"(לא תועד)"}
+`}`:""}
+${scholarChr?`[פרשנות מתועדת · דה"י — אומצה ע״י החוקרת]
+${scholarChr}
+`:""}${scholarSrc?`[פרשנות מתועדת · מקבילה — אומצה ע״י החוקרת]
+${scholarSrc}
+`:""}${cf?`[ניתוח עובדתי השוואתי משלב ב']
+${cf}
+`:""}[המסקנה המחקרית — compareNotes]
+${cn||"(לא נכתבה מסקנה)"}
+`;
+    }).join("\n");
+
+    const eternalInstruction=isEternal?`
+### הוראה מיוחדת למושג "${concept}"
+המושג "${concept}" הוא פרמטר תחת "ברית" ואין לו פרמטרים עצמאיים משל עצמו. **הסתמך בעיקר על השדה הגלוי** — הופעת המילים "נצח/לנצח/עולם/לעולם/לעולמים/עד עולם/לדור ודור" וביטויים דומים. השדה הנרמז של "${concept}" נבלע ממילא בפרמטרים של "ברית", ואין מקומו כאן.
+`:"";
+
+    const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לסנתז את מכלול המסקנות המחקריות שהחוקרת כבר כתבה, לכדי טיעון מבוסס המוכן לכתיבת פרק בתזה.
+
+גרסת פרומפט: ${PROMPT_VERSION_P3}
+
+### המושג הנבדק: "${concept}"
+### הדמות: ${who}
+### סך יחידות: ${s3.detailedConclusions.length}
+
+### ההגדרה המחייבת (מפרק ב׳ של התזה — העוגן):
+${conceptDef.text}
+
+### הבהרת יישום (סיכום תפעולי של ההגדרה):
+${conceptDef.clarification.text}
+${eternalInstruction}
+### שני השדות — שומרת זהב מתודית
+
+לכל יחידה סופק חומר משני שדות:
+- **שדה גלוי** (explicit) — מילים מהשדה הסמנטי של המושג שאכן מופיעות בטקסט, בציטוט ישיר של פסוק.
+- **שדה נרמז** (implicit) — הסקה דרך פרמטרים, פעולות דמות, אינדיקטורים ועיצוב ספרותי. **לא** לשון מפורשת של המושג.
+
+**חובת ההפרדה:** כל טענת משנה חייבת לציין את מקור ראיותיה (fieldBasis: "explicit" / "implicit" / "both"). כאשר "both" — פרט בנפרד את הראיות משני השדות.
+**בתרומת ההשוואה למקבילה:** הבחן בין שינויים בשדה הגלוי (למשל: השמטת/תוספת מילה, שינוי לשון) לבין שינויים בשדה הנרמז (למשל: הוספת פעולה, שינוי נושא הפעולה).
+
+### הוראות קבועות — חלות על כל המושגים
+
+**1. ההגדרה מפרק ב׳ היא אמת המידה.** אין להוסיף תנאים מחייבים אא"כ ההגדרה מחייבת.
+**2. יש להשתמש במלוא החומר** שסופק: המסקנות, הפרשנות המתועדת, שני השדות, הניתוח העובדתי.
+**3. יש להפריד בין ממצא טקסטואלי/השוואתי לבין ההסקה שהוא מבטא את המושג.**
+**4. היעדר מילה אינו מוכיח היעדר מושג; הופעתה אינה מספיקה לבדה לזיהויו.**
+**5. היעדר תמיכה מספקת בטענה אינו מוכיח את היפוכה.**
+**6. אין להעמיד פעולה אנושית והכוונה אלוהית כניגודים מעצם הגדרתן.**
+**7. יש לזהות במדויק למי מיוחסים הכושר/הפעולה, ולהבחין בין כוונה, יכולת, פעולה ותוצאה.**
+**8. הטיעון מסביר מה נתמך ומה מסויג — לא נגזר מספירה.**
+**9. אין לייצר השוואה עצמאית לנביאים.** הגדרת פרק ב׳ מספקת את המסגרת.
+**10. אין להעדיף סיווג מחמיר או מקל.**
+
+### הוראות ייחודיות לפאזת הסינתזה
+
+**ס1. אין להפיק מחדש סיווג פר-יחידה.** זו **לא** בדיקת התאמה. אם מסקנה מסוימת אינה מתיישבת עם הראיות שתועדו לה — סמן ב-flaggedIssues; אל תשנה אותה.
+
+**ס2. אין לכפות טענה אחידה.** התוצר כולל מסקנה מרכזית וטענות משנה. יחידות שונות עשויות ללמד דברים שונים — שמר את ההבדלים.
+
+**ס3. סתירה בין יחידות ≠ חריגה מהראיות.** flaggedIssues מיועד **רק** לפערים בין מסקנה בודדת לראיותיה שלה, לא לפערים בין יחידות.
+
+**ס4. אין לספור יחידות כתנאי.** מספרים ייכללו רק אם מבוססים ושימושיים. העיקר הוא **משמעות הממצאים לעיצוב דמות המלך**.
+
+**ס5. יחידות ללא מסקנה אינן ראיה שלילית.** אפשר להזכיר בחוסרים.
+
+**ס6. ייחוס מקורות — חובה שלמה:** בכל טענת משנה הצבע על יחידות + פסוקים + פרשנות מתועדת. **שמר שם מחבר, חיבור ועמוד כפי שהם בחומר. אל תמציא פרשנים, פסוקים או עמודים. אם פרשן מופיע במסקנתה של החוקרת לגבי יחידה — הוא חייב להופיע בטענת המשנה שמסתמכת עליה.**
+
+**ס7. סדר הדיון.** בסוף הפלט, הצע סדר כתיבה לפרק: אילו טענות לפתוח בהן, איפה למקם סייגים.
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״) או בגרש בודד ʼ.
+- אל תשבור שורה בתוך ערך מחרוזת.
+- אין פסיק אחרי האלמנט האחרון.
+- פלט רק JSON, ללא טקסט מקדים או מסיים, ללא markdown.
+
+### כל יחידות שלב 3 (${s3.detailedConclusions.length}):
+${unitBlocks}
+
+### פורמט התשובה (JSON תקין בלבד):
+
+{
+  "centralConclusion": "המסקנה המרכזית על ביטוי המושג בעיצוב דמות ${who} בדה״י — התייחסות לשני השדות",
+  "subClaims": [
+    {
+      "claim": "טענת משנה — ניסוח מהותי",
+      "fieldBasis": "explicit|implicit|both",
+      "supportingUnits": [{"uid":"מזהה","unitName":"שם","chapter":"פרק","quote":"ציטוט ממסקנת החוקרת ליחידה זו"}],
+      "explicitEvidence": "ציטוטים מהשדה הגלוי (לשון מפורשת/פסוקים) — אם fieldBasis כולל explicit",
+      "implicitEvidence": "ראיות מהשדה הנרמז (פעולות, דפוסים, הקשר) — אם fieldBasis כולל implicit",
+      "commentary": [{"author":"שם מחבר","work":"חיבור","page":"עמוד","quote":"ציטוט או תמצית"}],
+      "differences": "אם הטענה מאחדת יחידות עם ניואנסים — פרט ההבדלים"
+    }
+  ],
+  "comparativeContribution": {
+    "preserved": {"explicit":"מה נשמר בשדה הגלוי","implicit":"מה נשמר בשדה הנרמז"},
+    "changes": {"explicit":"מה השתנה בשדה הגלוי (השמטות/תוספות/שינויי לשון)","implicit":"מה השתנה בשדה הנרמז (פעולות/דפוסים)"},
+    "sondergut": {"explicit":"סונדרגוט בשדה הגלוי","implicit":"סונדרגוט בשדה הנרמז"}
+  },
+  "qualifications": [
+    {"type":"sayag|counter-evidence|gap","text":"ניסוח","affectedUnits":["uid"]}
+  ],
+  "flaggedIssues": [
+    {"uid":"מזהה","unitName":"שם","issue":"פער בין מסקנה בודדת לראיותיה","severity":"low|medium|high"}
+  ],
+  "suggestedOrder": "סדר מוצע לכתיבת הדיון"
+}`;
+    if(returnMeta){
+      return {prompt,promptLength:prompt.length,unitsCount:s3.detailedConclusions.length,isEternal};
+    }
+    return prompt;
+  }
+
+  async function generateSynthesis(){
+    if(!conceptDef||!conceptDef.text){ setP3Error("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
+    if(!conceptDef.clarification||!conceptDef.clarification.text){ setP3Error("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
+    const s2=stageData.stage2, s3=stageData.stage3;
+    if(!s2||!Array.isArray(s2.tableRows)||!s2.tableRows.length){ setP3Error("אין נתוני שלב 2."); return; }
+    if(!s3||s3.source!=="compareNotes"||!Array.isArray(s3.detailedConclusions)){ setP3Error("אין נתוני שלב 3 בפורמט החדש."); return; }
+    if(p3Synthesis){
+      const prevCount=(stage4Data.phase3_previous_syntheses||[]).length;
+      if(!confirm(`קיימת סינתזה (${p3Synthesis.promptVersion||"ללא גרסה"}). הסינתזה הקיימת תועבר לארכיון (סה"כ ${prevCount+1} גרסאות קודמות). להמשיך?`)) return;
+    }
+    setP3Error(""); setP3Loading(true); setP3Progress("בונה פרומפט מלא (כל היחידות)...");
+    try{
+      const prompt=buildSynthesisPrompt();
+      setP3Progress(`שולח ל-AI (${prompt.length.toLocaleString()} תווים)...`);
+      const r=await aiCallDirectWithUsage(prompt,16000);
+      setP3Progress("מפענח פלט...");
+      let parsed=null; let parseError=null;
+      try{ const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,""); parsed=JSON.parse(clean); }catch(e){ parseError=e; }
+      if(!parsed){
+        const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
+        if(first>=0&&last>first){ try{ parsed=JSON.parse(r.text.substring(first,last+1)); parseError=null; }catch(e){ parseError=e; } }
+      }
+      if(!parsed){
+        const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
+        if(first>=0&&last>first){
+          let fixed=r.text.substring(first,last+1);
+          fixed=fixed.replace(/,(\s*[}\]])/g,"$1").replace(/[“”״]/g,"ʼ");
+          try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+        }
+      }
+      if(!parsed){
+        const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
+        if(first>=0&&last>first){
+          let fixed=r.text.substring(first,last+1);
+          fixed=fixed.replace(/([֐-׿])"([֐-׿])/g,"$1\\\"$2").replace(/\s"([֐-׿])/g," \\\"$1").replace(/([֐-׿])"(?=[\s.,;])/g,"$1\\\"").replace(/,(\s*[}\]])/g,"$1");
+          try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+        }
+      }
+      if(!parsed){
+        setP3Error(`JSON parse — ${parseError?parseError.message:"לא נמצא JSON"}. פלט (500 תווים ראשונים): ${r.text.substring(0,500)}`);
+        setP3Loading(false); setP3Progress("");
+        return;
+      }
+      const synthesis={
+        ...parsed,
+        promptVersion:PROMPT_VERSION_P3,
+        clarificationId:conceptDef.clarification.id||null,
+        clarificationGeneratedAt:conceptDef.clarification.generatedAt||conceptDef.clarification.editedAt||null,
+        definitionAt:conceptDef.editedAt||conceptDef.savedAt||null,
+        generatedAt:new Date().toISOString(),
+        usage:r.usage,
+        costUsd:r.costUsd,
+        totalUnits:s3.detailedConclusions.length,
+        _promptSent:prompt.substring(0,20000),
+        _promptLength:prompt.length
+      };
+      savePhase3(synthesis);
+      setP3Progress("");
+    }catch(e){
+      setP3Error(`שגיאה: ${e.message||e}`);
+    }
+    setP3Loading(false);
   }
 
   // בדיקת זמינות נתוני שלבים 2+3 לדמות הזאת + למושג הזה
@@ -3754,11 +3962,218 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
                         {/* בדיקת זמינות הועברה למעלה (לפני ההגדרה) — נדרש ע״י החוקרת, 22.10.2026 */}
 
-                        {/* ═══ פאזה 2 — בדיקת התאמה ═══ */}
+                        {/* ═══ פאזה 3 — סינתזה (23.10.2026) ═══ */}
                         {conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&(
-                          <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
+                          <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`2px solid ${dimColor}`,marginBottom:"12px"}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
-                              <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>🔍 פאזה 2 — בדיקת התאמה</div>
+                              <div style={{fontSize:"14px",fontWeight:"700",color:dimColor}}>✨ פאזה 3 — סינתזה למושג × דמות</div>
+                              <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>מסקנה מרכזית · טענות משנה · שדה גלוי+נרמז · השוואה למקבילה · סייגים · סדר דיון</div>
+                            </div>
+
+                            {!p3Synthesis?(
+                              <>
+                                <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.6"}}>
+                                  מייצר סינתזה אחת מכלל {(stageData.stage3?.detailedConclusions||[]).length} היחידות של {character==="solomon"?"שלמה":"דוד"} למושג <strong>"{concept}"</strong>.<br/>
+                                  הקלט ל-AI: ההגדרה + הבהרת היישום + המסקנות המחקריות שלך + ההמלצות הפרשניות שאימצת + שדה גלוי+נרמז לדה״י ולמקבילה + הניתוח ההשוואתי העובדתי.
+                                </div>
+                                <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"8px"}}>
+                                  <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||"יוצר סינתזה..."}`:`✨ צור סינתזה (${(stageData.stage3?.detailedConclusions||[]).length} יחידות)`}</button>
+                                  <button onClick={()=>setP3ShowPrompt(!p3ShowPrompt)} disabled={p3Loading} style={{padding:"10px 16px",borderRadius:"7px",border:"1px solid #475569",cursor:p3Loading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{p3ShowPrompt?"🔽 הסתר פרומפט":"👁 תצוגה מקדימה של הקלט"}</button>
+                                </div>
+                                {p3ShowPrompt&&(()=>{
+                                  const prev=buildP3Preview();
+                                  return (
+                                    <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
+                                      <div style={{display:"flex",gap:"12px",flexWrap:"wrap",fontSize:"11px",marginBottom:"8px"}}>
+                                        <span style={{color:"#94a3b8"}}>אורך פרומפט: <strong style={{color:"#f1f5f9"}}>{prev.promptLength.toLocaleString()}</strong> תווים</span>
+                                        <span style={{color:"#94a3b8"}}>≈ <strong style={{color:"#f1f5f9"}}>{Math.round(prev.promptLength/2).toLocaleString()}</strong> טוקנים</span>
+                                        <span style={{color:"#94a3b8"}}>יחידות: <strong style={{color:"#f1f5f9"}}>{prev.unitsCount}</strong></span>
+                                        {prev.isEternal&&<span style={{color:"#fbbf24",fontWeight:"700"}}>⚡ מצב נצח/עולם — דגש על שדה גלוי</span>}
+                                        <span style={{color:prev.promptLength/2>180000?"#fca5a5":"#86efac",fontWeight:"700"}}>{prev.promptLength/2>180000?"⚠ חורג מגבול ההקשר":"✓ בטווח ההקשר"}</span>
+                                      </div>
+                                      <pre style={{maxHeight:"400px",overflowY:"auto",fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5",whiteSpace:"pre-wrap",direction:"rtl",fontFamily:"inherit",margin:0,padding:"8px",background:"#000",borderRadius:"4px"}}>{prev.prompt}</pre>
+                                    </div>
+                                  );
+                                })()}
+                                {p3Error&&<div style={{padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3Error}</div>}
+                              </>
+                            ):(
+                              <>
+                                {/* סיכום הרצה */}
+                                <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",marginBottom:"10px",fontSize:"11px",color:"#cbd5e1"}}>
+                                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
+                                    <span>🏃 הורץ: {p3Synthesis.generatedAt?p3Synthesis.generatedAt.slice(0,16).replace("T"," "):"—"}</span>
+                                    <span style={{color:"#60a5fa"}}>· קלט: {p3Synthesis.usage?.input_tokens||0} tok</span>
+                                    <span style={{color:"#60a5fa"}}>· פלט: {p3Synthesis.usage?.output_tokens||0} tok</span>
+                                    <span style={{color:"#86efac",fontWeight:"700"}}>· עלות: ${(p3Synthesis.costUsd||0).toFixed(4)}</span>
+                                    <span style={{color:"#a78bfa"}}>· גרסה: {p3Synthesis.promptVersion||"—"}</span>
+                                    {p3Synthesis.clarificationId&&conceptDef.clarification?.id&&p3Synthesis.clarificationId!==conceptDef.clarification.id&&<span style={{color:"#fcd34d"}}>⚠ נותח עם הבהרה קודמת</span>}
+                                  </div>
+                                </div>
+
+                                {/* פעולות */}
+                                <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
+                                  <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||""}`:"🔄 הרץ שוב (הקיים לארכיון)"}</button>
+                                  <button onClick={()=>setP3ShowPrompt(!p3ShowPrompt)} disabled={p3Loading} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{p3ShowPrompt?"🔽 הסתר פרומפט":"👁 פרומפט שהורץ"}</button>
+                                  {(stage4Data.phase3_previous_syntheses||[]).length>0&&<span style={{padding:"5px 10px",background:"#1e1b4b22",borderRadius:"5px",fontSize:"10px",color:"#a5b4fc",alignSelf:"center"}}>📜 {stage4Data.phase3_previous_syntheses.length} גרסאות קודמות בארכיון</span>}
+                                </div>
+                                {p3Error&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3Error}</div>}
+                                {p3ShowPrompt&&p3Synthesis._promptSent&&(
+                                  <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
+                                    <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"6px"}}>אורך פרומפט שהורץ: {p3Synthesis._promptLength?.toLocaleString()||"?"} תווים</div>
+                                    <pre style={{maxHeight:"400px",overflowY:"auto",fontSize:"10px",color:"#86efac",lineHeight:"1.5",whiteSpace:"pre-wrap",direction:"rtl",fontFamily:"inherit",margin:0,padding:"8px",background:"#000",borderRadius:"4px"}}>{p3Synthesis._promptSent}</pre>
+                                  </div>
+                                )}
+
+                                {/* 1. מסקנה מרכזית */}
+                                {p3Synthesis.centralConclusion&&(
+                                  <div style={{padding:"12px 14px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px",borderRight:`4px solid ${dimColor}`}}>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"6px"}}>1️⃣ מסקנה מרכזית</div>
+                                    <div style={{fontSize:"13px",color:"#f1f5f9",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{p3Synthesis.centralConclusion}</div>
+                                  </div>
+                                )}
+
+                                {/* 2. טענות משנה */}
+                                {Array.isArray(p3Synthesis.subClaims)&&p3Synthesis.subClaims.length>0&&(
+                                  <div style={{marginBottom:"10px"}}>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>2️⃣ טענות משנה ({p3Synthesis.subClaims.length})</div>
+                                    <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
+                                      {p3Synthesis.subClaims.map((sc,si)=>{
+                                        const fbColor={explicit:"#60a5fa",implicit:"#a78bfa",both:"#f59e0b"}[sc.fieldBasis]||"#64748b";
+                                        const fbLabel={explicit:"שדה גלוי",implicit:"שדה נרמז",both:"שני השדות"}[sc.fieldBasis]||sc.fieldBasis;
+                                        return (
+                                          <div key={si} style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${fbColor}`}}>
+                                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"10px",flexWrap:"wrap",marginBottom:"6px"}}>
+                                              <div style={{fontSize:"12px",color:"#f1f5f9",fontWeight:"700",flex:1}}>{si+1}. {sc.claim}</div>
+                                              {sc.fieldBasis&&<span style={{fontSize:"10px",color:fbColor,background:`${fbColor}22`,padding:"2px 8px",borderRadius:"3px",fontWeight:"700"}}>{fbLabel}</span>}
+                                            </div>
+                                            {sc.explicitEvidence&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#1e3a5f22",borderRadius:"4px",marginTop:"4px"}}><strong style={{color:"#60a5fa"}}>שדה גלוי:</strong> {sc.explicitEvidence}</div>}
+                                            {sc.implicitEvidence&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",padding:"6px 8px",background:"#4c1d9522",borderRadius:"4px",marginTop:"4px"}}><strong style={{color:"#a78bfa"}}>שדה נרמז:</strong> {sc.implicitEvidence}</div>}
+                                            {Array.isArray(sc.supportingUnits)&&sc.supportingUnits.length>0&&(
+                                              <details style={{marginTop:"6px"}}>
+                                                <summary style={{cursor:"pointer",fontSize:"10px",color:"#94a3b8",fontWeight:"700"}}>▸ יחידות תומכות ({sc.supportingUnits.length})</summary>
+                                                <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
+                                                  {sc.supportingUnits.map((su,sui)=>(
+                                                    <div key={sui} style={{fontSize:"10px",color:"#cbd5e1",padding:"4px 6px",background:"#1e293b",borderRadius:"3px"}}>
+                                                      <strong>{su.unitName}</strong> <span style={{color:"#64748b"}}>({su.chapter})</span>
+                                                      {su.quote&&<div style={{marginTop:"2px",color:"#94a3b8",fontStyle:"italic"}}>"{su.quote}"</div>}
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              </details>
+                                            )}
+                                            {Array.isArray(sc.commentary)&&sc.commentary.length>0&&(
+                                              <details style={{marginTop:"4px"}}>
+                                                <summary style={{cursor:"pointer",fontSize:"10px",color:"#94a3b8",fontWeight:"700"}}>▸ פרשנות תומכת ({sc.commentary.length})</summary>
+                                                <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
+                                                  {sc.commentary.map((cm,cmi)=>(
+                                                    <div key={cmi} style={{fontSize:"10px",color:"#cbd5e1",padding:"4px 6px",background:"#1e293b",borderRadius:"3px"}}>
+                                                      <strong style={{color:"#fcd34d"}}>{cm.author}</strong>{cm.work?`, ${cm.work}`:""}{cm.page?`, עמ' ${cm.page}`:""}
+                                                      {cm.quote&&<div style={{marginTop:"2px",color:"#94a3b8"}}>"{cm.quote}"</div>}
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              </details>
+                                            )}
+                                            {sc.differences&&<div style={{marginTop:"6px",padding:"6px 8px",background:"#78350f22",borderRadius:"4px",fontSize:"10px",color:"#fcd34d"}}><strong>הבדלים בין יחידות:</strong> {sc.differences}</div>}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* 3. תרומת ההשוואה */}
+                                {p3Synthesis.comparativeContribution&&(
+                                  <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px"}}>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>3️⃣ תרומת ההשוואה למקבילה</div>
+                                    {["preserved","changes","sondergut"].map(k=>{
+                                      const section=p3Synthesis.comparativeContribution[k];
+                                      if(!section) return null;
+                                      const label={preserved:"✓ נשמר",changes:"⇄ השתנה",sondergut:"★ סונדרגוט"}[k];
+                                      const color={preserved:"#34d399",changes:"#fbbf24",sondergut:"#60a5fa"}[k];
+                                      // יכול להיות אובייקט עם explicit/implicit או מחרוזת
+                                      if(typeof section==="string"){
+                                        return (
+                                          <div key={k} style={{marginBottom:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${color}`}}>
+                                            <div style={{fontSize:"11px",fontWeight:"700",color:color,marginBottom:"3px"}}>{label}</div>
+                                            <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6"}}>{section}</div>
+                                          </div>
+                                        );
+                                      }
+                                      return (
+                                        <div key={k} style={{marginBottom:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${color}`}}>
+                                          <div style={{fontSize:"11px",fontWeight:"700",color:color,marginBottom:"4px"}}>{label}</div>
+                                          {section.explicit&&<div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"4px",padding:"4px 6px",background:"#1e3a5f22",borderRadius:"3px"}}><strong style={{color:"#60a5fa"}}>שדה גלוי:</strong> {section.explicit}</div>}
+                                          {section.implicit&&<div style={{fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6",padding:"4px 6px",background:"#4c1d9522",borderRadius:"3px"}}><strong style={{color:"#a78bfa"}}>שדה נרמז:</strong> {section.implicit}</div>}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+
+                                {/* 4. סייגים */}
+                                {Array.isArray(p3Synthesis.qualifications)&&p3Synthesis.qualifications.length>0&&(
+                                  <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px"}}>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>4️⃣ סייגים, ראיות נגד וחוסרים ({p3Synthesis.qualifications.length})</div>
+                                    <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                                      {p3Synthesis.qualifications.map((q,qi)=>{
+                                        const label={sayag:"סייג","counter-evidence":"ראיית נגד",gap:"חוסר"}[q.type]||q.type;
+                                        const color={sayag:"#fbbf24","counter-evidence":"#f87171",gap:"#60a5fa"}[q.type]||"#64748b";
+                                        return (
+                                          <div key={qi} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${color}`}}>
+                                            <div style={{display:"flex",gap:"6px",alignItems:"flex-start"}}>
+                                              <span style={{fontSize:"9px",color:color,background:`${color}22`,padding:"2px 6px",borderRadius:"3px",fontWeight:"700",whiteSpace:"nowrap"}}>{label}</span>
+                                              <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",flex:1}}>{q.text}</div>
+                                            </div>
+                                            {Array.isArray(q.affectedUnits)&&q.affectedUnits.length>0&&<div style={{marginTop:"3px",fontSize:"9px",color:"#64748b"}}>יחידות: {q.affectedUnits.join(", ")}</div>}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* 5. בעיות נקודתיות */}
+                                {Array.isArray(p3Synthesis.flaggedIssues)&&p3Synthesis.flaggedIssues.length>0&&(
+                                  <div style={{padding:"10px 12px",background:"#78350f22",borderRadius:"7px",marginBottom:"10px",border:"1px dashed #f59e0b55"}}>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#fbbf24",marginBottom:"8px"}}>⚠ בעיות נקודתיות שעלו ({p3Synthesis.flaggedIssues.length}) — לבדיקתך</div>
+                                    <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                                      {p3Synthesis.flaggedIssues.map((fi,fii)=>{
+                                        const sevColor={low:"#60a5fa",medium:"#fbbf24",high:"#f87171"}[fi.severity]||"#94a3b8";
+                                        return (
+                                          <div key={fii} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px"}}>
+                                            <div style={{display:"flex",gap:"6px",alignItems:"center",marginBottom:"3px"}}>
+                                              <span style={{fontSize:"9px",color:sevColor,background:`${sevColor}22`,padding:"2px 6px",borderRadius:"3px",fontWeight:"700"}}>{fi.severity||"—"}</span>
+                                              <strong style={{fontSize:"11px",color:"#f1f5f9"}}>{fi.unitName}</strong>
+                                            </div>
+                                            <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6"}}>{fi.issue}</div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* 6. סדר דיון */}
+                                {p3Synthesis.suggestedOrder&&(
+                                  <div style={{padding:"10px 12px",background:"#064e3b22",borderRadius:"7px",marginBottom:"10px",border:"1px solid #065f4655"}}>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#86efac",marginBottom:"6px"}}>6️⃣ סדר מוצע לכתיבת הדיון</div>
+                                    <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.7",whiteSpace:"pre-wrap"}}>{p3Synthesis.suggestedOrder}</div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {/* ═══ פאזה 2 (ארכיון בלבד — אינה נדרשת יותר) ═══ */}
+                        {conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&p2Proposal&&(
+                        <details style={{marginBottom:"12px"}}>
+                          <summary style={{cursor:"pointer",padding:"8px 12px",background:"#1e1b4b22",borderRadius:"6px",fontSize:"11px",color:"#a5b4fc",border:"1px dashed #818cf855"}}>📜 ארכיון: פאזה 2 — בדיקת התאמה פר-יחידה (קודמת, אינה נדרשת לפאזה 3)</summary>
+                        <div style={{marginTop:"10px",padding:"14px",background:"#1e293b",borderRadius:"8px",border:`1px solid ${dimColor}66`,marginBottom:"12px"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                              <div style={{fontSize:"13px",fontWeight:"700",color:dimColor}}>🔍 פאזה 2 — בדיקת התאמה (ארכיון)</div>
                               <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>סיווג כל מסקנה כ-נתמכת / מסויגת / חורגת / אין מסקנה / לא ניתן להכריע</div>
                             </div>
 
@@ -4004,6 +4419,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                               </>
                             )}
                           </div>
+                        </details>
                         )}
 
                         {/* ד'1 הישן נשמר ב-Firebase אבל לא מוצג בכלי יותר (נדרש ע״י החוקרת, 22.10.2026) */}
