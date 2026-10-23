@@ -2693,8 +2693,10 @@ ${buildUnitBlock(unit)}
   }
 
   // ─ שלב 4 פאזה 3: סינתזה ─
-  const PROMPT_VERSION_P3="v3-2026-10-23-no-implicit-note-duplicate";
+  const PROMPT_VERSION_P3="v4-2026-10-23-batched-resumable";
+  const P3_BATCH_SIZE=12;
   const p3Synthesis=stage4Data.phase3_synthesis||null;
+  const p3InProgress=stage4Data.phase3_in_progress||null;
 
   function savePhase3(synthesis){
     const prevList=Array.isArray(stage4Data.phase3_previous_syntheses)?stage4Data.phase3_previous_syntheses:[];
@@ -2717,8 +2719,196 @@ ${buildUnitBlock(unit)}
 
   // תצוגה מקדימה של הקלט המדויק שיישלח לפאזה 3 (לקביעת גודל ובדיקת שלמות)
   function buildP3Preview(){
-    const built=buildSynthesisPrompt(true);
-    return built;
+    const s3=stageData.stage3;
+    const allUnits=s3?.detailedConclusions||[];
+    const totalBatches=Math.ceil(allUnits.length/P3_BATCH_SIZE);
+    const samplePrompt=totalBatches>0?buildBatchPrompt(0,allUnits.slice(0,P3_BATCH_SIZE),totalBatches,allUnits.length):"";
+    const isEternal=(concept==="נצח"||concept==="עולם");
+    return {prompt:samplePrompt,promptLength:samplePrompt.length,unitsCount:allUnits.length,totalBatches,batchSize:P3_BATCH_SIZE,isEternal};
+  }
+
+  // דחיסה של המלצות פרשנים — רק אומצו
+  function compactScholarRec(sr){
+    if(!sr||typeof sr!=="object") return "";
+    const lines=[];
+    Object.keys(sr).forEach(k=>{
+      const v=sr[k];
+      if(!v||typeof v!=="object") return;
+      if(!v.adopted) return;
+      const comm=Array.isArray(v.commentators)?v.commentators.join(", "):(v.commentators||"");
+      const verse=v.suggestVerse||"";
+      const text=(v.text||"").substring(0,250);
+      lines.push(`  - [${k}] ${comm?comm+" ":""}${verse?"פסוק "+verse+" ":""}${text?"— "+text:""}`);
+    });
+    return lines.join("\n");
+  }
+
+  // בנה בלוק יחידה למעבר ל-AI (משותף לכל הפרומפטים)
+  function buildUnitBlockP3(cu,idxGlobal,total){
+    const ac=(raw.analysis_chronicles&&raw.analysis_chronicles[cu.uid]&&raw.analysis_chronicles[cu.uid][concept])||{};
+    const asrc=(raw.analysis_source&&raw.analysis_source[cu.uid]&&raw.analysis_source[cu.uid][concept])||{};
+    const cn=cu.hasConclusion?cu.conclusion:"";
+    const cf=(raw.compareFactual&&raw.compareFactual[cu.uid]&&raw.compareFactual[cu.uid][concept])||"";
+    const expChr=ac.explicit_note||"";
+    const expSrc=asrc.explicit_note||"";
+    const scholarChr=compactScholarRec(ac.scholarRecommendations);
+    const scholarSrc=compactScholarRec(asrc.scholarRecommendations);
+    const hasAny=cn||expChr||expSrc||cf;
+    if(!hasAny) return `━━━ יחידה [${idxGlobal+1}/${total}]: ${cu.unitName} (${cu.chapter}) [מזהה: ${cu.uid}] — אין חומר\n`;
+    return `━━━ יחידה [${idxGlobal+1}/${total}]: ${cu.unitName} (${cu.chapter}) [מזהה: ${cu.uid}] ${cu.hasParallel?"[מקבילה: "+cu.sourceRef+"]":"[סונדרגוט — אין מקבילה]"}
+
+[שדה גלוי · דה"י — ממצא לשוני ישיר]
+${expChr||"(לא תועד)"}
+
+${cu.hasParallel?`[שדה גלוי · מקבילה — ממצא לשוני ישיר]
+${expSrc||"(לא תועד)"}
+`:""}
+${scholarChr?`[פרשנות מתועדת · דה"י — אומצה ע״י החוקרת]
+${scholarChr}
+`:""}${scholarSrc?`[פרשנות מתועדת · מקבילה — אומצה ע״י החוקרת]
+${scholarSrc}
+`:""}${cf?`[ניתוח עובדתי השוואתי משלב ב']
+${cf}
+`:""}[המסקנה המחקרית — compareNotes (כוללת פירוש השדה הנרמז)]
+${cn||"(לא נכתבה מסקנה)"}
+`;
+  }
+
+  // ─ שלב א' של סינתזה: איסוף תצפיות לקבוצת יחידות (resumable) ─
+  function buildBatchPrompt(batchIdx,batchUnits,totalBatches,totalUnits){
+    const who=character==="solomon"?"שלמה":"דוד";
+    const isEternal=(concept==="נצח"||concept==="עולם");
+    const startGlobal=batchIdx*P3_BATCH_SIZE;
+    const unitBlocks=batchUnits.map((cu,i)=>buildUnitBlockP3(cu,startGlobal+i,totalUnits)).join("\n");
+    const eternalNote=isEternal?`\n### הוראה מיוחדת: המושג "${concept}" הוא פרמטר תחת "ברית". הסתמך בעיקר על השדה הגלוי (הופעת המילים "נצח/לנצח/עולם/לעולם/לעולמים/עד עולם/לדור ודור").\n`:"";
+
+    return `אתה עוזר מחקר לתזה בתנ"ך. מטרתך בשלב זה: לחלץ **תצפיות מובנות** מתוך קבוצה של יחידות — ולא לנסח סינתזה. סינתזה תהיה בשלב מאוחר יותר, אחרי שכל הקבוצות ייאספו.
+
+גרסת פרומפט: ${PROMPT_VERSION_P3} (שלב א' — איסוף)
+
+### המושג: "${concept}" · הדמות: ${who}
+### קבוצה: ${batchIdx+1} מתוך ${totalBatches} · ${batchUnits.length} יחידות (${startGlobal+1}-${startGlobal+batchUnits.length} מתוך ${totalUnits})
+
+### ההגדרה המחייבת (מפרק ב׳ של התזה):
+${conceptDef.text}
+
+### הבהרת יישום:
+${conceptDef.clarification.text}
+${eternalNote}
+### שני השדות
+- **שדה גלוי** (explicit) — ממצא לשוני ישיר (מילים מהשדה הסמנטי). בחומר: תחת "שדה גלוי · דה"י" / "שדה גלוי · מקבילה".
+- **שדה נרמז** (implicit) — פירוש של פעולות ועיצוב ספרותי, שהחוקרת כתבה במפורש במסקנה המחקרית (compareNotes). לרוב החוקרת עצמה אומרת "בשדה הסמוי/הנרמז".
+
+### תפקידך בשלב זה
+לכל יחידה בקבוצה הנוכחית, חלץ תצפיות מובנות על נוכחות המושג. אל תסנתז, אל תייצר טענות על-יחידתיות, אל תנסח "מסקנה מרכזית" — זה יבוא בשלב המיזוג.
+
+### כללים
+- **ציטוטים**: שמר שם מחבר, חיבור ועמוד בדיוק כפי שמופיעים בחומר. אל תמציא.
+- **ייחוס לשדות**: ציין במפורש אם ראיה שייכת לשדה גלוי, לשדה נרמז או לשניהם.
+- **אין טענות חדשות על נביאים**: אם המסקנה המקורית הזכירה — צטט בלבד.
+- **אין להעדיף סיווג**: אל תחליט מראש שהמושג חזק/חלש.
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״) או בגרש בודד ʼ.
+- אל תשבור שורה בתוך ערך מחרוזת.
+- פלט רק JSON, ללא טקסט מקדים או מסיים, ללא markdown.
+
+### היחידות בקבוצה (${batchUnits.length}):
+${unitBlocks}
+
+### פורמט התשובה — תצפיות מובנות ליחידות הקבוצה בלבד:
+
+{
+  "unitObservations": [
+    {
+      "uid": "מזהה היחידה בדיוק כפי שהופיע למעלה",
+      "unitName": "שם היחידה",
+      "chapter": "פרק",
+      "explicitField": {
+        "presence": "חזק|חלש|אין",
+        "description": "ממצא בשדה הגלוי של דה״י (ציטוט/תיאור)",
+        "parallelDifference": "מה שונה במקבילה בשדה הגלוי (אם רלוונטי)"
+      },
+      "implicitField": {
+        "presence": "חזק|חלש|אין",
+        "description": "פירוש השדה הנרמז של דה״י (מתוך compareNotes)",
+        "parallelDifference": "מה שונה במקבילה בשדה הנרמז (אם רלוונטי)"
+      },
+      "keyCommentary": [{"author":"","work":"","page":"","claim":""}],
+      "comparativeMove": "preserved|changed|added|sondergut|no-parallel",
+      "comparativeDetail": "תיאור קצר של מה הכרוניסט עשה",
+      "flaggedIssue": null
+    }
+  ],
+  "batchObservations": "תצפיות כלליות על הקבוצה — דפוסים שעולים, חפיפות בין יחידות — בלי לנסח טענה סופית"
+}`;
+  }
+
+  // ─ שלב ב' של סינתזה: מיזוג כל התצפיות לפלט 6-חלקי ─
+  function buildMergePrompt(allBatches){
+    const who=character==="solomon"?"שלמה":"דוד";
+    const isEternal=(concept==="נצח"||concept==="עולם");
+    const allObservations=allBatches.flatMap(b=>(b.result?.unitObservations)||[]);
+    const batchNotes=allBatches.map((b,i)=>`[קבוצה ${i+1}] ${b.result?.batchObservations||""}`).filter(x=>x.length>12).join("\n\n");
+    const eternalNote=isEternal?`\n### הוראה מיוחדת: המושג "${concept}" הוא פרמטר תחת "ברית". הסתמך בעיקר על השדה הגלוי.\n`:"";
+
+    return `אתה עוזר מחקר לתזה בתנ"ך. בשלב קודם איסופנו תצפיות מובנות מכל ${allObservations.length} היחידות של ${who} למושג "${concept}". עכשיו תפקידך: לסנתז אותן לפלט בן 6 חלקים המוכן לכתיבת פרק בתזה.
+
+גרסת פרומפט: ${PROMPT_VERSION_P3} (שלב ב' — מיזוג)
+
+### המושג: "${concept}" · הדמות: ${who}
+
+### ההגדרה המחייבת (מפרק ב׳):
+${conceptDef.text}
+
+### הבהרת יישום:
+${conceptDef.clarification.text}
+${eternalNote}
+### הוראות הסינתזה
+
+**ס1. מסקנה מרכזית + טענות משנה** — אין לכפות טענה אחידה. יחידות שונות עשויות ללמד דברים שונים — שמר את ההבדלים.
+**ס2. כל טענת משנה תתויג** fieldBasis = explicit / implicit / both.
+**ס3. סתירה בין יחידות ≠ חריגה**; flaggedIssues רק לפערים בין מסקנה בודדת לראיותיה.
+**ס4. אין לספור יחידות כתנאי** — מספרים ייכללו רק אם מועילים לטיעון.
+**ס5. ייחוס מקורות — חובה שלמה**: שם מחבר, חיבור, עמוד — כפי שהופיעו בתצפיות. אין להמציא.
+**ס6. אין לייצר השוואה עצמאית לנביאים**.
+**ס7. ההשוואה למקבילה** — דון במה שנשמר/השתנה/סונדרגוט, מפוצל לשני השדות.
+**ס8. סדר דיון** — הצע סדר כתיבה.
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים.
+- פלט רק JSON, ללא טקסט או markdown.
+
+### תצפיות שאוספנו (${allObservations.length} יחידות):
+${JSON.stringify(allObservations,null,2)}
+
+${batchNotes?`### תצפיות ברמת קבוצה:
+${batchNotes}
+`:""}
+### פורמט התשובה — פלט 6-חלקי:
+
+{
+  "centralConclusion": "מסקנה מרכזית על ביטוי המושג בעיצוב דמות ${who}",
+  "subClaims": [
+    {
+      "claim": "טענת משנה",
+      "fieldBasis": "explicit|implicit|both",
+      "supportingUnits": [{"uid":"","unitName":"","chapter":"","quote":""}],
+      "explicitEvidence": "ראיות מהשדה הגלוי",
+      "implicitEvidence": "ראיות מהשדה הנרמז",
+      "commentary": [{"author":"","work":"","page":"","quote":""}],
+      "differences": "הבדלים בין יחידות"
+    }
+  ],
+  "comparativeContribution": {
+    "preserved": {"explicit":"","implicit":""},
+    "changes": {"explicit":"","implicit":""},
+    "sondergut": {"explicit":"","implicit":""}
+  },
+  "qualifications": [{"type":"sayag|counter-evidence|gap","text":"","affectedUnits":[]}],
+  "flaggedIssues": [{"uid":"","unitName":"","issue":"","severity":"low|medium|high"}],
+  "suggestedOrder": "סדר מוצע לכתיבה"
+}`;
   }
 
   function buildSynthesisPrompt(returnMeta){
@@ -2875,66 +3065,199 @@ ${unitBlocks}
     return prompt;
   }
 
+  // ניסיון פיענוח JSON עם 4 שלבי fallback (אותו קוד כמו בפאזה 2)
+  function tryParseJson(text){
+    let parsed=null; let parseError=null;
+    try{ const clean=text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,""); parsed=JSON.parse(clean); }catch(e){ parseError=e; }
+    if(!parsed){
+      const first=text.indexOf("{"),last=text.lastIndexOf("}");
+      if(first>=0&&last>first){ try{ parsed=JSON.parse(text.substring(first,last+1)); parseError=null; }catch(e){ parseError=e; } }
+    }
+    if(!parsed){
+      const first=text.indexOf("{"),last=text.lastIndexOf("}");
+      if(first>=0&&last>first){
+        let fixed=text.substring(first,last+1);
+        fixed=fixed.replace(/,(\s*[}\]])/g,"$1").replace(/[“”״]/g,"ʼ");
+        try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+      }
+    }
+    if(!parsed){
+      const first=text.indexOf("{"),last=text.lastIndexOf("}");
+      if(first>=0&&last>first){
+        let fixed=text.substring(first,last+1);
+        fixed=fixed.replace(/([֐-׿])"([֐-׿])/g,"$1\\\"$2").replace(/\s"([֐-׿])/g," \\\"$1").replace(/([֐-׿])"(?=[\s.,;])/g,"$1\\\"").replace(/,(\s*[}\]])/g,"$1");
+        try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+      }
+    }
+    return {parsed,error:parseError};
+  }
+
+  // שמירת מצב ביניים של הסינתזה (קבוצות שעובדו, הקבוצות שעוד לא, סטטוס מיזוג)
+  function saveP3InProgress(inProg){
+    const newStage4={...stage4Data,phase3_in_progress:inProg,lastUpdated:Date.now()};
+    const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+    setStageData(newData);
+    const all=stageResults||LS_get("stageResults",{});
+    const updated={...all,[resultsKey]:newData};
+    if(setStageResults) setStageResults(updated);
+    LS_set("stageResults",updated);
+    fbSaveStageResults(updated);
+  }
+
+  // יוצר את התכנון של קבוצות (או מחזיר קיים)
+  function initP3Plan(){
+    const s3=stageData.stage3;
+    const allUnits=s3.detailedConclusions;
+    const existing=stage4Data.phase3_in_progress;
+    if(existing&&existing.batchSize===P3_BATCH_SIZE&&existing.totalUnits===allUnits.length&&existing.promptVersion===PROMPT_VERSION_P3) return existing;
+    // תכנון חדש
+    const batches=[];
+    for(let i=0;i<allUnits.length;i+=P3_BATCH_SIZE){
+      const slice=allUnits.slice(i,i+P3_BATCH_SIZE);
+      batches.push({idx:batches.length,unitUids:slice.map(u=>u.uid),status:"pending"});
+    }
+    return {
+      startedAt:new Date().toISOString(),
+      promptVersion:PROMPT_VERSION_P3,
+      batchSize:P3_BATCH_SIZE,
+      totalUnits:allUnits.length,
+      batches,
+      mergeStatus:"pending",
+      totalUsage:{input_tokens:0,output_tokens:0},
+      totalCost:0
+    };
+  }
+
   async function generateSynthesis(){
     if(!conceptDef||!conceptDef.text){ setP3Error("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
     if(!conceptDef.clarification||!conceptDef.clarification.text){ setP3Error("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
     const s2=stageData.stage2, s3=stageData.stage3;
     if(!s2||!Array.isArray(s2.tableRows)||!s2.tableRows.length){ setP3Error("אין נתוני שלב 2."); return; }
     if(!s3||s3.source!=="compareNotes"||!Array.isArray(s3.detailedConclusions)){ setP3Error("אין נתוני שלב 3 בפורמט החדש."); return; }
-    if(p3Synthesis){
+
+    // אם יש כבר סינתזה סגורה — ניידה לארכיון תחילה
+    if(p3Synthesis&&!stage4Data.phase3_in_progress){
       const prevCount=(stage4Data.phase3_previous_syntheses||[]).length;
-      if(!confirm(`קיימת סינתזה (${p3Synthesis.promptVersion||"ללא גרסה"}). הסינתזה הקיימת תועבר לארכיון (סה"כ ${prevCount+1} גרסאות קודמות). להמשיך?`)) return;
+      if(!confirm(`קיימת סינתזה (${p3Synthesis.promptVersion||"ללא גרסה"}). הסינתזה הקיימת תועבר לארכיון (סה"כ ${prevCount+1} גרסאות קודמות). להמשיך בבניית חדשה?`)) return;
+      // ניקוי: נייד לארכיון ונקה את ה-synthesis הנוכחי לפני תכנון קבוצות חדש
+      const prevList=Array.isArray(stage4Data.phase3_previous_syntheses)?stage4Data.phase3_previous_syntheses:[];
+      const newPrev=[...prevList,{...p3Synthesis,archivedAt:new Date().toISOString()}];
+      const cleaned={...stage4Data,phase3_synthesis:null,phase3_previous_syntheses:newPrev,phase3_in_progress:null,lastUpdated:Date.now()};
+      const newData={...stageData,stage4:cleaned,lastUpdated:Date.now()};
+      setStageData(newData);
+      const all=stageResults||LS_get("stageResults",{});
+      const updated={...all,[resultsKey]:newData};
+      if(setStageResults) setStageResults(updated);
+      LS_set("stageResults",updated);
+      fbSaveStageResults(updated);
+      // המתן למחזור רנדר קצר ואז התחל מחדש
+      await new Promise(r=>setTimeout(r,100));
     }
-    setP3Error(""); setP3Loading(true); setP3Progress("בונה פרומפט מלא (כל היחידות)...");
+
+    setP3Error(""); setP3Loading(true);
+
+    // תכנון או טעינה מצב ביניים קיים
+    let plan=initP3Plan();
+    saveP3InProgress(plan);
+
+    const allUnits=s3.detailedConclusions;
+    const unitsByUid={};
+    allUnits.forEach(u=>{ unitsByUid[u.uid]=u; });
+
     try{
-      const prompt=buildSynthesisPrompt();
-      setP3Progress(`שולח ל-AI (${prompt.length.toLocaleString()} תווים)...`);
-      const r=await aiCallDirectWithUsage(prompt,32000);
-      setP3Progress("מפענח פלט...");
-      let parsed=null; let parseError=null;
-      try{ const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,""); parsed=JSON.parse(clean); }catch(e){ parseError=e; }
-      if(!parsed){
-        const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
-        if(first>=0&&last>first){ try{ parsed=JSON.parse(r.text.substring(first,last+1)); parseError=null; }catch(e){ parseError=e; } }
-      }
-      if(!parsed){
-        const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
-        if(first>=0&&last>first){
-          let fixed=r.text.substring(first,last+1);
-          fixed=fixed.replace(/,(\s*[}\]])/g,"$1").replace(/[“”״]/g,"ʼ");
-          try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+      // ─ שלב א': הרצת קבוצות שעוד לא הושלמו ─
+      for(let bi=0;bi<plan.batches.length;bi++){
+        if(plan.batches[bi].status==="done") continue;
+        setP3Progress(`קבוצה ${bi+1}/${plan.batches.length}: ${plan.batches[bi].unitUids.length} יחידות — שולח ל-AI...`);
+        const batchUnits=plan.batches[bi].unitUids.map(uid=>unitsByUid[uid]).filter(Boolean);
+        const prompt=buildBatchPrompt(bi,batchUnits,plan.batches.length,allUnits.length);
+        try{
+          const r=await aiCallDirectWithUsage(prompt,16000);
+          const {parsed,error}=tryParseJson(r.text);
+          if(!parsed){
+            plan.batches[bi]={...plan.batches[bi],status:"error",error:`JSON parse: ${error?error.message:"לא נמצא"}`,processedAt:new Date().toISOString()};
+            saveP3InProgress(plan);
+            setP3Error(`קבוצה ${bi+1} נכשלה: ${error?error.message:"JSON parse"}. התקדמות נשמרה — נסי שוב להמשיך.`);
+            setP3Loading(false); setP3Progress(""); return;
+          }
+          plan.batches[bi]={
+            ...plan.batches[bi],
+            status:"done",
+            result:parsed,
+            processedAt:new Date().toISOString(),
+            usage:r.usage,
+            costUsd:r.costUsd,
+            _promptLength:prompt.length
+          };
+          plan.totalUsage.input_tokens+=(r.usage?.input_tokens||0);
+          plan.totalUsage.output_tokens+=(r.usage?.output_tokens||0);
+          plan.totalCost+=(r.costUsd||0);
+          saveP3InProgress(plan);
+        }catch(batchErr){
+          plan.batches[bi]={...plan.batches[bi],status:"error",error:String(batchErr.message||batchErr),processedAt:new Date().toISOString()};
+          saveP3InProgress(plan);
+          setP3Error(`קבוצה ${bi+1} נכשלה: ${batchErr.message||batchErr}. התקדמות נשמרה — נסי שוב להמשיך.`);
+          setP3Loading(false); setP3Progress(""); return;
         }
       }
-      if(!parsed){
-        const first=r.text.indexOf("{"),last=r.text.lastIndexOf("}");
-        if(first>=0&&last>first){
-          let fixed=r.text.substring(first,last+1);
-          fixed=fixed.replace(/([֐-׿])"([֐-׿])/g,"$1\\\"$2").replace(/\s"([֐-׿])/g," \\\"$1").replace(/([֐-׿])"(?=[\s.,;])/g,"$1\\\"").replace(/,(\s*[}\]])/g,"$1");
-          try{ parsed=JSON.parse(fixed); parseError=null; }catch(e){ parseError=e; }
+
+      // ─ שלב ב': מיזוג כל התצפיות לפלט 6-חלקי ─
+      setP3Progress(`מיזוג סופי של ${plan.batches.length} קבוצות...`);
+      const mergePrompt=buildMergePrompt(plan.batches);
+      try{
+        const mr=await aiCallDirectWithUsage(mergePrompt,32000);
+        const {parsed,error}=tryParseJson(mr.text);
+        if(!parsed){
+          plan.mergeStatus="error";
+          plan.mergeError=`JSON parse: ${error?error.message:"לא נמצא"}`;
+          saveP3InProgress(plan);
+          setP3Error(`מיזוג סופי נכשל: ${error?error.message:"JSON parse"}. התצפיות נשמרו — ניתן להריץ רק את המיזוג שוב.`);
+          setP3Loading(false); setP3Progress(""); return;
         }
+        plan.totalUsage.input_tokens+=(mr.usage?.input_tokens||0);
+        plan.totalUsage.output_tokens+=(mr.usage?.output_tokens||0);
+        plan.totalCost+=(mr.costUsd||0);
+        plan.mergeStatus="done";
+        plan.mergePromptLength=mergePrompt.length;
+
+        const synthesis={
+          ...parsed,
+          promptVersion:PROMPT_VERSION_P3,
+          clarificationId:conceptDef.clarification.id||null,
+          clarificationGeneratedAt:conceptDef.clarification.generatedAt||conceptDef.clarification.editedAt||null,
+          definitionAt:conceptDef.editedAt||conceptDef.savedAt||null,
+          generatedAt:new Date().toISOString(),
+          usage:plan.totalUsage,
+          costUsd:plan.totalCost,
+          totalUnits:allUnits.length,
+          batchCount:plan.batches.length,
+          batchSize:P3_BATCH_SIZE,
+          _mergePromptLength:mergePrompt.length,
+          _batchObservations:plan.batches.map(b=>({idx:b.idx,count:b.result?.unitObservations?.length||0,notes:b.result?.batchObservations||""}))
+        };
+        // שמור הכל ביחד — synthesis הסופי + נקה את phase3_in_progress
+        const newStage4={
+          ...stage4Data,
+          phase3_synthesis:synthesis,
+          phase3_in_progress:null,
+          lastUpdated:Date.now()
+        };
+        const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+        setStageData(newData);
+        const all=stageResults||LS_get("stageResults",{});
+        const updated={...all,[resultsKey]:newData};
+        if(setStageResults) setStageResults(updated);
+        LS_set("stageResults",updated);
+        fbSaveStageResults(updated);
+        setP3Progress("");
+      }catch(mergeErr){
+        plan.mergeStatus="error";
+        plan.mergeError=String(mergeErr.message||mergeErr);
+        saveP3InProgress(plan);
+        setP3Error(`מיזוג סופי נכשל: ${mergeErr.message||mergeErr}. התצפיות נשמרו.`);
       }
-      if(!parsed){
-        setP3Error(`JSON parse — ${parseError?parseError.message:"לא נמצא JSON"}. פלט (500 תווים ראשונים): ${r.text.substring(0,500)}`);
-        setP3Loading(false); setP3Progress("");
-        return;
-      }
-      const synthesis={
-        ...parsed,
-        promptVersion:PROMPT_VERSION_P3,
-        clarificationId:conceptDef.clarification.id||null,
-        clarificationGeneratedAt:conceptDef.clarification.generatedAt||conceptDef.clarification.editedAt||null,
-        definitionAt:conceptDef.editedAt||conceptDef.savedAt||null,
-        generatedAt:new Date().toISOString(),
-        usage:r.usage,
-        costUsd:r.costUsd,
-        totalUnits:s3.detailedConclusions.length,
-        _promptSent:prompt.substring(0,20000),
-        _promptLength:prompt.length
-      };
-      savePhase3(synthesis);
-      setP3Progress("");
     }catch(e){
-      setP3Error(`שגיאה: ${e.message||e}`);
+      setP3Error(`שגיאה כללית: ${e.message||e}`);
     }
     setP3Loading(false);
   }
@@ -3967,23 +4290,73 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                             {!p3Synthesis?(
                               <>
                                 <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.6"}}>
-                                  מייצר סינתזה אחת מכלל {(stageData.stage3?.detailedConclusions||[]).length} היחידות של {character==="solomon"?"שלמה":"דוד"} למושג <strong>"{concept}"</strong>.<br/>
-                                  הקלט ל-AI: ההגדרה + הבהרת היישום + המסקנות המחקריות שלך + ההמלצות הפרשניות שאימצת + שדה גלוי+נרמז לדה״י ולמקבילה + הניתוח ההשוואתי העובדתי.
+                                  מייצר סינתזה מכלל {(stageData.stage3?.detailedConclusions||[]).length} היחידות של {character==="solomon"?"שלמה":"דוד"} למושג <strong>"{concept}"</strong>.<br/>
+                                  <strong>עבודה בקבוצות של {P3_BATCH_SIZE} יחידות</strong> — כל קבוצה נשמרת מיד בסיום. אם נקטע באמצע, ניתן להמשיך מהקבוצה הבאה בלי לאבד את מה שכבר נעשה. בסוף מתבצע מיזוג סופי לפלט 6-חלקי.
                                 </div>
+
+                                {/* פאנל התקדמות קבוצות — מוצג אם יש in_progress */}
+                                {p3InProgress&&Array.isArray(p3InProgress.batches)&&(()=>{
+                                  const done=p3InProgress.batches.filter(b=>b.status==="done").length;
+                                  const errors=p3InProgress.batches.filter(b=>b.status==="error").length;
+                                  const pending=p3InProgress.batches.length-done-errors;
+                                  return (
+                                    <div style={{marginBottom:"10px",padding:"10px 12px",background:"#1e3a5f22",borderRadius:"6px",border:"1px solid #60a5fa55"}}>
+                                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"8px"}}>
+                                        <div style={{fontSize:"12px",fontWeight:"700",color:"#93c5fd"}}>📊 התקדמות קבוצות: {done}/{p3InProgress.batches.length} הושלמו</div>
+                                        <div style={{fontSize:"10px",color:"#cbd5e1"}}>
+                                          <span style={{color:"#86efac"}}>✓ {done}</span> · <span style={{color:"#fcd34d"}}>⌛ {pending}</span>{errors>0&&<> · <span style={{color:"#f87171"}}>⚠ {errors} שגיאות</span></>}
+                                        </div>
+                                      </div>
+                                      <div style={{display:"flex",gap:"3px",flexWrap:"wrap",marginBottom:"6px"}}>
+                                        {p3InProgress.batches.map((b,bi)=>{
+                                          const c=b.status==="done"?"#34d399":b.status==="error"?"#f87171":"#475569";
+                                          return <div key={bi} title={`קבוצה ${bi+1}: ${b.status==="done"?"הושלמה":b.status==="error"?("שגיאה: "+(b.error||"")):"ממתינה"}`} style={{flex:"1 0 20px",height:"18px",background:c,borderRadius:"3px",fontSize:"9px",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700"}}>{bi+1}</div>;
+                                        })}
+                                      </div>
+                                      {p3InProgress.mergeStatus==="done"?(
+                                        <div style={{fontSize:"10px",color:"#86efac"}}>✓ מיזוג סופי הושלם</div>
+                                      ):p3InProgress.mergeStatus==="error"?(
+                                        <div style={{fontSize:"10px",color:"#f87171"}}>⚠ שגיאה במיזוג: {p3InProgress.mergeError||""}</div>
+                                      ):(
+                                        <div style={{fontSize:"10px",color:"#94a3b8"}}>⌛ מיזוג סופי: ממתין להשלמת כל הקבוצות</div>
+                                      )}
+                                      <div style={{marginTop:"6px",fontSize:"9px",color:"#64748b"}}>סה"כ עד כה: קלט {p3InProgress.totalUsage?.input_tokens||0} tok · פלט {p3InProgress.totalUsage?.output_tokens||0} tok · עלות ${(p3InProgress.totalCost||0).toFixed(4)}</div>
+                                    </div>
+                                  );
+                                })()}
+
                                 <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"8px"}}>
-                                  <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||"יוצר סינתזה..."}`:`✨ צור סינתזה (${(stageData.stage3?.detailedConclusions||[]).length} יחידות)`}</button>
-                                  <button onClick={()=>setP3ShowPrompt(!p3ShowPrompt)} disabled={p3Loading} style={{padding:"10px 16px",borderRadius:"7px",border:"1px solid #475569",cursor:p3Loading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{p3ShowPrompt?"🔽 הסתר פרומפט":"👁 תצוגה מקדימה של הקלט"}</button>
+                                  <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{(()=>{
+                                    if(p3Loading) return `⏳ ${p3Progress||"יוצר סינתזה..."}`;
+                                    if(!p3InProgress) return `✨ צור סינתזה (${Math.ceil((stageData.stage3?.detailedConclusions||[]).length/P3_BATCH_SIZE)} קבוצות × ${P3_BATCH_SIZE} יחידות)`;
+                                    const pendingBatches=p3InProgress.batches.filter(b=>b.status!=="done").length;
+                                    if(pendingBatches>0) return `▶ המשך סינתזה (${pendingBatches} קבוצות נותרו)`;
+                                    return `▶ הרץ מיזוג סופי`;
+                                  })()}</button>
+                                  {p3InProgress&&!p3Loading&&(
+                                    <button onClick={()=>{if(confirm("למחוק את כל הקבוצות שעובדו ולהתחיל מאפס?")){
+                                      const cleaned={...stage4Data,phase3_in_progress:null,lastUpdated:Date.now()};
+                                      const newData={...stageData,stage4:cleaned,lastUpdated:Date.now()};
+                                      setStageData(newData);
+                                      const all=stageResults||LS_get("stageResults",{});
+                                      const updated={...all,[resultsKey]:newData};
+                                      if(setStageResults) setStageResults(updated);
+                                      LS_set("stageResults",updated);
+                                      fbSaveStageResults(updated);
+                                    }}} style={{padding:"8px 14px",borderRadius:"5px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"11px"}}>🗑 התחל מאפס</button>
+                                  )}
+                                  <button onClick={()=>setP3ShowPrompt(!p3ShowPrompt)} disabled={p3Loading} style={{padding:"10px 16px",borderRadius:"7px",border:"1px solid #475569",cursor:p3Loading?"wait":"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px"}}>{p3ShowPrompt?"🔽 הסתר פרומפט":"👁 תצוגה מקדימה של פרומפט קבוצה"}</button>
                                 </div>
                                 {p3ShowPrompt&&(()=>{
                                   const prev=buildP3Preview();
                                   return (
                                     <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
                                       <div style={{display:"flex",gap:"12px",flexWrap:"wrap",fontSize:"11px",marginBottom:"8px"}}>
-                                        <span style={{color:"#94a3b8"}}>אורך פרומפט: <strong style={{color:"#f1f5f9"}}>{prev.promptLength.toLocaleString()}</strong> תווים</span>
+                                        <span style={{color:"#94a3b8"}}>אורך פרומפט (קבוצה 1): <strong style={{color:"#f1f5f9"}}>{prev.promptLength.toLocaleString()}</strong> תווים</span>
                                         <span style={{color:"#94a3b8"}}>≈ <strong style={{color:"#f1f5f9"}}>{Math.round(prev.promptLength/2).toLocaleString()}</strong> טוקנים</span>
-                                        <span style={{color:"#94a3b8"}}>יחידות: <strong style={{color:"#f1f5f9"}}>{prev.unitsCount}</strong></span>
-                                        {prev.isEternal&&<span style={{color:"#fbbf24",fontWeight:"700"}}>⚡ מצב נצח/עולם — דגש על שדה גלוי</span>}
-                                        <span style={{color:prev.promptLength/2>180000?"#fca5a5":"#86efac",fontWeight:"700"}}>{prev.promptLength/2>180000?"⚠ חורג מגבול ההקשר":"✓ בטווח ההקשר"}</span>
+                                        <span style={{color:"#94a3b8"}}>סה"כ קבוצות: <strong style={{color:"#f1f5f9"}}>{prev.totalBatches}</strong> × {prev.batchSize} יחידות</span>
+                                        {prev.isEternal&&<span style={{color:"#fbbf24",fontWeight:"700"}}>⚡ מצב נצח/עולם</span>}
+                                        <span style={{color:prev.promptLength/2>180000?"#fca5a5":"#86efac",fontWeight:"700"}}>{prev.promptLength/2>180000?"⚠ חורג":"✓ בטווח"}</span>
                                       </div>
                                       <pre style={{maxHeight:"400px",overflowY:"auto",fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5",whiteSpace:"pre-wrap",direction:"rtl",fontFamily:"inherit",margin:0,padding:"8px",background:"#000",borderRadius:"4px"}}>{prev.prompt}</pre>
                                     </div>
