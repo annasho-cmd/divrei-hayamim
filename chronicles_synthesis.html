@@ -2889,7 +2889,7 @@ ${unitBlocks}
     try{
       const prompt=buildSynthesisPrompt();
       setP3Progress(`שולח ל-AI (${prompt.length.toLocaleString()} תווים)...`);
-      const r=await aiCallDirectWithUsage(prompt,16000);
+      const r=await aiCallDirectWithUsage(prompt,32000);
       setP3Progress("מפענח פלט...");
       let parsed=null; let parseError=null;
       try{ const clean=r.text.trim().replace(/^```json\s*/,"").replace(/\s*```$/,""); parsed=JSON.parse(clean); }catch(e){ parseError=e; }
