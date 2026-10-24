@@ -4536,7 +4536,7 @@ ${unitsSection}
         const prompt=buildDraftBatchPrompt(bi,batchUnits,plan.batches.length,allUnits.length);
         setP3DraftProgress(`קבוצה ${bi+1}/${plan.batches.length}: שולח ל-AI (${prompt.length.toLocaleString()} תווים)...`);
         try{
-          const r=await aiCallDirectWithUsage(prompt,16000);
+          const r=await aiCallDirectWithUsage(prompt,24000);
           const {parsed,error}=tryParseJson(r.text);
           if(!parsed){
             plan.batches[bi]={...plan.batches[bi],status:"error",error:`JSON parse: ${error?error.message:"לא נמצא"}`,processedAt:new Date().toISOString()};
@@ -4569,7 +4569,7 @@ ${unitsSection}
       setP3DraftProgress(`מיזוג סופי של ${plan.batches.length} קבוצות — כותב טיוטה...`);
       const mergePrompt=buildDraftMergePrompt(plan.batches);
       try{
-        const mr=await aiCallDirectWithUsage(mergePrompt,16000);
+        const mr=await aiCallDirectWithUsage(mergePrompt,24000);
         const {parsed,error}=tryParseJson(mr.text);
         if(!parsed){
           plan.mergeStatus="error";
