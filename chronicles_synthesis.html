@@ -352,19 +352,50 @@ function synthesisToMarkdown(syn,meta){
     sect("סונדרגוט",cc.sondergut);
   }
 
+  // המרת מערך של uid/יחידה למחרוזת, גם כשה-items הם אובייקטים
+  const unitsToStr=(arr)=>{
+    if(!Array.isArray(arr)||!arr.length) return "";
+    return arr.map(x=>{
+      if(typeof x==="string") return x;
+      if(x&&typeof x==="object") return x.uid||x.unitName||x.chapter||JSON.stringify(x).replace(/[{}"]/g,"");
+      return String(x);
+    }).join(", ");
+  };
+
+  // רשימת שינויים טקסטואליים — הטבלה המכרעת לתזה
+  if(Array.isArray(syn.textualChanges)&&syn.textualChanges.length){
+    lines.push("## 4. שינויים טקסטואליים של הכרוניסט ביחס למקבילה");
+    lines.push("");
+    lines.push(`סה"כ שינויים זוהו: ${syn.textualChanges.length}`);
+    lines.push("");
+    syn.textualChanges.forEach((tc,ti)=>{
+      const ctype={addition:"➕ תוספת",omission:"➖ השמטה",substitution:"⇄ החלפה",restructuring:"⟲ שינוי מבני",sondergut:"★ סונדרגוט"}[tc.changeType]||tc.changeType||"שינוי";
+      const field={explicit:"שדה גלוי",implicit:"שדה נרמז",both:"שני השדות"}[tc.field]||tc.field||"";
+      lines.push(`### ${ti+1}. ${tc.unitName||"?"} (${tc.chapter||"?"}) — ${ctype}`);
+      lines.push("");
+      if(field) lines.push(`**שדה:** ${field}  `);
+      if(tc.parallelCitation) lines.push(`**במקבילה:** "${tc.parallelCitation}"  `);
+      if(tc.chroniclesCitation) lines.push(`**בדה״י:** "${tc.chroniclesCitation}"  `);
+      if(tc.significance){ lines.push(""); lines.push(`**משמעות:** ${tc.significance}`); }
+      if(Array.isArray(tc.supportsSubClaims)&&tc.supportsSubClaims.length) lines.push(`_(תומך בטענות: ${tc.supportsSubClaims.join(", ")})_`);
+      lines.push("");
+    });
+  }
+
   if(Array.isArray(syn.qualifications)&&syn.qualifications.length){
-    lines.push("## 4. סייגים, ראיות נגד וחוסרים");
+    lines.push("## 5. סייגים, ראיות נגד וחוסרים");
     lines.push("");
     syn.qualifications.forEach((q,qi)=>{
       const lb={sayag:"סייג","counter-evidence":"ראיית נגד",gap:"חוסר"}[q.type]||q.type||"";
-      const au=Array.isArray(q.affectedUnits)&&q.affectedUnits.length?` _(יחידות: ${q.affectedUnits.join(", ")})_`:"";
+      const auStr=unitsToStr(q.affectedUnits);
+      const au=auStr?` _(יחידות: ${auStr})_`:"";
       lines.push(`- **[${lb}]** ${q.text||""}${au}`);
     });
     lines.push("");
   }
 
   if(Array.isArray(syn.flaggedIssues)&&syn.flaggedIssues.length){
-    lines.push("## 5. בעיות נקודתיות (לבדיקתך)");
+    lines.push("## 6. בעיות נקודתיות (לבדיקתך)");
     lines.push("");
     syn.flaggedIssues.forEach(fi=>{
       lines.push(`- **${fi.unitName||"?"}** _(${fi.severity||"?"})_: ${fi.issue||""}`);
@@ -373,7 +404,7 @@ function synthesisToMarkdown(syn,meta){
   }
 
   if(syn.suggestedOrder){
-    lines.push("## 6. סדר מוצע לכתיבת הדיון");
+    lines.push("## 7. סדר מוצע לכתיבת הדיון");
     lines.push("");
     lines.push(syn.suggestedOrder);
     lines.push("");
@@ -3024,7 +3055,7 @@ ${buildUnitBlock(unit)}
   }
 
   // ─ שלב 4 פאזה 3: סינתזה ─
-  const PROMPT_VERSION_P3="v5-2026-10-23-6-batches";
+  const PROMPT_VERSION_P3="v6-2026-10-24-textual-changes";
   const P3_BATCH_COUNT=6;
   const P3_BATCH_MAX_TOKENS=24000;
   // חישוב גודל קבוצה לפי מספר יחידות ו-P3_BATCH_COUNT (מינימום 1 יחידה לקבוצה)
@@ -3173,6 +3204,15 @@ ${unitBlocks}
       "keyCommentary": [{"author":"","work":"","page":"","claim":""}],
       "comparativeMove": "preserved|changed|added|sondergut|no-parallel",
       "comparativeDetail": "תיאור קצר של מה הכרוניסט עשה",
+      "specificChanges": [
+        {
+          "changeType": "addition|omission|substitution|restructuring",
+          "parallelCitation": "ציטוט מהמקבילה (אם קיים)",
+          "chroniclesCitation": "ציטוט מדה״י או תיאור הפעולה",
+          "field": "explicit|implicit|both",
+          "significance": "משמעות השינוי לעיצוב המושג ביחידה זו"
+        }
+      ],
       "flaggedIssue": null
     }
   ],
@@ -3209,7 +3249,8 @@ ${eternalNote}
 **ס5. ייחוס מקורות — חובה שלמה**: שם מחבר, חיבור, עמוד — כפי שהופיעו בתצפיות. אין להמציא.
 **ס6. אין לייצר השוואה עצמאית לנביאים**.
 **ס7. ההשוואה למקבילה** — דון במה שנשמר/השתנה/סונדרגוט, מפוצל לשני השדות.
-**ס8. סדר דיון** — הצע סדר כתיבה.
+**ס8. רשימת שינויים טקסטואליים מפורטת** — חובה — חלץ מהתצפיות כל שינוי טקסטואלי בודד שהכרוניסט עשה ביחס למקבילה, בפורמט מובנה: יחידה, סוג שינוי (הוספה/השמטה/החלפה/שינוי מבני), ציטוט מהמקבילה (אם רלוונטי), ציטוט מדה"י, משמעות השינוי לעיצוב המושג, ומספר טענת המשנה שהשינוי מחזק. **זה לב הטיעון בתזה — כל שינוי צריך להופיע ברשימה**. אל תסתפק בפסקה פרוזאית: הכן טבלה.
+**ס9. סדר דיון** — הצע סדר כתיבה.
 
 ### פורמט JSON — חובה
 - אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים.
@@ -3241,7 +3282,20 @@ ${batchNotes}
     "changes": {"explicit":"","implicit":""},
     "sondergut": {"explicit":"","implicit":""}
   },
-  "qualifications": [{"type":"sayag|counter-evidence|gap","text":"","affectedUnits":[]}],
+  "textualChanges": [
+    {
+      "uid": "מזהה היחידה",
+      "unitName": "שם היחידה",
+      "chapter": "פרק",
+      "changeType": "addition|omission|substitution|restructuring|sondergut",
+      "parallelCitation": "ציטוט מהמקבילה (ריק אם זה סונדרגוט או תוספת)",
+      "chroniclesCitation": "ציטוט מדה״י (או תיאור הפעולה אם זה השמטה)",
+      "field": "explicit|implicit|both",
+      "significance": "מה השינוי הזה אומר לעיצוב המושג",
+      "supportsSubClaims": [מספרי טענות משנה הנתמכות על ידי שינוי זה]
+    }
+  ],
+  "qualifications": [{"type":"sayag|counter-evidence|gap","text":"","affectedUnits":["uid1","uid2"]}],
   "flaggedIssues": [{"uid":"","unitName":"","issue":"","severity":"low|medium|high"}],
   "suggestedOrder": "סדר מוצע לכתיבה"
 }`;
@@ -4977,15 +5031,25 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                               </>
                             ):(
                               <>
-                                {/* סיכום הרצה */}
+                                {/* סיכום הרצה + סטטוס שלב הבדיקה מול הפרשנים */}
                                 <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",marginBottom:"10px",fontSize:"11px",color:"#cbd5e1"}}>
-                                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
+                                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"6px"}}>
                                     <span>🏃 הורץ: {p3Synthesis.generatedAt?p3Synthesis.generatedAt.slice(0,16).replace("T"," "):"—"}</span>
                                     <span style={{color:"#60a5fa"}}>· קלט: {p3Synthesis.usage?.input_tokens||0} tok</span>
                                     <span style={{color:"#60a5fa"}}>· פלט: {p3Synthesis.usage?.output_tokens||0} tok</span>
                                     <span style={{color:"#86efac",fontWeight:"700"}}>· עלות: ${(p3Synthesis.costUsd||0).toFixed(4)}</span>
                                     <span style={{color:"#a78bfa"}}>· גרסה: {p3Synthesis.promptVersion||"—"}</span>
                                     {p3Synthesis.clarificationId&&conceptDef.clarification?.id&&p3Synthesis.clarificationId!==conceptDef.clarification.id&&<span style={{color:"#fcd34d"}}>⚠ נותח עם הבהרה קודמת</span>}
+                                  </div>
+                                  {/* באדג' של שלב הבדיקה מול הפרשנים */}
+                                  <div style={{paddingTop:"6px",borderTop:"1px solid #1e293b",display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
+                                    {!p3Verification?(
+                                      <span style={{padding:"3px 10px",background:"#78350f44",color:"#fcd34d",borderRadius:"4px",fontSize:"10px",fontWeight:"700"}}>⚠ שלב הבדיקה מול הפרשנים: טרם הורץ — לחצי "📚 הרץ בדיקה מול הפרשנים" לפני כתיבת פסקה בתזה</span>
+                                    ):p3Synthesis.generatedAt&&p3Verification.sourceSynthesisGeneratedAt&&p3Synthesis.generatedAt!==p3Verification.sourceSynthesisGeneratedAt?(
+                                      <span style={{padding:"3px 10px",background:"#78350f44",color:"#fcd34d",borderRadius:"4px",fontSize:"10px",fontWeight:"700"}}>⚠ שלב הבדיקה מול הפרשנים: הורץ על גרסה קודמת של הסינתזה — יש להריץ מחדש</span>
+                                    ):(
+                                      <span style={{padding:"3px 10px",background:"#083344",color:"#67e8f9",borderRadius:"4px",fontSize:"10px",fontWeight:"700"}}>✓ שלב הבדיקה מול הפרשנים: הורץ ב-{p3Verification.verifiedAt?.slice(0,16).replace("T"," ")||"—"} ({p3Verification.unitsChecked||0} יחידות)</span>
+                                    )}
                                   </div>
                                 </div>
 
@@ -5000,7 +5064,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   ):(
                                     <>
                                       <button onClick={enterEditMode} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #f59e0b",cursor:"pointer",background:"#78350f22",color:"#fcd34d",fontSize:"11px",fontWeight:"700"}}>✏ ערוך</button>
-                                      <button onClick={verifyCitations} disabled={p3VerifyLoading} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #06b6d4",cursor:p3VerifyLoading?"wait":"pointer",background:"#083344",color:"#67e8f9",fontSize:"11px",fontWeight:"700"}}>{p3VerifyLoading?`⏳ ${p3VerifyProgress||"מוודא..."}`:(p3Verification?"📎 ווידוא מחדש":"📎 אמת ציטוטים מול כלי ההשוואה")}</button>
+                                      <button onClick={verifyCitations} disabled={p3VerifyLoading} style={{padding:"7px 14px",borderRadius:"5px",border:"2px solid #06b6d4",cursor:p3VerifyLoading?"wait":"pointer",background:"#083344",color:"#67e8f9",fontSize:"11px",fontWeight:"700"}}>{p3VerifyLoading?`⏳ ${p3VerifyProgress||"מוודא..."}`:(p3Verification?"📚 בדיקה מחדש מול הפרשנים":"📚 הרץ בדיקה מול הפרשנים")}</button>
                                       <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||""}`:"🔄 הרץ שוב (הקיים לארכיון)"}</button>
                                     </>
                                   )}
@@ -5033,7 +5097,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 {p3Verification&&(
                                   <div style={{marginBottom:"12px",padding:"12px 14px",background:"#083344",borderRadius:"7px",border:"1px solid #06b6d4"}}>
                                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"8px"}}>
-                                      <div style={{fontSize:"13px",fontWeight:"700",color:"#67e8f9"}}>📎 דו"ח ווידוא ציטוטים</div>
+                                      <div style={{fontSize:"13px",fontWeight:"700",color:"#67e8f9"}}>📚 דו"ח בדיקה מול הפרשנים (מתוך כלי ההשוואה)</div>
                                       <div style={{fontSize:"10px",color:"#cbd5e1"}}>הופק: {p3Verification.verifiedAt?p3Verification.verifiedAt.slice(0,16).replace("T"," "):"—"} · {p3Verification.unitsChecked||0} יחידות · עלות: ${(p3Verification.costUsd||0).toFixed(4)}</div>
                                     </div>
                                     {p3Verification.summary&&<div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"8px"}}>{p3Verification.summary}</div>}
@@ -5253,10 +5317,65 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   </div>
                                 )}
 
-                                {/* 4. סייגים */}
+                                {/* 4. שינויים טקסטואליים ביחס למקבילה — טבלה מפורטת (חדש v6) */}
+                                {Array.isArray(displaySyn.textualChanges)&&displaySyn.textualChanges.length>0&&(
+                                  <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px",border:`2px solid ${dimColor}66`}}>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>4️⃣ שינויי הכרוניסט ביחס למקבילה — טבלה מפורטת ({displaySyn.textualChanges.length})</div>
+                                    <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"8px",fontStyle:"italic"}}>כל שינוי = שורה. השורה הזאת היא לב הטיעון המשווה שלך בתזה.</div>
+                                    <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                                      {displaySyn.textualChanges.map((tc,tci)=>{
+                                        const ctypeInfo={addition:{lbl:"➕ תוספת",col:"#34d399"},omission:{lbl:"➖ השמטה",col:"#f87171"},substitution:{lbl:"⇄ החלפה",col:"#fbbf24"},restructuring:{lbl:"⟲ שינוי מבני",col:"#a78bfa"},sondergut:{lbl:"★ סונדרגוט",col:"#60a5fa"}}[tc.changeType]||{lbl:tc.changeType||"שינוי",col:"#64748b"};
+                                        const fieldLbl={explicit:"שדה גלוי",implicit:"שדה נרמז",both:"שני השדות"}[tc.field]||tc.field||"";
+                                        return (
+                                          <div key={tci} style={{padding:"8px 10px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${ctypeInfo.col}`}}>
+                                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"8px",flexWrap:"wrap",marginBottom:"4px"}}>
+                                              <div style={{fontSize:"11px",color:"#f1f5f9",fontWeight:"700",flex:1}}>{tci+1}. {tc.unitName||"?"} <span style={{color:"#64748b",fontWeight:"400"}}>({tc.chapter||"?"})</span></div>
+                                              <span style={{fontSize:"10px",color:ctypeInfo.col,background:`${ctypeInfo.col}22`,padding:"2px 8px",borderRadius:"3px",fontWeight:"700"}}>{ctypeInfo.lbl}</span>
+                                              {fieldLbl&&<span style={{fontSize:"9px",color:"#94a3b8",background:"#334155",padding:"2px 6px",borderRadius:"3px"}}>{fieldLbl}</span>}
+                                              {p3Editing&&<button onClick={()=>{if(confirm("למחוק שינוי זה?")) deleteDraftItem("textualChanges",tci);}} style={{padding:"2px 6px",borderRadius:"3px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"10px"}}>🗑</button>}
+                                            </div>
+                                            {(tc.parallelCitation||p3Editing)&&(
+                                              <div style={{marginBottom:"4px",fontSize:"10px"}}>
+                                                <strong style={{color:"#f87171"}}>במקבילה:</strong>{" "}
+                                                {p3Editing?(
+                                                  <input type="text" value={tc.parallelCitation||""} onChange={e=>updateDraft(`textualChanges[${tci}].parallelCitation`,e.target.value)} style={{width:"80%",padding:"3px 6px",background:"#0f172a",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"10px",fontFamily:"inherit"}}/>
+                                                ):(
+                                                  <span style={{color:"#cbd5e1",fontStyle:"italic"}}>"{tc.parallelCitation}"</span>
+                                                )}
+                                              </div>
+                                            )}
+                                            {(tc.chroniclesCitation||p3Editing)&&(
+                                              <div style={{marginBottom:"4px",fontSize:"10px"}}>
+                                                <strong style={{color:"#34d399"}}>בדה״י:</strong>{" "}
+                                                {p3Editing?(
+                                                  <input type="text" value={tc.chroniclesCitation||""} onChange={e=>updateDraft(`textualChanges[${tci}].chroniclesCitation`,e.target.value)} style={{width:"80%",padding:"3px 6px",background:"#0f172a",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"10px",fontFamily:"inherit"}}/>
+                                                ):(
+                                                  <span style={{color:"#cbd5e1",fontStyle:"italic"}}>"{tc.chroniclesCitation}"</span>
+                                                )}
+                                              </div>
+                                            )}
+                                            {(tc.significance||p3Editing)&&(
+                                              <div style={{marginTop:"4px",padding:"4px 6px",background:"#0f172a",borderRadius:"3px",fontSize:"10px"}}>
+                                                <strong style={{color:"#fcd34d"}}>משמעות:</strong>{" "}
+                                                {p3Editing?(
+                                                  <textarea value={tc.significance||""} onChange={e=>updateDraft(`textualChanges[${tci}].significance`,e.target.value)} rows={2} style={{width:"100%",marginTop:"2px",padding:"4px 6px",background:"#0f172a",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"10px",lineHeight:"1.5",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
+                                                ):(
+                                                  <span style={{color:"#cbd5e1"}}>{tc.significance}</span>
+                                                )}
+                                              </div>
+                                            )}
+                                            {Array.isArray(tc.supportsSubClaims)&&tc.supportsSubClaims.length>0&&<div style={{marginTop:"4px",fontSize:"9px",color:"#94a3b8"}}>תומך בטענות: {tc.supportsSubClaims.join(", ")}</div>}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* 5. סייגים */}
                                 {Array.isArray(displaySyn.qualifications)&&displaySyn.qualifications.length>0&&(
                                   <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>4️⃣ סייגים, ראיות נגד וחוסרים ({displaySyn.qualifications.length}){p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה / מחיקה</span>}</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>5️⃣ סייגים, ראיות נגד וחוסרים ({displaySyn.qualifications.length}){p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה / מחיקה</span>}</div>
                                     <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
                                       {displaySyn.qualifications.map((q,qi)=>{
                                         const label={sayag:"סייג","counter-evidence":"ראיית נגד",gap:"חוסר"}[q.type]||q.type;
@@ -5291,7 +5410,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 {/* 5. בעיות נקודתיות */}
                                 {Array.isArray(displaySyn.flaggedIssues)&&displaySyn.flaggedIssues.length>0&&(
                                   <div style={{padding:"10px 12px",background:"#78350f22",borderRadius:"7px",marginBottom:"10px",border:"1px dashed #f59e0b55"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#fbbf24",marginBottom:"8px"}}>⚠ בעיות נקודתיות שעלו ({displaySyn.flaggedIssues.length}) — לבדיקתך{p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה / מחיקה</span>}</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#fbbf24",marginBottom:"8px"}}>6️⃣ ⚠ בעיות נקודתיות שעלו ({displaySyn.flaggedIssues.length}) — לבדיקתך{p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה / מחיקה</span>}</div>
                                     <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
                                       {displaySyn.flaggedIssues.map((fi,fii)=>{
                                         const sevColor={low:"#60a5fa",medium:"#fbbf24",high:"#f87171"}[fi.severity]||"#94a3b8";
@@ -5317,7 +5436,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 {/* 6. סדר דיון */}
                                 {(displaySyn.suggestedOrder!==undefined||p3Editing)&&(
                                   <div style={{padding:"10px 12px",background:"#064e3b22",borderRadius:"7px",marginBottom:"10px",border:"1px solid #065f4655"}}>
-                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#86efac",marginBottom:"6px"}}>6️⃣ סדר מוצע לכתיבת הדיון{p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה</span>}</div>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#86efac",marginBottom:"6px"}}>7️⃣ סדר מוצע לכתיבת הדיון{p3Editing&&<span style={{marginRight:"8px",color:"#fcd34d",fontSize:"10px"}}>✏ ניתן לעריכה</span>}</div>
                                     {p3Editing?(
                                       <textarea value={displaySyn.suggestedOrder||""} onChange={e=>updateDraft("suggestedOrder",e.target.value)} rows={4} style={{width:"100%",padding:"6px 8px",background:"#1e293b",color:"#cbd5e1",border:"1px solid #065f4699",borderRadius:"4px",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",boxSizing:"border-box"}}/>
                                     ):(
