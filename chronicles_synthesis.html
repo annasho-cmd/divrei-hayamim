@@ -831,12 +831,241 @@ function ApiKeyModal({currentKey,onSave,onClose}){
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// ── מטריצת ריכוז אינדיקטורים (דו"ח רוחבי לכל יחידות הדמות × אינדיקטורי מושג) ──
+// ═══════════════════════════════════════════════════════════════════════
+function IndicatorMatrixModal({raw,onClose}){
+  const [character,setCharacter]=useState("david");
+  const [dimId,setDimId]=useState("d1");
+  const [concept,setConcept]=useState(null);
+  const [source,setSource]=useState("chronicles"); // chronicles | source
+  const dimOptions=DIMS.map(d=>({id:d.id,label:d.label,color:d.color,concepts:d.concepts}));
+  const currentDim=dimOptions.find(d=>d.id===dimId)||dimOptions[0];
+
+  // יחידות של הדמות הנוכחית
+  const units=React.useMemo(()=>{
+    const all=(raw&&raw.units)||[];
+    return all.filter(u=>{
+      const ch=u.chapter||"";
+      if(character==="david") return /דה"א\s*(י"א|י"ב|י"ג|י"ד|ט"ו|ט"ז|י"ז|י"ח|י"ט|כ|כ"א|כ"ב|כ"ג|כ"ד|כ"ה|כ"ו|כ"ז|כ"ח|כ"ט)/.test(ch) || /דברי הימים א/.test(ch);
+      return /דה"ב\s*(א|ב|ג|ד|ה|ו|ז|ח|ט)/.test(ch) || /דברי הימים ב/.test(ch);
+    });
+  },[raw,character]);
+
+  // קביעת רשימת האינדיקטורים לפי המושג הנבחר — מאיחוד params על פני כל היחידות
+  const indicators=React.useMemo(()=>{
+    if(!concept) return [];
+    const set=new Map(); // name → first occurrence
+    units.forEach(u=>{
+      const analysis=source==="chronicles"?raw.analysis_chronicles:raw.analysis_source;
+      const ac=(analysis&&analysis[u.id]&&analysis[u.id][concept])||{};
+      (ac.params||[]).forEach(p=>{
+        if(p&&p.param&&!set.has(p.param)) set.set(p.param,p.param);
+      });
+    });
+    return Array.from(set.keys());
+  },[units,concept,source,raw]);
+
+  // בניית המטריצה: לכל יחידה — מפה של indicator→(found/notFound/missing/note/verse)
+  const matrix=React.useMemo(()=>{
+    if(!concept) return [];
+    return units.map(u=>{
+      const analysis=source==="chronicles"?raw.analysis_chronicles:raw.analysis_source;
+      const ac=(analysis&&analysis[u.id]&&analysis[u.id][concept])||null;
+      const cells={};
+      if(ac&&Array.isArray(ac.params)){
+        ac.params.forEach(p=>{
+          if(!p||!p.param) return;
+          cells[p.param]={found:p.found===true,note:p.note||"",verse:p.verse||""};
+        });
+      }
+      const foundCount=Object.values(cells).filter(c=>c.found).length;
+      const totalCount=indicators.length;
+      return {
+        unit:u,
+        hasAnalysis:!!ac,
+        cells,
+        foundCount,
+        totalCount,
+        explicitNote:ac?.explicit_note||""
+      };
+    });
+  },[units,concept,source,indicators,raw]);
+
+  // סיכום לפי אינדיקטור — כמה יחידות סימנו ✓
+  const perIndicatorStats=React.useMemo(()=>{
+    const stats={};
+    indicators.forEach(ind=>{ stats[ind]={found:0,analyzed:0}; });
+    matrix.forEach(row=>{
+      if(!row.hasAnalysis) return;
+      indicators.forEach(ind=>{
+        stats[ind].analyzed++;
+        if(row.cells[ind]&&row.cells[ind].found) stats[ind].found++;
+      });
+    });
+    return stats;
+  },[matrix,indicators]);
+
+  const totalAnalyzed=matrix.filter(r=>r.hasAnalysis).length;
+
+  function exportToCsv(){
+    if(!concept||!indicators.length) return;
+    const header=["יחידה","פרק","נוסחה",...indicators,"סה״כ"].join("\t");
+    const rows=matrix.map(r=>{
+      const unit=r.unit;
+      const cells=indicators.map(ind=>{
+        const c=r.cells[ind];
+        if(!c) return "—";
+        return c.found?"✓":"✗";
+      });
+      return [unit.name||"",unit.chapter||"",source==="chronicles"?"דה״י":"מקבילה",...cells,`${r.foundCount}/${r.totalCount}`].join("\t");
+    });
+    const summary=["— סה״כ ✓ —","","",...indicators.map(ind=>`${perIndicatorStats[ind].found}/${perIndicatorStats[ind].analyzed}`),""].join("\t");
+    const content=[header,...rows,summary].join("\n");
+    const blob=new Blob(["﻿"+content],{type:"text/csv;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`matrix_${character}_${concept}_${source}_${(new Date()).toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+  }
+
+  return (
+    <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.75)",zIndex:9999,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"20px",overflowY:"auto"}}>
+      <div style={{background:"#0f172a",borderRadius:"12px",maxWidth:"1400px",width:"100%",padding:"20px 24px",maxHeight:"calc(100vh - 40px)",overflowY:"auto",direction:"rtl"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"16px",borderBottom:"1px solid #334155",paddingBottom:"12px"}}>
+          <div>
+            <div style={{fontSize:"18px",fontWeight:"700",color:"#67e8f9"}}>📊 מטריצת ריכוז אינדיקטורים</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginTop:"3px"}}>ריכוז נוכחות אינדיקטורים לכל היחידות הספרותיות של דמות אחת, למושג אחד</div>
+          </div>
+          <button onClick={onClose} style={{padding:"6px 12px",borderRadius:"5px",border:"1px solid #7f1d1d",background:"transparent",color:"#fca5a5",cursor:"pointer",fontSize:"12px"}}>✖ סגור</button>
+        </div>
+
+        {/* פילטרים */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:"10px",marginBottom:"14px"}}>
+          <div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"4px",fontWeight:"700"}}>דמות</div>
+            <div style={{display:"flex",gap:"4px"}}>
+              {[["david","דוד"],["solomon","שלמה"]].map(([id,lbl])=>(
+                <button key={id} onClick={()=>{setCharacter(id);setConcept(null);}} style={{flex:1,padding:"6px 10px",borderRadius:"4px",border:character===id?"2px solid #06b6d4":"1px solid #334155",background:character===id?"#083344":"#1e293b",color:character===id?"#67e8f9":"#cbd5e1",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>{lbl}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"4px",fontWeight:"700"}}>ממד</div>
+            <select value={dimId} onChange={e=>{setDimId(e.target.value);setConcept(null);}} style={{width:"100%",padding:"6px 8px",background:"#1e293b",color:"#f1f5f9",border:"1px solid #334155",borderRadius:"4px",fontSize:"11px"}}>
+              {dimOptions.map(d=>(<option key={d.id} value={d.id}>{d.label}</option>))}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"4px",fontWeight:"700"}}>מושג</div>
+            <select value={concept||""} onChange={e=>setConcept(e.target.value||null)} style={{width:"100%",padding:"6px 8px",background:"#1e293b",color:"#f1f5f9",border:"1px solid #334155",borderRadius:"4px",fontSize:"11px"}}>
+              <option value="">— בחרי מושג —</option>
+              {currentDim.concepts.map(c=>(<option key={c} value={c}>{c}</option>))}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"4px",fontWeight:"700"}}>מקור</div>
+            <div style={{display:"flex",gap:"4px"}}>
+              {[["chronicles","דה״י"],["source","מקבילה"]].map(([id,lbl])=>(
+                <button key={id} onClick={()=>setSource(id)} style={{flex:1,padding:"6px 10px",borderRadius:"4px",border:source===id?"2px solid #06b6d4":"1px solid #334155",background:source===id?"#083344":"#1e293b",color:source===id?"#67e8f9":"#cbd5e1",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>{lbl}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* המטריצה או הודעה */}
+        {!concept?(
+          <div style={{padding:"40px 20px",textAlign:"center",color:"#94a3b8",fontSize:"13px",background:"#1e293b",borderRadius:"8px"}}>בחרי מושג לראות את מטריצת האינדיקטורים</div>
+        ):indicators.length===0?(
+          <div style={{padding:"40px 20px",textAlign:"center",color:"#fca5a5",fontSize:"13px",background:"#7f1d1d22",borderRadius:"8px",border:"1px dashed #7f1d1d"}}>אין אינדיקטורים מתועדים למושג זה במקור הנבחר · ייתכן שהניתוח לא בוצע בכלי האנליטי</div>
+        ):(
+          <>
+            {/* סרגל סיכום */}
+            <div style={{display:"flex",gap:"10px",flexWrap:"wrap",padding:"10px 12px",background:"#1e293b",borderRadius:"6px",marginBottom:"10px",fontSize:"11px",color:"#cbd5e1"}}>
+              <span>🎯 מושג: <strong style={{color:"#67e8f9"}}>{concept}</strong></span>
+              <span>· 🧩 אינדיקטורים: <strong style={{color:"#86efac"}}>{indicators.length}</strong></span>
+              <span>· 📜 יחידות: <strong style={{color:"#fcd34d"}}>{totalAnalyzed}/{units.length}</strong> נותחו</span>
+              <span>· 📂 מקור: <strong style={{color:source==="chronicles"?"#60a5fa":"#a78bfa"}}>{source==="chronicles"?"דה״י":"מקבילה"}</strong></span>
+              <button onClick={exportToCsv} style={{marginRight:"auto",padding:"4px 10px",borderRadius:"4px",border:"1px solid #10b981",background:"#064e3b22",color:"#86efac",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 ייצא ל-CSV / Excel</button>
+            </div>
+
+            {/* טבלת המטריצה */}
+            <div style={{overflowX:"auto",background:"#1e293b",borderRadius:"6px",padding:"8px"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:"10px",color:"#cbd5e1"}}>
+                <thead>
+                  <tr style={{background:"#0f172a",position:"sticky",top:0}}>
+                    <th style={{padding:"6px 8px",textAlign:"right",border:"1px solid #334155",fontWeight:"700",color:"#67e8f9",minWidth:"180px",position:"sticky",right:0,background:"#0f172a",zIndex:1}}>יחידה (פרק)</th>
+                    {indicators.map(ind=>(
+                      <th key={ind} title={ind} style={{padding:"6px 4px",textAlign:"center",border:"1px solid #334155",fontWeight:"700",color:"#fcd34d",fontSize:"9px",maxWidth:"80px",wordWrap:"break-word",verticalAlign:"bottom"}}>{ind}</th>
+                    ))}
+                    <th style={{padding:"6px 8px",textAlign:"center",border:"1px solid #334155",fontWeight:"700",color:"#86efac",minWidth:"50px"}}>סה״כ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {matrix.map((row,ri)=>{
+                    const pct=row.totalCount?Math.round((row.foundCount/row.totalCount)*100):0;
+                    const totalCol=row.hasAnalysis?(pct>=60?"#86efac":pct>=30?"#fcd34d":"#f87171"):"#64748b";
+                    return (
+                      <tr key={ri} style={{background:ri%2===0?"#1e293b":"#293548"}}>
+                        <td style={{padding:"5px 8px",border:"1px solid #334155",fontWeight:"600",color:"#f1f5f9",position:"sticky",right:0,background:ri%2===0?"#1e293b":"#293548",zIndex:1}}>
+                          <div>{row.unit.name||"(ללא שם)"}</div>
+                          <div style={{fontSize:"9px",color:"#94a3b8"}}>{row.unit.chapter||""}</div>
+                        </td>
+                        {indicators.map(ind=>{
+                          const c=row.cells[ind];
+                          const title=c?(c.found?`✓ ${c.verse?`פס' ${c.verse}: `:""}${c.note||""}`:`✗ ${c.note||"לא נמצא"}`):"— לא נבדק";
+                          return (
+                            <td key={ind} title={title} style={{padding:"4px",textAlign:"center",border:"1px solid #334155",cursor:"help",background:c?(c.found?"#064e3b55":"#1e293b"):"#0f172a"}}>
+                              {c?(c.found?<span style={{color:"#86efac",fontSize:"14px",fontWeight:"700"}}>✓</span>:<span style={{color:"#64748b",fontSize:"12px"}}>✗</span>):<span style={{color:"#475569",fontSize:"10px"}}>—</span>}
+                            </td>
+                          );
+                        })}
+                        <td style={{padding:"5px 8px",textAlign:"center",border:"1px solid #334155",color:totalCol,fontWeight:"700"}}>
+                          {row.hasAnalysis?`${row.foundCount}/${row.totalCount}`:"—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {/* שורת סיכום לפי אינדיקטור */}
+                  <tr style={{background:"#0f172a",borderTop:"2px solid #06b6d4"}}>
+                    <td style={{padding:"6px 8px",border:"1px solid #334155",fontWeight:"700",color:"#67e8f9",position:"sticky",right:0,background:"#0f172a",zIndex:1}}>סה״כ ✓ (מתוך {totalAnalyzed} נותחו)</td>
+                    {indicators.map(ind=>{
+                      const st=perIndicatorStats[ind];
+                      const pct=st.analyzed?Math.round((st.found/st.analyzed)*100):0;
+                      const col=pct>=60?"#86efac":pct>=30?"#fcd34d":"#f87171";
+                      return (
+                        <td key={ind} style={{padding:"5px 4px",textAlign:"center",border:"1px solid #334155",color:col,fontWeight:"700",fontSize:"10px"}}>
+                          {st.found}/{st.analyzed}
+                          <div style={{fontSize:"8px",color:"#64748b"}}>{pct}%</div>
+                        </td>
+                      );
+                    })}
+                    <td style={{padding:"5px 4px",border:"1px solid #334155"}}></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* מקרא */}
+            <div style={{marginTop:"10px",fontSize:"10px",color:"#64748b",lineHeight:"1.7"}}>
+              <strong>מקרא:</strong> ✓ = האינדיקטור נמצא (ירוק) · ✗ = האינדיקטור נבדק אך לא נמצא (אפור) · — = היחידה לא נותחה למושג זה · ריחוף על תא מציג את ההערה והפסוק.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // ── מסך בחירת מושג ─────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════
 function ConceptSelector({raw,onPick,onPickDimension,onBackHome,stageResults}){
   const [character,setCharacter]=useState(null);
   const [dimId,setDimId]=useState(null);
   const [concept,setConcept]=useState(null);
+  const [showMatrix,setShowMatrix]=useState(false);
   const dimsForUI=DIMS.map(d=>({id:d.id,label:d.label,color:d.color,icon:{d1:"🕊",d2:"⚖",d3:"🏛",d4:"🤝"}[d.id]||"◆"}));
   const concepts=dimId?(DIMS.find(d=>d.id===dimId)||{}).concepts||[]:[];
   const dimColor=dimId?(DIMS.find(d=>d.id===dimId)||{}).color||"#818cf8":"#818cf8";
@@ -870,8 +1099,13 @@ function ConceptSelector({raw,onPick,onPickDimension,onBackHome,stageResults}){
           <div style={{fontSize:"22px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"3px"}}>בחירת מושג לניתוח</div>
           <div style={{fontSize:"12px",color:"#94a3b8"}}>בחרי דמות → ממד נבואי → מושג</div>
         </div>
-        <button onClick={onBackHome} style={{padding:"7px 13px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ ראשי</button>
+        <div style={{display:"flex",gap:"8px"}}>
+          <button onClick={()=>setShowMatrix(true)} style={{padding:"7px 13px",borderRadius:"7px",border:"1px solid #06b6d4",cursor:"pointer",background:"#083344",color:"#67e8f9",fontSize:"12px",fontWeight:"700"}}>📊 מטריצת ריכוז אינדיקטורים</button>
+          <button onClick={onBackHome} style={{padding:"7px 13px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ ראשי</button>
+        </div>
       </div>
+
+      {showMatrix&&<IndicatorMatrixModal raw={raw} onClose={()=>setShowMatrix(false)}/>}
 
       {/* דמות */}
       <div style={{marginBottom:"22px"}}>
