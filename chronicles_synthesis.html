@@ -4039,7 +4039,227 @@ ${unitsSection}
     fbSaveStageResults(updated);
   }
 
-  // מעבר 1 — בחירת יחידות מייצגות
+  // ─ מצב ביניים לטיוטה האקדמית (resumable, batched) ─
+  const p3AcademicInProgress=stage4Data.phase3_academic_in_progress||null;
+
+  function saveP3AcademicInProgress(inProg){
+    const newStage4={...stage4Data,phase3_academic_in_progress:inProg,lastUpdated:Date.now()};
+    const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+    setStageData(newData);
+    const all=stageResults||LS_get("stageResults",{});
+    const updated={...all,[resultsKey]:newData};
+    if(setStageResults) setStageResults(updated);
+    LS_set("stageResults",updated);
+    fbSaveStageResults(updated);
+  }
+
+  // תכנון קבוצות: לכל יחידה בשלב 3 (עם מסקנה) תהיה שליחה בקבוצה
+  function initP3DraftPlan(){
+    const s3=stageData.stage3;
+    const allUnits=s3.detailedConclusions||[];
+    const batchSize=p3BatchSizeFor(allUnits.length);
+    const existing=stage4Data.phase3_academic_in_progress;
+    if(existing&&existing.promptVersion===PROMPT_VERSION_DRAFT&&existing.totalUnits===allUnits.length) return existing;
+    const batches=[];
+    for(let i=0;i<allUnits.length;i+=batchSize){
+      const slice=allUnits.slice(i,i+batchSize);
+      batches.push({idx:batches.length,unitUids:slice.map(u=>u.uid),status:"pending"});
+    }
+    return {
+      startedAt:new Date().toISOString(),
+      promptVersion:PROMPT_VERSION_DRAFT,
+      totalUnits:allUnits.length,
+      batchSize,
+      batches,
+      mergeStatus:"pending",
+      totalUsage:{input_tokens:0,output_tokens:0},
+      totalCost:0
+    };
+  }
+
+  // פרומפט לקבוצה: עובר על יחידות עם הפירוש המלא, מחלץ מידע לטיוטה
+  function buildDraftBatchPrompt(batchIdx,batchUnits,totalBatches,totalUnits){
+    const who=character==="solomon"?"שלמה":"דוד";
+    const startGlobal=batchIdx*p3BatchSizeFor(totalUnits);
+    const unitsByUid={};
+    (raw.units||[]).forEach(u=>{ unitsByUid[String(u.id)]=u; });
+
+    const unitsSection=batchUnits.map((cu,i)=>{
+      const uid=String(cu.uid);
+      const u=unitsByUid[uid]||{};
+      const chrText=u.chroniclesText||"";
+      const srcText=u.sourceText||"";
+      const sourceRef=u.sourceRef||"";
+      const commentary=(raw.commentary&&raw.commentary[uid])||{};
+      // מגביל כל פרשן ל-3000 תווים כדי לא לחרוג; רוב הפרשנויות קצרות יותר
+      const commentaryText=typeof commentary==="object"&&commentary
+        ? Object.entries(commentary).map(([author,text])=>{
+            const t=typeof text==="string"?text:"";
+            const limited=t.length>3000?t.substring(0,3000)+"\n[קוצר]":t;
+            return `─── ${author} ───\n${limited}`;
+          }).join("\n\n")
+        : "";
+      const ac=(raw.analysis_chronicles&&raw.analysis_chronicles[uid]&&raw.analysis_chronicles[uid][concept])||{};
+      const asrc=(raw.analysis_source&&raw.analysis_source[uid]&&raw.analysis_source[uid][concept])||{};
+      const cf=(raw.compareFactual&&raw.compareFactual[uid]&&raw.compareFactual[uid][concept])||"";
+      const indicators=(ac.params||[]).filter(p=>p&&p.found===true).map(p=>`  פסוק ${p.verse||"?"}: ${(p.note||"").substring(0,200)}`).join("\n");
+      return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### יחידה [${startGlobal+i+1}/${totalUnits}]: ${cu.unitName} (${cu.chapter}) · uid=${uid}
+${sourceRef?`### מקבילה: ${sourceRef}`:"### סונדרגוט (אין מקבילה)"}
+
+#### טקסט דה״י המלא
+${chrText||"(לא נטען)"}
+
+${srcText?`#### טקסט המקבילה המלא\n${srcText}\n`:""}#### המסקנה המחקרית של החוקרת (compareNotes)
+${cu.conclusion||"(אין מסקנה)"}
+
+${cf?`#### ניתוח עובדתי השוואתי משלב ב'\n${cf}\n`:""}#### אינדיקטורים חיוביים שסומנו (שלב 2)
+${indicators||"  (אין)"}
+
+#### שדה גלוי · דה"י
+${ac.explicit_note||"(לא תועד)"}
+
+${asrc.explicit_note?`#### שדה גלוי · מקבילה\n${asrc.explicit_note}\n`:""}#### פרשנות מלאה — כל המחברים ליחידה זו
+${commentaryText||"(אין פרשנות מתועדת)"}
+`;
+    }).join("\n");
+
+    return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי של ישעיהו, ירמיהו ויחזקאל.
+
+גרסת פרומפט: ${PROMPT_VERSION_DRAFT} · קבוצה ${batchIdx+1}/${totalBatches}
+
+### המושג: "${concept}" · הדמות: ${who}
+### קבוצה ${batchIdx+1} מתוך ${totalBatches} · ${batchUnits.length} יחידות (${startGlobal+1}-${startGlobal+batchUnits.length} מתוך ${totalUnits})
+
+### ההגדרה המחייבת (מפרק ב׳):
+${conceptDef.text}
+
+### הבהרת היישום:
+${conceptDef.clarification.text}
+
+### תפקידך בקבוצה הזאת
+עבור על ${batchUnits.length} היחידות שבקבוצה הנוכחית וחלץ **מידע ממוקד שיאפשר כתיבה אקדמית של טיוטה**. אל תכתוב פרוזה — חלץ ממצאים מובנים. כל ממצא חייב להיות מעוגן בציטוט מדויק מהחומר שלפניך (פסוק, אינדיקטור, פרשן) — **אל תמציא**.
+
+### מה לחלץ מהקבוצה
+- **ממצאים בשדה הגלוי** — מילים מהשדה הסמנטי, הופעה מפורשת של המושג (למי מיוחסת?), פסוקים קונקרטיים.
+- **ממצאים בשדה הנרמז** — פעולות, בחירות ספרותיות, פרמטרים חיוביים שמבטאים את המושג.
+- **שינויי הכרוניסט ביחס למקבילה** — תוספת, השמטה, החלפה, שינוי מבני (עם ציטוט מהמקבילה ומדה״י).
+- **ציטוטי פרשנים רלוונטיים** — אך ורק פרשנים שקראת את טקסטם בחומר הזה, עם שם מחבר, חיבור ועמוד כפי שהם בחומר.
+- **ראיות נגד / סייגים** — יחידות שבהן המושג חלש או ההסקה בעייתית.
+
+### כללים
+- **אל תמציא ציטוטים** — אם לא ראית ציטוט בחומר, אל תכלול אותו.
+- **שמור שמות פרשנים ועמודים בדיוק** כפי שהם בחומר.
+- **הבחן בין המלך לדמויות אחרות** — אם רוח מיוחסת לעמשי ולא לדוד, ציין זאת.
+- **אל תסיק מגמה מלאה מקבוצה בודדת** — זו רק קבוצה אחת מ-${totalBatches}; המסקנה הכוללת תיווצר במיזוג.
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״) או בגרש בודד ʼ.
+- פלט רק JSON, ללא טקסט מקדים או מסיים, ללא markdown.
+
+### יחידות בקבוצה (${batchUnits.length}):
+${unitsSection}
+
+### פלט נדרש:
+
+{
+  "batchFindings": [
+    {
+      "finding": "ממצא בנוסח שאפשר להעתיק כמעט כמות שהוא לטיוטה (משפט אחד-שניים)",
+      "basedOnUnits": [{"uid":"","unitName":"","chapter":""}],
+      "field": "explicit|implicit|both",
+      "evidence": "ציטוט מהחומר (פסוק/אינדיקטור/תיאור) שמבסס את הממצא",
+      "scholarCitations": [
+        {"author":"","work":"","page":"","quote":"ציטוט מדויק או תמצית מהפרשנות"}
+      ],
+      "textualChange": "אם רלוונטי: תוספת/השמטה/החלפה — מה בדיוק עשה הכרוניסט"
+    }
+  ],
+  "batchCounterEvidence": [
+    {"finding":"","basedOnUnits":[{"uid":"","unitName":""}],"explanation":""}
+  ],
+  "batchQualifications": [
+    "סייג או אזהרה מתודית שעולה מהיחידות בקבוצה"
+  ],
+  "batchNotes": "הערות כלליות על הקבוצה — דפוסים ייחודיים, קונטרסטים בין יחידות, מה שעשוי להועיל במיזוג"
+}`;
+  }
+
+  // פרומפט המיזוג: לוקח את כל הממצאים מכל הקבוצות וכותב טיוטה אקדמית
+  function buildDraftMergePrompt(allBatches){
+    const who=character==="solomon"?"שלמה":"דוד";
+    const allFindings=[]; const allCounter=[]; const allQuals=[]; const batchNotes=[];
+    allBatches.forEach(b=>{
+      const r=b.result||{};
+      (r.batchFindings||[]).forEach(x=>allFindings.push({...x,fromBatch:b.idx+1}));
+      (r.batchCounterEvidence||[]).forEach(x=>allCounter.push({...x,fromBatch:b.idx+1}));
+      (r.batchQualifications||[]).forEach(x=>allQuals.push(`[קבוצה ${b.idx+1}] ${x}`));
+      if(r.batchNotes) batchNotes.push(`[קבוצה ${b.idx+1}] ${r.batchNotes}`);
+    });
+
+    return `אתה עוזר מחקר. בשלב קודם איסופנו ממצאים מכל יחידות ${who} בדה״י למושג "${concept}". עכשיו תפקידך לכתוב **טיוטה אקדמית רציפה לפרק בתזה**.
+
+גרסת פרומפט: ${PROMPT_VERSION_DRAFT} · מיזוג סופי
+
+### המושג: "${concept}" · הדמות: ${who}
+
+### ההגדרה המחייבת (מפרק ב׳):
+${conceptDef.text}
+
+### הבהרת היישום:
+${conceptDef.clarification.text}
+
+### ממצאים מכל הקבוצות (${allFindings.length} ממצאים · ${allCounter.length} ראיות נגד · ${allQuals.length} סייגים)
+
+### ממצאים:
+${JSON.stringify(allFindings,null,2)}
+
+${allCounter.length?`### ראיות נגד:
+${JSON.stringify(allCounter,null,2)}
+`:""}
+${allQuals.length?`### סייגים מתודיים:
+${allQuals.map(q=>"- "+q).join("\n")}
+`:""}
+${batchNotes.length?`### הערות קבוצות:
+${batchNotes.join("\n")}
+`:""}
+### כללי כתיבה
+1. **פרוזה אקדמית רציפה** 400-600 מילים — ללא כותרות, סעיפים ממוספרים, או רשימות.
+2. **אין ספירת אינדיקטורים** כהוכחה למושג.
+3. **אין לדרוש הופעת מילת המפתח** לזיהוי נרמז.
+4. **הבחן בין המלך לאחרים** ובין בקשת כושר, ייחוסו ומימושו.
+5. **הפרד בין דברי פרשן למסקנת המחקר**. שמות הפרשנים והעמודים **רק** בהערות שוליים.
+6. **אין ליצור ציטוט מניסוח משוער**. אם אין נוסח מדויק — פרפרזה והפניה.
+7. **אין להוסיף השוואה עצמאית לנביאים**.
+8. **אל תסיים ב-"לסיכום" פורמלי**.
+
+### תהליך
+- פתח במשפט-שניים שמנסחים טיעון מרכזי.
+- פתח כל מוקד בפסקה שמשלבת ממצאי שדה גלוי + שדה נרמז + שינוי מקבילה + פרשנות.
+- שלב סייגים וראיות נגד.
+- סיים בניסוח התובנה המרכזית מחדש.
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״).
+- פלט רק JSON, ללא טקסט או markdown.
+
+### פלט:
+
+{
+  "centralClaim": "טיעון מרכזי של הטיוטה (משפט-שניים)",
+  "draft": "הטיוטה האקדמית הרציפה (400-600 מילים). הערות שוליים מסומנות ¹ ² ³ וכדומה.",
+  "footnotes": [
+    {"num": 1, "text": "ציטוט + שם מחבר + חיבור + עמוד כפי שבממצאים"}
+  ],
+  "evidenceMap": [
+    {"paragraph":"משפט פתיחה או מוטיב מרכזי של הפסקה","basedOnUnits":["uid1"],"mainEvidence":"תמצית הראיה"}
+  ],
+  "gaps": ["פער/חוסר/סתירה שלא נכלל בטיוטה"],
+  "wordCount": מספר מילים בטיוטה
+}`;
+  }
+
+  // מעבר 1 ישן — נשאר לתאימות (לא בשימוש)
   function buildSelectionPrompt(){
     const s3=stageData.stage3;
     const who=character==="solomon"?"שלמה":"דוד";
@@ -4214,52 +4434,120 @@ ${unitsSection}
     const s2=stageData.stage2, s3=stageData.stage3;
     if(!s2||!Array.isArray(s2.tableRows)||!s2.tableRows.length){ setP3DraftError("אין נתוני שלב 2."); return; }
     if(!s3||s3.source!=="compareNotes"||!Array.isArray(s3.detailedConclusions)){ setP3DraftError("אין נתוני שלב 3."); return; }
-    if(p3AcademicDraft){
+    if(p3AcademicDraft&&!p3AcademicInProgress){
       if(!confirm("קיימת טיוטה. ליצור חדשה (הקיימת תימחק)?")) return;
+      // ניקוי מה-draft הקיים
+      const cleaned={...stage4Data,phase3_academic_draft:null,phase3_academic_in_progress:null,lastUpdated:Date.now()};
+      const newData={...stageData,stage4:cleaned,lastUpdated:Date.now()};
+      setStageData(newData);
+      const all=stageResults||LS_get("stageResults",{});
+      const upd={...all,[resultsKey]:newData};
+      if(setStageResults) setStageResults(upd);
+      LS_set("stageResults",upd);
+      fbSaveStageResults(upd);
+      await new Promise(r=>setTimeout(r,80));
     }
     setP3DraftError(""); setP3DraftLoading(true);
+
+    const allUnits=s3.detailedConclusions;
+    const unitsByUid={};
+    allUnits.forEach(u=>{ unitsByUid[u.uid]=u; });
+
+    // תכנון או טעינת מצב קיים
+    let plan=initP3DraftPlan();
+    saveP3AcademicInProgress(plan);
+
     try{
-      // ─ מעבר 1: בחירת יחידות ─
-      setP3DraftProgress("מעבר 1/2: בוחר יחידות מייצגות...");
-      const selPrompt=buildSelectionPrompt();
-      const selR=await aiCallDirectWithUsage(selPrompt,8000);
-      const sel=tryParseJson(selR.text);
-      if(!sel.parsed){
-        setP3DraftError(`מעבר 1 — JSON parse: ${sel.error?sel.error.message:"לא נמצא"}. פלט (500 תווים): ${selR.text.substring(0,500)}`);
-        setP3DraftLoading(false); setP3DraftProgress(""); return;
+      // ─ שלב א': הרצת קבוצות שלא הושלמו ─
+      for(let bi=0;bi<plan.batches.length;bi++){
+        if(plan.batches[bi].status==="done") continue;
+        setP3DraftProgress(`קבוצה ${bi+1}/${plan.batches.length}: שולף פרשנות ל-${plan.batches[bi].unitUids.length} יחידות...`);
+        const batchUnits=plan.batches[bi].unitUids.map(uid=>unitsByUid[uid]).filter(Boolean);
+        const prompt=buildDraftBatchPrompt(bi,batchUnits,plan.batches.length,allUnits.length);
+        setP3DraftProgress(`קבוצה ${bi+1}/${plan.batches.length}: שולח ל-AI (${prompt.length.toLocaleString()} תווים)...`);
+        try{
+          const r=await aiCallDirectWithUsage(prompt,16000);
+          const {parsed,error}=tryParseJson(r.text);
+          if(!parsed){
+            plan.batches[bi]={...plan.batches[bi],status:"error",error:`JSON parse: ${error?error.message:"לא נמצא"}`,processedAt:new Date().toISOString()};
+            saveP3AcademicInProgress(plan);
+            setP3DraftError(`קבוצה ${bi+1} נכשלה: ${error?error.message:"JSON parse"}. ההתקדמות נשמרה — לחצי שוב להמשיך.`);
+            setP3DraftLoading(false); setP3DraftProgress(""); return;
+          }
+          plan.batches[bi]={
+            ...plan.batches[bi],
+            status:"done",
+            result:parsed,
+            processedAt:new Date().toISOString(),
+            usage:r.usage,
+            costUsd:r.costUsd,
+            _promptLength:prompt.length
+          };
+          plan.totalUsage.input_tokens+=(r.usage?.input_tokens||0);
+          plan.totalUsage.output_tokens+=(r.usage?.output_tokens||0);
+          plan.totalCost+=(r.costUsd||0);
+          saveP3AcademicInProgress(plan);
+        }catch(batchErr){
+          plan.batches[bi]={...plan.batches[bi],status:"error",error:String(batchErr.message||batchErr),processedAt:new Date().toISOString()};
+          saveP3AcademicInProgress(plan);
+          setP3DraftError(`קבוצה ${bi+1} נכשלה: ${batchErr.message||batchErr}. ההתקדמות נשמרה — לחצי שוב להמשיך.`);
+          setP3DraftLoading(false); setP3DraftProgress(""); return;
+        }
       }
-      const selResult=sel.parsed;
-      const selCount=(selResult.selectedUnits||[]).length;
-      // ─ מעבר 2: כתיבת טיוטה ─
-      setP3DraftProgress(`מעבר 2/2: כותב טיוטה (${selCount} יחידות נבחרו)...`);
-      const draftPrompt=buildDraftPrompt(selResult);
-      const dR=await aiCallDirectWithUsage(draftPrompt,16000);
-      const d=tryParseJson(dR.text);
-      if(!d.parsed){
-        setP3DraftError(`מעבר 2 — JSON parse: ${d.error?d.error.message:"לא נמצא"}. פלט (500 תווים): ${dR.text.substring(0,500)}`);
-        setP3DraftLoading(false); setP3DraftProgress(""); return;
+
+      // ─ שלב ב': מיזוג סופי לפרוזה אקדמית ─
+      setP3DraftProgress(`מיזוג סופי של ${plan.batches.length} קבוצות — כותב טיוטה...`);
+      const mergePrompt=buildDraftMergePrompt(plan.batches);
+      try{
+        const mr=await aiCallDirectWithUsage(mergePrompt,16000);
+        const {parsed,error}=tryParseJson(mr.text);
+        if(!parsed){
+          plan.mergeStatus="error";
+          plan.mergeError=`JSON parse: ${error?error.message:"לא נמצא"}`;
+          saveP3AcademicInProgress(plan);
+          setP3DraftError(`מיזוג סופי נכשל: ${error?error.message:"JSON parse"}. הממצאים נשמרו — לחצי שוב להרץ רק את המיזוג.`);
+          setP3DraftLoading(false); setP3DraftProgress(""); return;
+        }
+        plan.totalUsage.input_tokens+=(mr.usage?.input_tokens||0);
+        plan.totalUsage.output_tokens+=(mr.usage?.output_tokens||0);
+        plan.totalCost+=(mr.costUsd||0);
+        const draft={
+          ...parsed,
+          promptVersion:PROMPT_VERSION_DRAFT,
+          generatedAt:new Date().toISOString(),
+          definitionAt:conceptDef.editedAt||conceptDef.savedAt||null,
+          clarificationId:conceptDef.clarification.id||null,
+          clarificationGeneratedAt:conceptDef.clarification.generatedAt||conceptDef.clarification.editedAt||null,
+          usage:plan.totalUsage,
+          costUsd:plan.totalCost,
+          totalUnitsInCorpus:allUnits.length,
+          batchCount:plan.batches.length,
+          batchSize:plan.batchSize,
+          _batchFindings:plan.batches.map(b=>({idx:b.idx,findingsCount:(b.result?.batchFindings?.length)||0}))
+        };
+        // שמור כטיוטה סופית + נקה את phase3_academic_in_progress
+        const newStage4={
+          ...stage4Data,
+          phase3_academic_draft:draft,
+          phase3_academic_in_progress:null,
+          lastUpdated:Date.now()
+        };
+        const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+        setStageData(newData);
+        const all=stageResults||LS_get("stageResults",{});
+        const updated={...all,[resultsKey]:newData};
+        if(setStageResults) setStageResults(updated);
+        LS_set("stageResults",updated);
+        fbSaveStageResults(updated);
+        setP3DraftProgress("");
+      }catch(mergeErr){
+        plan.mergeStatus="error";
+        plan.mergeError=String(mergeErr.message||mergeErr);
+        saveP3AcademicInProgress(plan);
+        setP3DraftError(`מיזוג סופי נכשל: ${mergeErr.message||mergeErr}. הממצאים נשמרו.`);
       }
-      const totalUsage={input_tokens:(selR.usage?.input_tokens||0)+(dR.usage?.input_tokens||0),output_tokens:(selR.usage?.output_tokens||0)+(dR.usage?.output_tokens||0)};
-      const totalCost=(selR.costUsd||0)+(dR.costUsd||0);
-      const draft={
-        ...d.parsed,
-        selection:selResult,
-        promptVersion:PROMPT_VERSION_DRAFT,
-        generatedAt:new Date().toISOString(),
-        definitionAt:conceptDef.editedAt||conceptDef.savedAt||null,
-        clarificationId:conceptDef.clarification.id||null,
-        clarificationGeneratedAt:conceptDef.clarification.generatedAt||conceptDef.clarification.editedAt||null,
-        usage:totalUsage,
-        costUsd:totalCost,
-        totalUnitsInCorpus:s3.detailedConclusions.length,
-        unitsSelected:selCount,
-        _selectionPromptLength:selPrompt.length,
-        _draftPromptLength:draftPrompt.length
-      };
-      saveAcademicDraft(draft);
-      setP3DraftProgress("");
     }catch(e){
-      setP3DraftError(`שגיאה: ${e.message||e}`);
+      setP3DraftError(`שגיאה כללית: ${e.message||e}`);
     }
     setP3DraftLoading(false);
   }
@@ -4291,15 +4579,15 @@ ${unitsSection}
     if(dimLabel) lines.push(`**ממד:** ${dimLabel}`);
     lines.push(`**הופק:** ${draft.generatedAt?draft.generatedAt.slice(0,16).replace("T"," "):todayStamp()}`);
     if(draft.wordCount) lines.push(`**מילים בטיוטה:** ${draft.wordCount}`);
-    if(draft.unitsSelected&&draft.totalUnitsInCorpus) lines.push(`**יחידות שנבחרו לטיוטה:** ${draft.unitsSelected} מתוך ${draft.totalUnitsInCorpus}`);
+    if(draft.totalUnitsInCorpus) lines.push(`**יחידות עובדו:** ${draft.totalUnitsInCorpus} ב-${draft.batchCount||"?"} קבוצות`);
     if(draft.usage) lines.push(`**שימוש:** קלט ${draft.usage.input_tokens||0} tok · פלט ${draft.usage.output_tokens||0} tok · עלות $${(draft.costUsd||0).toFixed(4)}`);
     lines.push("");
     lines.push("---");
     lines.push("");
-    if(draft.selection&&draft.selection.centralClaim){
-      lines.push("## טיעון מרכזי (מהמעבר הקודם)");
+    if(draft.centralClaim){
+      lines.push("## טיעון מרכזי");
       lines.push("");
-      lines.push(draft.selection.centralClaim);
+      lines.push(draft.centralClaim);
       lines.push("");
     }
     lines.push("## הטיוטה");
@@ -4334,16 +4622,6 @@ ${unitsSection}
       lines.push("## חוסרים / בעיות נקודתיות");
       lines.push("");
       draft.gaps.forEach(g=>lines.push(`- ${g}`));
-      lines.push("");
-    }
-    if(Array.isArray(draft.selection?.selectedUnits)&&draft.selection.selectedUnits.length){
-      lines.push("---");
-      lines.push("");
-      lines.push("## יחידות שנבחרו למעבר 2");
-      lines.push("");
-      draft.selection.selectedUnits.forEach(su=>{
-        lines.push(`- **${su.unitName}** (${su.chapter}) — ${su.role||""}: ${su.reasonForSelection||""}`);
-      });
       lines.push("");
     }
     return lines.join("\n");
@@ -5389,10 +5667,51 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                               <>
                                 <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.7"}}>
                                   יוצר טיוטה אקדמית רציפה (~400-600 מילים) למושג <strong>"{concept}"</strong> בעיצוב {character==="solomon"?"שלמה":"דוד"}.<br/>
-                                  <strong>תהליך בשני מעברים:</strong> (1) בחירה של 6-10 יחידות מייצגות מתוך {(stageData.stage3?.detailedConclusions||[]).length} היחידות; (2) כתיבה עם הפירוש המלא של הפרשנים ליחידות הנבחרות — כך הציטוטים הם מהטקסט שה-AI בפועל קורא, לא מהזיכרון.
+                                  <strong>תהליך:</strong> ({P3_BATCH_COUNT} קבוצות × ~{p3BatchSizeFor((stageData.stage3?.detailedConclusions||[]).length)} יחידות) לקבוצה — ה-AI קורא את הפירוש המלא של הפרשנים ומחלץ ממצאים. אחרי כל קבוצה שומר, מאפשר להמשיך אם נקטע. מיזוג סופי כותב את הטיוטה.
                                 </div>
+                                {/* פאנל התקדמות — אם יש in-progress */}
+                                {p3AcademicInProgress&&Array.isArray(p3AcademicInProgress.batches)&&(()=>{
+                                  const done=p3AcademicInProgress.batches.filter(b=>b.status==="done").length;
+                                  const errors=p3AcademicInProgress.batches.filter(b=>b.status==="error").length;
+                                  const total=p3AcademicInProgress.batches.length;
+                                  return (
+                                    <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
+                                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"6px"}}>
+                                        <div style={{fontSize:"12px",fontWeight:"700",color:dimColor}}>📊 התקדמות: {done}/{total} קבוצות הושלמו</div>
+                                        <div style={{fontSize:"10px",color:"#cbd5e1"}}>סה"כ עד כה: {p3AcademicInProgress.totalUsage?.input_tokens||0} tok קלט · ${(p3AcademicInProgress.totalCost||0).toFixed(4)}</div>
+                                      </div>
+                                      <div style={{display:"flex",gap:"3px",flexWrap:"wrap"}}>
+                                        {p3AcademicInProgress.batches.map((b,bi)=>{
+                                          const c=b.status==="done"?"#34d399":b.status==="error"?"#f87171":"#475569";
+                                          return <div key={bi} title={`קבוצה ${bi+1}: ${b.status==="done"?"הושלמה":b.status==="error"?("שגיאה: "+(b.error||"")):"ממתינה"}`} style={{flex:"1 0 20px",height:"16px",background:c,borderRadius:"3px",fontSize:"9px",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700"}}>{bi+1}</div>;
+                                        })}
+                                      </div>
+                                      {errors>0&&<div style={{marginTop:"6px",fontSize:"10px",color:"#fca5a5"}}>⚠ {errors} קבוצות נכשלו — לחצי "המשך" לנסות שוב</div>}
+                                    </div>
+                                  );
+                                })()}
                                 <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"8px"}}>
-                                  <button onClick={generateAcademicDraft} disabled={p3DraftLoading} style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:p3DraftLoading?"wait":"pointer",background:p3DraftLoading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{p3DraftLoading?`⏳ ${p3DraftProgress||"יוצר..."}`:"✍ צור טיוטה אקדמית"}</button>
+                                  <button onClick={generateAcademicDraft} disabled={p3DraftLoading} style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:p3DraftLoading?"wait":"pointer",background:p3DraftLoading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{(()=>{
+                                    if(p3DraftLoading) return `⏳ ${p3DraftProgress||"יוצר..."}`;
+                                    if(p3AcademicInProgress){
+                                      const pending=p3AcademicInProgress.batches.filter(b=>b.status!=="done").length;
+                                      if(pending>0) return `▶ המשך (${pending} קבוצות נותרו)`;
+                                      return "▶ הרץ מיזוג סופי";
+                                    }
+                                    return "✍ צור טיוטה אקדמית";
+                                  })()}</button>
+                                  {p3AcademicInProgress&&!p3DraftLoading&&(
+                                    <button onClick={()=>{if(confirm("למחוק את ההתקדמות ולהתחיל מאפס?")){
+                                      const cleaned={...stage4Data,phase3_academic_in_progress:null,lastUpdated:Date.now()};
+                                      const newData={...stageData,stage4:cleaned,lastUpdated:Date.now()};
+                                      setStageData(newData);
+                                      const all=stageResults||LS_get("stageResults",{});
+                                      const upd={...all,[resultsKey]:newData};
+                                      if(setStageResults) setStageResults(upd);
+                                      LS_set("stageResults",upd);
+                                      fbSaveStageResults(upd);
+                                    }}} style={{padding:"8px 14px",borderRadius:"5px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"11px"}}>🗑 התחל מאפס</button>
+                                  )}
                                 </div>
                                 {p3DraftError&&<div style={{padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3DraftError}</div>}
                               </>
@@ -5403,7 +5722,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
                                     <span>🏃 הופק: {p3AcademicDraft.generatedAt?p3AcademicDraft.generatedAt.slice(0,16).replace("T"," "):"—"}</span>
                                     {p3AcademicDraft.wordCount&&<span style={{color:"#60a5fa"}}>· {p3AcademicDraft.wordCount} מילים</span>}
-                                    {p3AcademicDraft.unitsSelected&&<span style={{color:"#a78bfa"}}>· {p3AcademicDraft.unitsSelected}/{p3AcademicDraft.totalUnitsInCorpus} יחידות נבחרו</span>}
+                                    {p3AcademicDraft.totalUnitsInCorpus&&<span style={{color:"#a78bfa"}}>· {p3AcademicDraft.totalUnitsInCorpus} יחידות · {p3AcademicDraft.batchCount||"?"} קבוצות</span>}
                                     <span style={{color:"#86efac",fontWeight:"700"}}>· עלות: ${(p3AcademicDraft.costUsd||0).toFixed(4)}</span>
                                     {p3AcademicDraft._editedByUser&&<span style={{color:"#fcd34d"}}>· ✏ נערך ידנית</span>}
                                   </div>
@@ -5441,10 +5760,10 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 {(()=>{ const dd=p3DraftEditing&&p3DraftEditDraft?p3DraftEditDraft:p3AcademicDraft; return (
                                 <>
                                 {/* טיעון מרכזי */}
-                                {dd.selection?.centralClaim&&(
+                                {dd.centralClaim&&(
                                   <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px",borderRight:`3px solid ${dimColor}`}}>
-                                    <div style={{fontSize:"11px",fontWeight:"700",color:dimColor,marginBottom:"4px"}}>טיעון מרכזי (ממעבר 1):</div>
-                                    <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{dd.selection.centralClaim}</div>
+                                    <div style={{fontSize:"11px",fontWeight:"700",color:dimColor,marginBottom:"4px"}}>טיעון מרכזי:</div>
+                                    <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{dd.centralClaim}</div>
                                   </div>
                                 )}
 
@@ -5507,22 +5826,17 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   </div>
                                 )}
 
-                                {/* יחידות שנבחרו */}
-                                {Array.isArray(dd.selection?.selectedUnits)&&dd.selection.selectedUnits.length>0&&(
+                                {/* ממצאים לפי קבוצה (מצומצם — רק ספירה) */}
+                                {Array.isArray(p3AcademicDraft._batchFindings)&&p3AcademicDraft._batchFindings.length>0&&(
                                   <details style={{marginBottom:"10px"}}>
-                                    <summary style={{cursor:"pointer",padding:"8px 12px",background:"#0f172a",borderRadius:"7px",fontSize:"11px",color:dimColor,fontWeight:"700"}}>📋 יחידות שנבחרו למעבר 2 ({dd.selection.selectedUnits.length})</summary>
-                                    <div style={{marginTop:"6px",padding:"10px 12px",background:"#0f172a",borderRadius:"5px"}}>
-                                      {dd.selection.selectedUnits.map((su,sui)=>{
-                                        const roleColors={"ראייה מרכזית":"#34d399","ראייה תומכת":"#60a5fa","ראיית נגד":"#f87171","סונדרגוט מכונן":"#a78bfa","מקרה גבולי":"#fbbf24"};
-                                        const col=roleColors[su.role]||"#64748b";
-                                        return (
-                                          <div key={sui} style={{marginBottom:"6px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${col}`,fontSize:"11px",color:"#cbd5e1"}}>
-                                            <div style={{marginBottom:"3px"}}><strong style={{color:"#f1f5f9"}}>{su.unitName}</strong> <span style={{color:"#64748b"}}>({su.chapter})</span> · <span style={{color:col,fontWeight:"700"}}>{su.role}</span></div>
-                                            <div style={{color:"#94a3b8",lineHeight:"1.5"}}>{su.reasonForSelection}</div>
-                                          </div>
-                                        );
-                                      })}
-                                      {dd.selection.unitsNotSelectedReasoning&&<div style={{marginTop:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",fontSize:"10px",color:"#94a3b8",fontStyle:"italic"}}>יחידות שלא נבחרו: {dd.selection.unitsNotSelectedReasoning}</div>}
+                                    <summary style={{cursor:"pointer",padding:"8px 12px",background:"#0f172a",borderRadius:"7px",fontSize:"11px",color:dimColor,fontWeight:"700"}}>📊 ממצאים לפי קבוצה (סה"כ: {p3AcademicDraft._batchFindings.reduce((s,b)=>s+(b.findingsCount||0),0)})</summary>
+                                    <div style={{marginTop:"6px",padding:"10px 12px",background:"#0f172a",borderRadius:"5px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:"6px"}}>
+                                      {p3AcademicDraft._batchFindings.map((b,bi)=>(
+                                        <div key={bi} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px",textAlign:"center",fontSize:"11px"}}>
+                                          <div style={{color:dimColor,fontWeight:"700"}}>קבוצה {b.idx+1}</div>
+                                          <div style={{color:"#cbd5e1"}}>{b.findingsCount} ממצאים</div>
+                                        </div>
+                                      ))}
                                     </div>
                                   </details>
                                 )}
@@ -5533,7 +5847,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                           </div>
                         )}
 
-                        {/* ═══ פאזה 3 הישנה (סינתזה מובנית — ארכיון, מוסתר כברירת מחדל) ═══ */}
+                        {/* ═══ פאזה 3 הישנה (סינתזה מובנית — מוסתר כברירת מחדל) ═══ */}
                         {false&&conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&(
                           <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`2px solid ${dimColor}`,marginBottom:"12px"}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
