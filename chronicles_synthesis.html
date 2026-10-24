@@ -2743,6 +2743,12 @@ ${materialSection}
   const [p3VerifyProgress,setP3VerifyProgress]=useState("");
   const [p3Editing,setP3Editing]=useState(false);
   const [p3Draft,setP3Draft]=useState(null);
+  // ─ פאזה 3 חדשה — כתיבת טיוטה אקדמית (ניסוי אחד, לא שומר ישנים) ─
+  const [p3DraftLoading,setP3DraftLoading]=useState(false);
+  const [p3DraftError,setP3DraftError]=useState("");
+  const [p3DraftProgress,setP3DraftProgress]=useState("");
+  const [p3DraftEditing,setP3DraftEditing]=useState(false);
+  const [p3DraftEditDraft,setP3DraftEditDraft]=useState(null);
 
   // תצוגה מקדימה של הקלט המדויק שיעבור ל-AI ליחידה אחת (בלי להריץ)
   function buildPreviewForUnit(uid){
@@ -3056,6 +3062,8 @@ ${buildUnitBlock(unit)}
 
   // ─ שלב 4 פאזה 3: סינתזה ─
   const PROMPT_VERSION_P3="v6-2026-10-24-textual-changes";
+  const PROMPT_VERSION_DRAFT="v1-2026-10-24-academic-draft";
+  const p3AcademicDraft=stage4Data.phase3_academic_draft||null;
   const P3_BATCH_COUNT=6;
   const P3_BATCH_MAX_TOKENS=24000;
   // חישוב גודל קבוצה לפי מספר יחידות ו-P3_BATCH_COUNT (מינימום 1 יחידה לקבוצה)
@@ -4014,6 +4022,331 @@ ${unitsSection}
       if(Array.isArray(cur[key])) cur[key]=cur[key].filter((_,i)=>i!==index);
       return copy;
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // פאזה 3 חדשה — כתיבת טיוטה אקדמית (שני מעברים אוטומטיים)
+  // ═══════════════════════════════════════════════════════════════
+
+  function saveAcademicDraft(draft){
+    const newStage4={...stage4Data,phase3_academic_draft:draft,lastUpdated:Date.now()};
+    const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+    setStageData(newData);
+    const all=stageResults||LS_get("stageResults",{});
+    const updated={...all,[resultsKey]:newData};
+    if(setStageResults) setStageResults(updated);
+    LS_set("stageResults",updated);
+    fbSaveStageResults(updated);
+  }
+
+  // מעבר 1 — בחירת יחידות מייצגות
+  function buildSelectionPrompt(){
+    const s3=stageData.stage3;
+    const who=character==="solomon"?"שלמה":"דוד";
+    const allConcs=s3.detailedConclusions;
+    const unitsSummary=allConcs.map((c,i)=>{
+      const conclSnippet=c.hasConclusion?((c.conclusion||"").substring(0,400)):"(אין מסקנה)";
+      return `[${i+1}] uid=${c.uid} · ${c.unitName} (${c.chapter}) ${c.hasParallel?`· מקבילה: ${c.sourceRef}`:"· סונדרגוט"}
+מסקנה מחקרית (400 תווים ראשונים): ${conclSnippet}`;
+    }).join("\n\n");
+    return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי של ישעיהו, ירמיהו ויחזקאל.
+
+גרסת פרומפט: ${PROMPT_VERSION_DRAFT} · מעבר 1 (בחירת יחידות)
+
+### המושג הנבדק: "${concept}"
+### הדמות: ${who}
+### סה"כ יחידות עם מסקנה: ${allConcs.filter(c=>c.hasConclusion).length} מתוך ${allConcs.length}
+
+### ההגדרה המחייבת (מפרק ב׳):
+${conceptDef.text}
+
+### הבהרת היישום:
+${conceptDef.clarification.text}
+
+### מטרת המעבר הזה
+בחר **6-10 יחידות מייצגות** מתוך הקורפוס, שבהן תתמקד הטיוטה האקדמית. הבחירה צריכה לייצג את מכלול הממצאים ולא רק יחידות שבהן המושג חזק — גם ראיות נגד, סייגים ומקרים גבוליים הם בעלי ערך.
+
+### קריטריונים לבחירה
+- יחידות שבהן המושג מתבטא בבירור (לפי המסקנה).
+- יחידות שבהן יש שינוי משמעותי מהמקבילה הקשור למושג.
+- יחידות סונדרגוט שתרומתן הייחודית למושג.
+- יחידות שמהוות ראיית נגד או סייג (גם זה חלק מהטיעון).
+- עדיפות ליחידות שהמסקנה מצטטת בהן פרשן ישירות.
+
+### כל יחידות שלב 3 (${allConcs.length}):
+${unitsSummary}
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״) או בגרש בודד ʼ.
+- פלט רק JSON, ללא טקסט או markdown.
+
+### פלט נדרש:
+
+{
+  "centralClaim": "ניסוח מקדים של הטיעון המרכזי שתציג הטיוטה — מה המסקנה שלנו על ביטוי המושג בעיצוב ${who} בדה״י, בכשורה אחת-שתיים",
+  "selectedUnits": [
+    {
+      "uid": "מזהה היחידה כפי שהוא בחומר",
+      "unitName": "שם היחידה",
+      "chapter": "פרק",
+      "role": "ראייה מרכזית|ראייה תומכת|ראיית נגד|סונדרגוט מכונן|מקרה גבולי",
+      "reasonForSelection": "למה נבחרה — כיצד היא תורמת לטיעון"
+    }
+  ],
+  "unitsNotSelectedReasoning": "הסבר קצר למה יחידות אחרות (ברובן) לא נבחרו — האם כי חוזרות על טענות דומות, או שחסרות ראיה מספקת, או שאינן רלוונטיות"
+}`;
+  }
+
+  // מעבר 2 — כתיבת הטיוטה עם הפירוש המלא של היחידות שנבחרו
+  function buildDraftPrompt(selectionResult){
+    const s3=stageData.stage3;
+    const who=character==="solomon"?"שלמה":"דוד";
+    const unitsByUid={};
+    (raw.units||[]).forEach(u=>{ unitsByUid[String(u.id)]=u; });
+    const concsByUid={};
+    (s3.detailedConclusions||[]).forEach(c=>{ concsByUid[c.uid]=c; });
+
+    const selected=selectionResult.selectedUnits||[];
+    const unitsSection=selected.map((su,i)=>{
+      const uid=String(su.uid);
+      const u=unitsByUid[uid]||{};
+      const cu=concsByUid[uid]||{};
+      const chrText=u.chroniclesText||"";
+      const srcText=u.sourceText||"";
+      const sourceRef=u.sourceRef||"";
+      const commentary=(raw.commentary&&raw.commentary[uid])||{};
+      const commentaryText=typeof commentary==="object"&&commentary
+        ? Object.entries(commentary).map(([author,text])=>`─── ${author} ───\n${text}`).join("\n\n")
+        : "";
+      const ac=(raw.analysis_chronicles&&raw.analysis_chronicles[uid]&&raw.analysis_chronicles[uid][concept])||{};
+      const asrc=(raw.analysis_source&&raw.analysis_source[uid]&&raw.analysis_source[uid][concept])||{};
+      const cf=(raw.compareFactual&&raw.compareFactual[uid]&&raw.compareFactual[uid][concept])||"";
+      const indicators=(ac.params||[]).filter(p=>p&&p.found===true).map(p=>`  פסוק ${p.verse||"?"}: ${(p.note||"").substring(0,200)}`).join("\n");
+      return `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### [${i+1}] יחידה: ${su.unitName} (${su.chapter}) · uid=${uid}
+### תפקיד בטיעון: ${su.role||"?"} · סיבת הבחירה: ${su.reasonForSelection||""}
+${sourceRef?`### מקבילה: ${sourceRef}`:"### סונדרגוט (אין מקבילה)"}
+
+#### טקסט דה״י המלא
+${chrText||"(לא נטען)"}
+
+${srcText?`#### טקסט המקבילה המלא\n${srcText}\n`:""}#### המסקנה המחקרית של החוקרת (compareNotes)
+${cu.conclusion||"(אין מסקנה)"}
+
+${cf?`#### ניתוח עובדתי השוואתי משלב ב'\n${cf}\n`:""}#### אינדיקטורים חיוביים שסומנו (שלב 2)
+${indicators||"  (אין)"}
+
+#### שדה גלוי · דה"י
+${ac.explicit_note||"(לא תועד)"}
+
+${asrc.explicit_note?`#### שדה גלוי · מקבילה\n${asrc.explicit_note}\n`:""}#### פרשנות מלאה — כל המחברים ליחידה זו
+${commentaryText||"(אין פרשנות מתועדת)"}
+`;
+    }).join("\n");
+
+    return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי. מטרתך: לכתוב **טיוטה אקדמית רציפה** למושג זה בעיצוב דמות ${who}, המבוססת על הראיות שהחוקרת אספה ואישרה.
+
+גרסת פרומפט: ${PROMPT_VERSION_DRAFT} · מעבר 2 (כתיבת טיוטה)
+
+### המושג: "${concept}" · הדמות: ${who}
+### טיעון מרכזי מהמעבר הקודם:
+${selectionResult.centralClaim||"(יש לנסח)"}
+
+### ההגדרה המחייבת (מפרק ב׳):
+${conceptDef.text}
+
+### הבהרת היישום:
+${conceptDef.clarification.text}
+
+### כללי כתיבה וביסוס (מחייבים)
+1. **פרוזה אקדמית רציפה** — ללא כותרות, סעיפים ממוספרים, או רשימות. 400-600 מילים.
+2. **אין ספירת אינדיקטורים** כהוכחה למושג ("ב-X יחידות המושג חזק..." אסור).
+3. **אין לדרוש הופעת מילת המפתח** לזיהוי נרמז.
+4. **הבחן בין המלך לבין אחרים** — ובין בקשת כושר, ייחוסו ומימושו.
+5. **הפרד בין דברי פרשן לבין מסקנת המחקר**. שמות הפרשנים והעמודים **רק** בהערות שוליים, לא בגוף הטקסט.
+6. **אין ליצור ציטוט מקראי או פרשני מניסוח משוער**. אם אין נוסח מדויק בחומר — פרפרזה והפניה בהערת שוליים.
+7. **אין להוסיף השוואה עצמאית לנביאים**. אם המסקנה המקורית הזכירה — צטט בלבד.
+8. **אל תוסיף פרטים שאינם בחומר**. אם יש פער/סתירה בחומר — השאר אותו מחוץ לטיוטה והציג ברשימת החוסרים.
+9. **אל תכפה מגמה אחידה**. יחידות שונות עשויות ללמד דברים שונים — שמר את ההבדלים.
+10. **ציטוטי פרשנים מהחומר המסופק בלבד** — אל תצטט פרשן שלא קראת את טקסטו כאן.
+
+### תהליך הכתיבה
+- פתח בטיעון מרכזי (משפט-שניים).
+- פתח כל מוקד בפסקה שמשלבת ראיות מהמסקנות, השדה הגלוי, האינדיקטורים, הפרשנות המתועדת והשינויים ביחס למקבילה.
+- שלב סייגים וראיות נגד.
+- אל תסיים ב-"לסיכום" פורמלי — נסה סיום שמנסח את התובנה המרכזית מחדש.
+
+### יחידות נבחרות (${selected.length}) — עם כל החומר שלהן:
+${unitsSection}
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״) או בגרש בודד ʼ.
+- אל תשבור שורה בתוך ערך מחרוזת.
+- פלט רק JSON, ללא טקסט או markdown.
+
+### פלט נדרש:
+
+{
+  "draft": "הטיוטה האקדמית הרציפה (400-600 מילים). הערות שוליים מסומנות בטקסט במספרים עליונים: ¹ ² ³ וכדומה. ללא כותרות או רשימות.",
+  "footnotes": [
+    {
+      "num": 1,
+      "text": "ציטוט/תמצית מהפרשנות (אם רלוונטי) + שם מחבר, חיבור, עמוד — כפי שמופיעים בחומר המסופק"
+    }
+  ],
+  "evidenceMap": [
+    {
+      "paragraph": "משפט פתיחה או מוטיב מרכזי של הפסקה",
+      "basedOnUnits": ["uid1","uid2"],
+      "mainEvidence": "תמצית מה שהפסקה נשענת עליו"
+    }
+  ],
+  "gaps": [
+    "פער/חוסר/סתירה נקודתי שלא נכלל בטיוטה (אם קיים)"
+  ],
+  "wordCount": מספר מילים בפועל של הטיוטה
+}`;
+  }
+
+  async function generateAcademicDraft(){
+    if(!conceptDef||!conceptDef.text){ setP3DraftError("יש להזין ולשמור הגדרה בפאזה 1 קודם."); return; }
+    if(!conceptDef.clarification||!conceptDef.clarification.text){ setP3DraftError("יש ליצור הבהרת יישום בפאזה 1 קודם."); return; }
+    const s2=stageData.stage2, s3=stageData.stage3;
+    if(!s2||!Array.isArray(s2.tableRows)||!s2.tableRows.length){ setP3DraftError("אין נתוני שלב 2."); return; }
+    if(!s3||s3.source!=="compareNotes"||!Array.isArray(s3.detailedConclusions)){ setP3DraftError("אין נתוני שלב 3."); return; }
+    if(p3AcademicDraft){
+      if(!confirm("קיימת טיוטה. ליצור חדשה (הקיימת תימחק)?")) return;
+    }
+    setP3DraftError(""); setP3DraftLoading(true);
+    try{
+      // ─ מעבר 1: בחירת יחידות ─
+      setP3DraftProgress("מעבר 1/2: בוחר יחידות מייצגות...");
+      const selPrompt=buildSelectionPrompt();
+      const selR=await aiCallDirectWithUsage(selPrompt,8000);
+      const sel=tryParseJson(selR.text);
+      if(!sel.parsed){
+        setP3DraftError(`מעבר 1 — JSON parse: ${sel.error?sel.error.message:"לא נמצא"}. פלט (500 תווים): ${selR.text.substring(0,500)}`);
+        setP3DraftLoading(false); setP3DraftProgress(""); return;
+      }
+      const selResult=sel.parsed;
+      const selCount=(selResult.selectedUnits||[]).length;
+      // ─ מעבר 2: כתיבת טיוטה ─
+      setP3DraftProgress(`מעבר 2/2: כותב טיוטה (${selCount} יחידות נבחרו)...`);
+      const draftPrompt=buildDraftPrompt(selResult);
+      const dR=await aiCallDirectWithUsage(draftPrompt,16000);
+      const d=tryParseJson(dR.text);
+      if(!d.parsed){
+        setP3DraftError(`מעבר 2 — JSON parse: ${d.error?d.error.message:"לא נמצא"}. פלט (500 תווים): ${dR.text.substring(0,500)}`);
+        setP3DraftLoading(false); setP3DraftProgress(""); return;
+      }
+      const totalUsage={input_tokens:(selR.usage?.input_tokens||0)+(dR.usage?.input_tokens||0),output_tokens:(selR.usage?.output_tokens||0)+(dR.usage?.output_tokens||0)};
+      const totalCost=(selR.costUsd||0)+(dR.costUsd||0);
+      const draft={
+        ...d.parsed,
+        selection:selResult,
+        promptVersion:PROMPT_VERSION_DRAFT,
+        generatedAt:new Date().toISOString(),
+        definitionAt:conceptDef.editedAt||conceptDef.savedAt||null,
+        clarificationId:conceptDef.clarification.id||null,
+        clarificationGeneratedAt:conceptDef.clarification.generatedAt||conceptDef.clarification.editedAt||null,
+        usage:totalUsage,
+        costUsd:totalCost,
+        totalUnitsInCorpus:s3.detailedConclusions.length,
+        unitsSelected:selCount,
+        _selectionPromptLength:selPrompt.length,
+        _draftPromptLength:draftPrompt.length
+      };
+      saveAcademicDraft(draft);
+      setP3DraftProgress("");
+    }catch(e){
+      setP3DraftError(`שגיאה: ${e.message||e}`);
+    }
+    setP3DraftLoading(false);
+  }
+
+  // עריכה
+  function enterDraftEditMode(){
+    if(!p3AcademicDraft) return;
+    setP3DraftEditDraft(JSON.parse(JSON.stringify(p3AcademicDraft)));
+    setP3DraftEditing(true);
+  }
+  function cancelDraftEdit(){
+    if(p3DraftEditDraft&&confirm("לבטל את העריכות?")){ setP3DraftEditing(false); setP3DraftEditDraft(null); }
+    else if(!p3DraftEditDraft){ setP3DraftEditing(false); }
+  }
+  function saveDraftEdit(){
+    if(!p3DraftEditDraft) return;
+    const updated={...p3DraftEditDraft,_editedByUser:true,_lastEditAt:new Date().toISOString()};
+    saveAcademicDraft(updated);
+    setP3DraftEditing(false); setP3DraftEditDraft(null);
+  }
+
+  // המרה ל-Markdown להורדה
+  function academicDraftToMarkdown(draft,meta){
+    const {character,concept,dimLabel,conceptDef}=meta||{};
+    const who=character==="solomon"?"שלמה":"דוד";
+    const lines=[];
+    lines.push(`# ${concept} · ${who} — טיוטה אקדמית`);
+    lines.push("");
+    if(dimLabel) lines.push(`**ממד:** ${dimLabel}`);
+    lines.push(`**הופק:** ${draft.generatedAt?draft.generatedAt.slice(0,16).replace("T"," "):todayStamp()}`);
+    if(draft.wordCount) lines.push(`**מילים בטיוטה:** ${draft.wordCount}`);
+    if(draft.unitsSelected&&draft.totalUnitsInCorpus) lines.push(`**יחידות שנבחרו לטיוטה:** ${draft.unitsSelected} מתוך ${draft.totalUnitsInCorpus}`);
+    if(draft.usage) lines.push(`**שימוש:** קלט ${draft.usage.input_tokens||0} tok · פלט ${draft.usage.output_tokens||0} tok · עלות $${(draft.costUsd||0).toFixed(4)}`);
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    if(draft.selection&&draft.selection.centralClaim){
+      lines.push("## טיעון מרכזי (מהמעבר הקודם)");
+      lines.push("");
+      lines.push(draft.selection.centralClaim);
+      lines.push("");
+    }
+    lines.push("## הטיוטה");
+    lines.push("");
+    lines.push(draft.draft||"(ריק)");
+    lines.push("");
+    if(Array.isArray(draft.footnotes)&&draft.footnotes.length){
+      lines.push("---");
+      lines.push("");
+      lines.push("## הערות שוליים");
+      lines.push("");
+      draft.footnotes.forEach(fn=>{
+        lines.push(`${fn.num||"?"}. ${fn.text||""}`);
+      });
+      lines.push("");
+    }
+    if(Array.isArray(draft.evidenceMap)&&draft.evidenceMap.length){
+      lines.push("---");
+      lines.push("");
+      lines.push("## מפת ביסוס (עבודה פנימית, לא לכתיבה)");
+      lines.push("");
+      draft.evidenceMap.forEach((em,i)=>{
+        lines.push(`### ${i+1}. ${em.paragraph||""}`);
+        if(Array.isArray(em.basedOnUnits)&&em.basedOnUnits.length) lines.push(`**יחידות:** ${em.basedOnUnits.join(", ")}`);
+        if(em.mainEvidence) lines.push(`**ראיה מרכזית:** ${em.mainEvidence}`);
+        lines.push("");
+      });
+    }
+    if(Array.isArray(draft.gaps)&&draft.gaps.length){
+      lines.push("---");
+      lines.push("");
+      lines.push("## חוסרים / בעיות נקודתיות");
+      lines.push("");
+      draft.gaps.forEach(g=>lines.push(`- ${g}`));
+      lines.push("");
+    }
+    if(Array.isArray(draft.selection?.selectedUnits)&&draft.selection.selectedUnits.length){
+      lines.push("---");
+      lines.push("");
+      lines.push("## יחידות שנבחרו למעבר 2");
+      lines.push("");
+      draft.selection.selectedUnits.forEach(su=>{
+        lines.push(`- **${su.unitName}** (${su.chapter}) — ${su.role||""}: ${su.reasonForSelection||""}`);
+      });
+      lines.push("");
+    }
+    return lines.join("\n");
   }
 
   // בדיקת זמינות נתוני שלבים 2+3 לדמות הזאת + למושג הזה
@@ -5045,8 +5378,163 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
                         {/* בדיקת זמינות הועברה למעלה (לפני ההגדרה) — נדרש ע״י החוקרת, 22.10.2026 */}
 
-                        {/* ═══ פאזה 3 — סינתזה (23.10.2026) ═══ */}
+                        {/* ═══ פאזה 3 — טיוטה אקדמית (24.10.2026, פלט הקצה) ═══ */}
                         {conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&(
+                          <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`2px solid ${dimColor}`,marginBottom:"12px"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                              <div style={{fontSize:"14px",fontWeight:"700",color:dimColor}}>✍ פאזה 3 — טיוטה אקדמית לפרק בתזה</div>
+                              <div style={{fontSize:"10px",color:"#64748b",fontStyle:"italic"}}>פרוזה רציפה · הערות שוליים · מפת ביסוס · חוסרים</div>
+                            </div>
+                            {!p3AcademicDraft?(
+                              <>
+                                <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.7"}}>
+                                  יוצר טיוטה אקדמית רציפה (~400-600 מילים) למושג <strong>"{concept}"</strong> בעיצוב {character==="solomon"?"שלמה":"דוד"}.<br/>
+                                  <strong>תהליך בשני מעברים:</strong> (1) בחירה של 6-10 יחידות מייצגות מתוך {(stageData.stage3?.detailedConclusions||[]).length} היחידות; (2) כתיבה עם הפירוש המלא של הפרשנים ליחידות הנבחרות — כך הציטוטים הם מהטקסט שה-AI בפועל קורא, לא מהזיכרון.
+                                </div>
+                                <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"8px"}}>
+                                  <button onClick={generateAcademicDraft} disabled={p3DraftLoading} style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:p3DraftLoading?"wait":"pointer",background:p3DraftLoading?"#334155":dimColor,color:"white",fontSize:"12px",fontWeight:"700"}}>{p3DraftLoading?`⏳ ${p3DraftProgress||"יוצר..."}`:"✍ צור טיוטה אקדמית"}</button>
+                                </div>
+                                {p3DraftError&&<div style={{padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3DraftError}</div>}
+                              </>
+                            ):(
+                              <>
+                                {/* מטא-דאטא */}
+                                <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",marginBottom:"10px",fontSize:"10px",color:"#cbd5e1"}}>
+                                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
+                                    <span>🏃 הופק: {p3AcademicDraft.generatedAt?p3AcademicDraft.generatedAt.slice(0,16).replace("T"," "):"—"}</span>
+                                    {p3AcademicDraft.wordCount&&<span style={{color:"#60a5fa"}}>· {p3AcademicDraft.wordCount} מילים</span>}
+                                    {p3AcademicDraft.unitsSelected&&<span style={{color:"#a78bfa"}}>· {p3AcademicDraft.unitsSelected}/{p3AcademicDraft.totalUnitsInCorpus} יחידות נבחרו</span>}
+                                    <span style={{color:"#86efac",fontWeight:"700"}}>· עלות: ${(p3AcademicDraft.costUsd||0).toFixed(4)}</span>
+                                    {p3AcademicDraft._editedByUser&&<span style={{color:"#fcd34d"}}>· ✏ נערך ידנית</span>}
+                                  </div>
+                                </div>
+
+                                {/* פעולות */}
+                                <div style={{display:"flex",gap:"8px",marginBottom:"12px",flexWrap:"wrap"}}>
+                                  {p3DraftEditing?(
+                                    <>
+                                      <button onClick={saveDraftEdit} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:"pointer",background:"#059669",color:"white",fontSize:"11px",fontWeight:"700"}}>💾 שמור עריכות</button>
+                                      <button onClick={cancelDraftEdit} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #7f1d1d",cursor:"pointer",background:"transparent",color:"#fca5a5",fontSize:"11px"}}>✖ בטל</button>
+                                    </>
+                                  ):(
+                                    <>
+                                      <button onClick={enterDraftEditMode} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #f59e0b",cursor:"pointer",background:"#78350f22",color:"#fcd34d",fontSize:"11px",fontWeight:"700"}}>✏ ערוך</button>
+                                      <button onClick={generateAcademicDraft} disabled={p3DraftLoading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3DraftLoading?"wait":"pointer",background:p3DraftLoading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3DraftLoading?`⏳ ${p3DraftProgress||""}`:"🔄 יצור מחדש"}</button>
+                                      {(()=>{
+                                        const md=academicDraftToMarkdown(p3AcademicDraft,{character,concept,dimLabel,conceptDef});
+                                        const who=character==="solomon"?"שלמה":"דוד";
+                                        const base=safeFilename(`טיוטה_${who}_${concept}_${todayStamp()}`);
+                                        const dl=downloadAllFormats(md,base,`טיוטה — ${concept} · ${who}`);
+                                        return (
+                                          <>
+                                            <button onClick={dl.word} title="Word" style={{padding:"7px 12px",borderRadius:"5px",border:"1px solid #2563eb",cursor:"pointer",background:"#1e3a8a22",color:"#93c5fd",fontSize:"11px",fontWeight:"700"}}>📄 Word</button>
+                                            <button onClick={dl.pdf} title="PDF" style={{padding:"7px 12px",borderRadius:"5px",border:"1px solid #dc2626",cursor:"pointer",background:"#7f1d1d22",color:"#fca5a5",fontSize:"11px",fontWeight:"700"}}>📑 PDF</button>
+                                            <button onClick={dl.md} title="Markdown" style={{padding:"7px 12px",borderRadius:"5px",border:"1px solid #10b981",cursor:"pointer",background:"#064e3b22",color:"#86efac",fontSize:"11px",fontWeight:"700"}}>📝 .md</button>
+                                          </>
+                                        );
+                                      })()}
+                                    </>
+                                  )}
+                                </div>
+                                {p3DraftError&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3DraftError}</div>}
+
+                                {(()=>{ const dd=p3DraftEditing&&p3DraftEditDraft?p3DraftEditDraft:p3AcademicDraft; return (
+                                <>
+                                {/* טיעון מרכזי */}
+                                {dd.selection?.centralClaim&&(
+                                  <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px",borderRight:`3px solid ${dimColor}`}}>
+                                    <div style={{fontSize:"11px",fontWeight:"700",color:dimColor,marginBottom:"4px"}}>טיעון מרכזי (ממעבר 1):</div>
+                                    <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6"}}>{dd.selection.centralClaim}</div>
+                                  </div>
+                                )}
+
+                                {/* הטיוטה עצמה */}
+                                <div style={{padding:"14px 18px",background:"#f8fafc",borderRadius:"7px",marginBottom:"10px",border:"1px solid #334155"}}>
+                                  <div style={{fontSize:"11px",fontWeight:"700",color:"#334155",marginBottom:"8px"}}>📝 הטיוטה</div>
+                                  {p3DraftEditing?(
+                                    <textarea value={dd.draft||""} onChange={e=>setP3DraftEditDraft(prev=>({...prev,draft:e.target.value}))} rows={18} style={{width:"100%",padding:"10px 12px",background:"#ffffff",color:"#1a1a1a",border:"2px solid #f59e0b",borderRadius:"5px",fontSize:"14px",lineHeight:"1.9",fontFamily:"'David','Times New Roman',serif",direction:"rtl",boxSizing:"border-box"}}/>
+                                  ):(
+                                    <div style={{fontSize:"14px",color:"#1a1a1a",lineHeight:"1.9",whiteSpace:"pre-wrap",fontFamily:"'David','Times New Roman',serif",direction:"rtl"}}>{dd.draft||"(ריק)"}</div>
+                                  )}
+                                </div>
+
+                                {/* הערות שוליים */}
+                                {Array.isArray(dd.footnotes)&&dd.footnotes.length>0&&(
+                                  <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"7px",marginBottom:"10px"}}>
+                                    <div style={{fontSize:"11px",fontWeight:"700",color:dimColor,marginBottom:"8px"}}>הערות שוליים ({dd.footnotes.length})</div>
+                                    <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
+                                      {dd.footnotes.map((fn,fi)=>(
+                                        <div key={fi} style={{display:"flex",gap:"6px",fontSize:"11px",color:"#cbd5e1",padding:"4px 6px",background:"#1e293b",borderRadius:"3px"}}>
+                                          <span style={{color:"#fcd34d",fontWeight:"700",minWidth:"20px"}}>{fn.num||fi+1}.</span>
+                                          {p3DraftEditing?(
+                                            <input type="text" value={fn.text||""} onChange={e=>{
+                                              const newFns=[...(p3DraftEditDraft.footnotes||[])];
+                                              newFns[fi]={...newFns[fi],text:e.target.value};
+                                              setP3DraftEditDraft(prev=>({...prev,footnotes:newFns}));
+                                            }} style={{flex:1,padding:"3px 6px",background:"#0f172a",color:"#cbd5e1",border:"1px solid #f59e0b55",borderRadius:"3px",fontSize:"11px",fontFamily:"inherit"}}/>
+                                          ):(
+                                            <span style={{flex:1,lineHeight:"1.5"}}>{fn.text}</span>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* מפת ביסוס */}
+                                {Array.isArray(dd.evidenceMap)&&dd.evidenceMap.length>0&&(
+                                  <details style={{marginBottom:"10px"}}>
+                                    <summary style={{cursor:"pointer",padding:"8px 12px",background:"#0f172a",borderRadius:"7px",fontSize:"11px",color:dimColor,fontWeight:"700"}}>🗺 מפת ביסוס (עבודה פנימית — אילו יחידות עומדות מאחורי כל פסקה)</summary>
+                                    <div style={{marginTop:"6px",padding:"10px 12px",background:"#0f172a",borderRadius:"5px"}}>
+                                      {dd.evidenceMap.map((em,emi)=>(
+                                        <div key={emi} style={{marginBottom:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",fontSize:"11px",color:"#cbd5e1"}}>
+                                          <div style={{fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>{emi+1}. {em.paragraph}</div>
+                                          {Array.isArray(em.basedOnUnits)&&em.basedOnUnits.length>0&&<div style={{color:"#94a3b8",fontSize:"10px",marginBottom:"2px"}}>יחידות: {em.basedOnUnits.join(", ")}</div>}
+                                          {em.mainEvidence&&<div style={{color:"#cbd5e1",lineHeight:"1.5"}}>{em.mainEvidence}</div>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </details>
+                                )}
+
+                                {/* חוסרים */}
+                                {Array.isArray(dd.gaps)&&dd.gaps.length>0&&(
+                                  <div style={{padding:"10px 12px",background:"#78350f22",borderRadius:"7px",marginBottom:"10px",border:"1px dashed #f59e0b55"}}>
+                                    <div style={{fontSize:"11px",fontWeight:"700",color:"#fbbf24",marginBottom:"6px"}}>⚠ חוסרים ובעיות נקודתיות ({dd.gaps.length})</div>
+                                    <ul style={{margin:0,paddingRight:"20px",fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6"}}>
+                                      {dd.gaps.map((g,gi)=>(<li key={gi}>{g}</li>))}
+                                    </ul>
+                                  </div>
+                                )}
+
+                                {/* יחידות שנבחרו */}
+                                {Array.isArray(dd.selection?.selectedUnits)&&dd.selection.selectedUnits.length>0&&(
+                                  <details style={{marginBottom:"10px"}}>
+                                    <summary style={{cursor:"pointer",padding:"8px 12px",background:"#0f172a",borderRadius:"7px",fontSize:"11px",color:dimColor,fontWeight:"700"}}>📋 יחידות שנבחרו למעבר 2 ({dd.selection.selectedUnits.length})</summary>
+                                    <div style={{marginTop:"6px",padding:"10px 12px",background:"#0f172a",borderRadius:"5px"}}>
+                                      {dd.selection.selectedUnits.map((su,sui)=>{
+                                        const roleColors={"ראייה מרכזית":"#34d399","ראייה תומכת":"#60a5fa","ראיית נגד":"#f87171","סונדרגוט מכונן":"#a78bfa","מקרה גבולי":"#fbbf24"};
+                                        const col=roleColors[su.role]||"#64748b";
+                                        return (
+                                          <div key={sui} style={{marginBottom:"6px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${col}`,fontSize:"11px",color:"#cbd5e1"}}>
+                                            <div style={{marginBottom:"3px"}}><strong style={{color:"#f1f5f9"}}>{su.unitName}</strong> <span style={{color:"#64748b"}}>({su.chapter})</span> · <span style={{color:col,fontWeight:"700"}}>{su.role}</span></div>
+                                            <div style={{color:"#94a3b8",lineHeight:"1.5"}}>{su.reasonForSelection}</div>
+                                          </div>
+                                        );
+                                      })}
+                                      {dd.selection.unitsNotSelectedReasoning&&<div style={{marginTop:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",fontSize:"10px",color:"#94a3b8",fontStyle:"italic"}}>יחידות שלא נבחרו: {dd.selection.unitsNotSelectedReasoning}</div>}
+                                    </div>
+                                  </details>
+                                )}
+                                </>
+                                ); })()}
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {/* ═══ פאזה 3 הישנה (סינתזה מובנית — ארכיון, מוסתר כברירת מחדל) ═══ */}
+                        {false&&conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&(
                           <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`2px solid ${dimColor}`,marginBottom:"12px"}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
                               <div style={{fontSize:"14px",fontWeight:"700",color:dimColor}}>✨ פאזה 3 — סינתזה למושג × דמות</div>
@@ -5499,8 +5987,8 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                           </div>
                         )}
 
-                        {/* ═══ פאזה 3-B — בדיקה מול הפרשנים (כרטיס נפרד) ═══ */}
-                        {conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&p3Synthesis&&(
+                        {/* ═══ פאזה 3-B הישנה — מוסתר כברירת מחדל ═══ */}
+                        {false&&conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&p3Synthesis&&(
                           <div style={{padding:"14px",background:"#083344",borderRadius:"8px",border:"2px solid #06b6d4",marginBottom:"12px"}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
                               <div style={{fontSize:"14px",fontWeight:"700",color:"#67e8f9"}}>📚 פאזה 3-B — בדיקה מול הפרשנים (מתוך כלי ההשוואה)</div>
