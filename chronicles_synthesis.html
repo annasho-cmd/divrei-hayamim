@@ -3656,10 +3656,22 @@ ${unitBlocks}
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // פאזה 3 — ווידוא ציטוטים מול כלי ההשוואה (raw.commentary + טקסטים)
+  // פאזה 3-B — בדיקה מול הפרשנים (עבודה בקבוצות, resumable)
   // ═══════════════════════════════════════════════════════════════
-  const VERIFY_PROMPT_VERSION="v1-2026-10-23-citation-verify";
+  const VERIFY_PROMPT_VERSION="v2-2026-10-24-batched";
   const p3Verification=stage4Data.phase3_verification||null;
+  const p3VerifyInProgress=stage4Data.phase3_verify_in_progress||null;
+
+  function saveP3VerifyInProgress(inProg){
+    const newStage4={...stage4Data,phase3_verify_in_progress:inProg,lastUpdated:Date.now()};
+    const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+    setStageData(newData);
+    const all=stageResults||LS_get("stageResults",{});
+    const updated={...all,[resultsKey]:newData};
+    if(setStageResults) setStageResults(updated);
+    LS_set("stageResults",updated);
+    fbSaveStageResults(updated);
+  }
 
   function saveP3Verification(verification){
     const newStage4={...stage4Data,phase3_verification:verification,lastUpdated:Date.now()};
@@ -3672,13 +3684,15 @@ ${unitBlocks}
     fbSaveStageResults(updated);
   }
 
-  function buildVerifyPrompt(synthesis,unitsData){
+  function buildVerifyPrompt(synthesis,unitsData,batchIdx,totalBatches){
     const who=character==="solomon"?"שלמה":"דוד";
+    const inBatchUids=Object.keys(unitsData);
+    const batchInfo=(totalBatches&&totalBatches>1)?`\n\n### קבוצת ווידוא: ${(batchIdx||0)+1} מתוך ${totalBatches}\n**חשוב מתודית:** אתה בודק **רק** את הציטוטים שבסינתזה שמיוחסים ליחידות הבאות: ${inBatchUids.join(", ")}. ציטוטים ליחידות אחרות תתעלם מהם — הם ייבדקו בקבוצות אחרות.`:"";
     const unitsSection=Object.entries(unitsData).map(([uid,data])=>{
       const commentaryText=data.commentary&&typeof data.commentary==="object"
-        ? Object.entries(data.commentary).map(([author,text])=>`─── ${author} ───\n${text}`).join("\n\n")
+        ? Object.entries(data.commentary).map(([author,text])=>`--- ${author} ---\n${text}`).join("\n\n")
         : (typeof data.commentary==="string"?data.commentary:"");
-      return `━━━ יחידה [uid: ${uid}]: ${data.unitName} (${data.chapter}) ${data.sourceRef?"[מקבילה: "+data.sourceRef+"]":"[סונדרגוט]"}
+      return `=== יחידה [uid: ${uid}]: ${data.unitName} (${data.chapter}) ${data.sourceRef?"[מקבילה: "+data.sourceRef+"]":"[סונדרגוט]"}
 
 [טקסט דה"י המלא]
 ${data.chroniclesText||"(לא נטען)"}
@@ -3691,10 +3705,11 @@ ${commentaryText||"(אין פרשנות מתועדת)"}
 
     return `אתה עוזר מחקר. מטרתך: לבצע **בדיקת תקינות ציטוטים** של סינתזה שהופקה למושג "${concept}" בפרקי ${who} בדברי הימים.
 
-גרסת פרומפט ווידוא: ${VERIFY_PROMPT_VERSION}
+גרסת פרומפט ווידוא: ${VERIFY_PROMPT_VERSION}${batchInfo}
 
 ### ההנחיה הכללית
 אתה **לא** כותב סינתזה חדשה. אתה **רק** בודק את תקינות הציטוטים בסינתזה הנתונה מול חומר המקור שסופק. אם ציטוט מופיע במדויק — אשר אותו. אם הוא חלקי/שגוי/לא נמצא — דווח על כך בלבד, אל תעצב מסקנות חדשות.
+${totalBatches&&totalBatches>1?`\n**מצב קבוצתי:** פעל אך ורק על ציטוטים שמיוחסים ליחידות בקבוצה הנוכחית. אם supportingUnit[].uid אינו ברשימת היחידות שסופקה — אל תכלול אותו בפלט. אם scholarCitation מופיע ב-sub-claim שיש בו גם יחידות אחרות — בדוק אותו רק אם הוא קשור ליחידה בקבוצה הנוכחית.\n`:""}
 
 ### הסינתזה לווידוא (לא לשנות)
 ${JSON.stringify(synthesis,null,2)}
@@ -3771,60 +3786,151 @@ ${unitsSection}
 }`;
   }
 
+  // תכנון קבוצות ווידוא: מחלק את היחידות שמצוטטות בסינתזה ל-6 קבוצות
+  function initP3VerifyPlan(){
+    if(!p3Synthesis) return null;
+    const citedUids=[];
+    const seen=new Set();
+    (p3Synthesis.subClaims||[]).forEach(sc=>{
+      (sc.supportingUnits||[]).forEach(su=>{
+        if(su&&su.uid){
+          const u=String(su.uid);
+          if(!seen.has(u)){ seen.add(u); citedUids.push(u); }
+        }
+      });
+    });
+    if(citedUids.length===0) return null;
+    const existing=stage4Data.phase3_verify_in_progress;
+    const batchSize=p3BatchSizeFor(citedUids.length);
+    // המשך תכנון קיים אם מתאים לגרסה ולסינתזה הנוכחית
+    if(existing&&existing.promptVersion===VERIFY_PROMPT_VERSION&&existing.sourceSynthesisGeneratedAt===(p3Synthesis.generatedAt||null)&&existing.totalUids===citedUids.length) return existing;
+    const batches=[];
+    for(let i=0;i<citedUids.length;i+=batchSize){
+      batches.push({idx:batches.length,unitUids:citedUids.slice(i,i+batchSize),status:"pending"});
+    }
+    return {
+      startedAt:new Date().toISOString(),
+      promptVersion:VERIFY_PROMPT_VERSION,
+      sourceSynthesisGeneratedAt:p3Synthesis.generatedAt||null,
+      totalUids:citedUids.length,
+      batchSize,
+      batches,
+      totalUsage:{input_tokens:0,output_tokens:0},
+      totalCost:0
+    };
+  }
+
   async function verifyCitations(){
     if(!p3Synthesis){ setP3VerifyError("אין סינתזה לוודא."); return; }
-    setP3VerifyError(""); setP3VerifyLoading(true); setP3VerifyProgress("אוסף ציטוטים ויחידות...");
+    setP3VerifyError(""); setP3VerifyLoading(true);
+    let plan=initP3VerifyPlan();
+    if(!plan){
+      setP3VerifyError("לא נמצאו ציטוטים לוודא בסינתזה."); setP3VerifyLoading(false); setP3VerifyProgress(""); return;
+    }
+    saveP3VerifyInProgress(plan);
+    const unitsByIdSyn={};
+    (raw.units||[]).forEach(u=>{ unitsByIdSyn[String(u.id)]=u; });
     try{
-      // איסוף כל ה-uids שמצוטטים בסינתזה
-      const citedUids=new Set();
-      (p3Synthesis.subClaims||[]).forEach(sc=>{
-        (sc.supportingUnits||[]).forEach(su=>{ if(su&&su.uid) citedUids.add(String(su.uid)); });
-      });
-      if(citedUids.size===0){
-        setP3VerifyError("לא נמצאו ציטוטים לוודא בסינתזה.");
-        setP3VerifyLoading(false); setP3VerifyProgress(""); return;
+      // הרץ קבוצות שלא הושלמו
+      for(let bi=0;bi<plan.batches.length;bi++){
+        if(plan.batches[bi].status==="done") continue;
+        setP3VerifyProgress(`קבוצה ${bi+1}/${plan.batches.length}: טוען פרשנות ל-${plan.batches[bi].unitUids.length} יחידות...`);
+        const unitsData={};
+        plan.batches[bi].unitUids.forEach(uid=>{
+          const u=unitsByIdSyn[uid]||{};
+          const commentary=(raw.commentary&&raw.commentary[uid])||{};
+          unitsData[uid]={
+            unitName:u.name||"?",
+            chapter:u.chapter||"?",
+            chroniclesText:u.chroniclesText||"",
+            sourceText:u.sourceText||"",
+            sourceRef:u.sourceRef||null,
+            commentary
+          };
+        });
+        const prompt=buildVerifyPrompt(p3Synthesis,unitsData,bi,plan.batches.length);
+        setP3VerifyProgress(`קבוצה ${bi+1}/${plan.batches.length}: שולח ל-AI (${prompt.length.toLocaleString()} תווים)...`);
+        try{
+          const r=await aiCallDirectWithUsage(prompt,16000);
+          const {parsed,error}=tryParseJson(r.text);
+          if(!parsed){
+            plan.batches[bi]={...plan.batches[bi],status:"error",error:`JSON parse: ${error?error.message:"לא נמצא"}`,processedAt:new Date().toISOString()};
+            saveP3VerifyInProgress(plan);
+            setP3VerifyError(`קבוצה ${bi+1} בבדיקת פרשנים נכשלה: ${error?error.message:"JSON parse"}. ההתקדמות נשמרה.`);
+            setP3VerifyLoading(false); setP3VerifyProgress(""); return;
+          }
+          plan.batches[bi]={
+            ...plan.batches[bi],
+            status:"done",
+            report:parsed,
+            processedAt:new Date().toISOString(),
+            usage:r.usage,
+            costUsd:r.costUsd,
+            _promptLength:prompt.length
+          };
+          plan.totalUsage.input_tokens+=(r.usage?.input_tokens||0);
+          plan.totalUsage.output_tokens+=(r.usage?.output_tokens||0);
+          plan.totalCost+=(r.costUsd||0);
+          saveP3VerifyInProgress(plan);
+        }catch(batchErr){
+          plan.batches[bi]={...plan.batches[bi],status:"error",error:String(batchErr.message||batchErr),processedAt:new Date().toISOString()};
+          saveP3VerifyInProgress(plan);
+          setP3VerifyError(`קבוצה ${bi+1} נכשלה: ${batchErr.message||batchErr}. ההתקדמות נשמרה — נסי להמשיך.`);
+          setP3VerifyLoading(false); setP3VerifyProgress(""); return;
+        }
       }
-      // לכל uid — טעינת טקסט + פרשנות
-      const unitsData={};
-      const unitsByIdSyn={};
-      (raw.units||[]).forEach(u=>{ unitsByIdSyn[String(u.id)]=u; });
-      citedUids.forEach(uid=>{
-        const u=unitsByIdSyn[uid]||{};
-        const commentary=(raw.commentary&&raw.commentary[uid])||{};
-        unitsData[uid]={
-          unitName:u.name||"?",
-          chapter:u.chapter||"?",
-          chroniclesText:u.chroniclesText||"",
-          sourceText:u.sourceText||"",
-          sourceRef:u.sourceRef||null,
-          commentary
-        };
+      // מיזוג סופי — דטרמיניסטי (ללא קריאת AI נוספת)
+      setP3VerifyProgress("מאחד דוחות קבוצות...");
+      const mergedUnit=[]; const mergedScholar=[]; const mergedVerse=[];
+      const perBatchSummaries=[];
+      plan.batches.forEach(b=>{
+        const r=b.report||{};
+        (r.unitAssignmentChecks||[]).forEach(x=>mergedUnit.push(x));
+        (r.scholarCitationChecks||[]).forEach(x=>mergedScholar.push(x));
+        (r.verseCitationChecks||[]).forEach(x=>mergedVerse.push(x));
+        if(r.summary) perBatchSummaries.push(`[קבוצה ${b.idx+1}] ${r.summary}`);
       });
-      setP3VerifyProgress(`בונה פרומפט (${citedUids.size} יחידות)...`);
-      const prompt=buildVerifyPrompt(p3Synthesis,unitsData);
-      setP3VerifyProgress(`שולח ל-AI (${prompt.length.toLocaleString()} תווים)...`);
-      const r=await aiCallDirectWithUsage(prompt,16000);
-      setP3VerifyProgress("מפענח פלט...");
-      const {parsed,error}=tryParseJson(r.text);
-      if(!parsed){
-        setP3VerifyError(`JSON parse — ${error?error.message:"לא נמצא"}. פלט (500 תווים ראשונים): ${r.text.substring(0,500)}`);
-        setP3VerifyLoading(false); setP3VerifyProgress(""); return;
-      }
+      // ספירות
+      const countAll=(arr)=>{
+        const c={verified:0,partial:0,misassigned:0,not_found:0,not_verifiable:0,other:0};
+        arr.forEach(it=>{ if(c[it.status]!==undefined) c[it.status]++; else c.other++; });
+        return c;
+      };
+      const unitC=countAll(mergedUnit),scholarC=countAll(mergedScholar),verseC=countAll(mergedVerse);
+      const totalIssues=unitC.misassigned+unitC.not_found+unitC.partial+scholarC.misassigned+scholarC.not_found+scholarC.partial+verseC.misassigned+verseC.not_found+verseC.partial;
+      const overallRec=totalIssues===0?"accept_as_is":(totalIssues<=5?"accept_with_fixes":"regenerate");
       const report={
-        ...parsed,
+        unitAssignmentChecks:mergedUnit,
+        scholarCitationChecks:mergedScholar,
+        verseCitationChecks:mergedVerse,
+        summary:`אוחדו דוחות מ-${plan.batches.length} קבוצות. ציטוטי יחידות: ${mergedUnit.length} (${unitC.verified} ✓, ${unitC.partial} חלקי, ${unitC.misassigned} שיוך שגוי, ${unitC.not_found} לא נמצא). ציטוטי פרשנים: ${mergedScholar.length} (${scholarC.verified} ✓, ${scholarC.partial} חלקי, ${scholarC.misassigned} שיוך שגוי, ${scholarC.not_found} לא נמצא). ציטוטי פסוקים: ${mergedVerse.length} (${verseC.verified} ✓, ${verseC.misassigned} שיוך שגוי, ${verseC.not_found} לא נמצא). סה"כ בעיות הדורשות תיקון: ${totalIssues}.`,
+        overallRecommendation:overallRec,
+        batchSummaries:perBatchSummaries,
         verifiedAt:new Date().toISOString(),
         promptVersion:VERIFY_PROMPT_VERSION,
         sourceSynthesisGeneratedAt:p3Synthesis.generatedAt||null,
-        usage:r.usage,
-        costUsd:r.costUsd,
-        unitsChecked:citedUids.size,
-        _promptLength:prompt.length,
-        _promptSent:prompt.substring(0,15000)
+        usage:plan.totalUsage,
+        costUsd:plan.totalCost,
+        unitsChecked:plan.totalUids,
+        batchCount:plan.batches.length,
+        batchSize:plan.batchSize
       };
-      saveP3Verification(report);
+      const newStage4={
+        ...stage4Data,
+        phase3_verification:report,
+        phase3_verify_in_progress:null,
+        lastUpdated:Date.now()
+      };
+      const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+      setStageData(newData);
+      const all=stageResults||LS_get("stageResults",{});
+      const updated={...all,[resultsKey]:newData};
+      if(setStageResults) setStageResults(updated);
+      LS_set("stageResults",updated);
+      fbSaveStageResults(updated);
       setP3VerifyProgress("");
     }catch(e){
-      setP3VerifyError(`שגיאה: ${e.message||e}`);
+      setP3VerifyError(`שגיאה כללית: ${e.message||e}`);
     }
     setP3VerifyLoading(false);
   }
@@ -5064,7 +5170,14 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   ):(
                                     <>
                                       <button onClick={enterEditMode} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #f59e0b",cursor:"pointer",background:"#78350f22",color:"#fcd34d",fontSize:"11px",fontWeight:"700"}}>✏ ערוך</button>
-                                      <button onClick={verifyCitations} disabled={p3VerifyLoading} style={{padding:"7px 14px",borderRadius:"5px",border:"2px solid #06b6d4",cursor:p3VerifyLoading?"wait":"pointer",background:"#083344",color:"#67e8f9",fontSize:"11px",fontWeight:"700"}}>{p3VerifyLoading?`⏳ ${p3VerifyProgress||"מוודא..."}`:(p3Verification?"📚 בדיקה מחדש מול הפרשנים":"📚 הרץ בדיקה מול הפרשנים")}</button>
+                                      <button onClick={verifyCitations} disabled={p3VerifyLoading} style={{padding:"7px 14px",borderRadius:"5px",border:"2px solid #06b6d4",cursor:p3VerifyLoading?"wait":"pointer",background:"#083344",color:"#67e8f9",fontSize:"11px",fontWeight:"700"}}>{(()=>{
+                                        if(p3VerifyLoading) return `⏳ ${p3VerifyProgress||"מוודא..."}`;
+                                        if(p3VerifyInProgress){
+                                          const pending=p3VerifyInProgress.batches.filter(b=>b.status!=="done").length;
+                                          if(pending>0) return `▶ המשך בדיקת פרשנים (${pending} קבוצות נותרו)`;
+                                        }
+                                        return p3Verification?"📚 בדיקה מחדש מול הפרשנים":"📚 הרץ בדיקה מול הפרשנים";
+                                      })()}</button>
                                       <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||""}`:"🔄 הרץ שוב (הקיים לארכיון)"}</button>
                                     </>
                                   )}
@@ -5086,6 +5199,27 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 </div>
                                 {p3Error&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3Error}</div>}
                                 {p3VerifyError&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ ווידוא: {p3VerifyError}</div>}
+                                {p3VerifyInProgress&&Array.isArray(p3VerifyInProgress.batches)&&(()=>{
+                                  const done=p3VerifyInProgress.batches.filter(b=>b.status==="done").length;
+                                  const errors=p3VerifyInProgress.batches.filter(b=>b.status==="error").length;
+                                  const total=p3VerifyInProgress.batches.length;
+                                  if(done===total&&errors===0) return null; // רק תוך כדי התקדמות
+                                  return (
+                                    <div style={{marginBottom:"10px",padding:"10px 12px",background:"#083344",borderRadius:"6px",border:"1px solid #06b6d4"}}>
+                                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"6px"}}>
+                                        <div style={{fontSize:"12px",fontWeight:"700",color:"#67e8f9"}}>📚 התקדמות בדיקת פרשנים: {done}/{total} קבוצות הושלמו</div>
+                                        <div style={{fontSize:"10px",color:"#cbd5e1"}}>יחידות שנבדקות: {p3VerifyInProgress.totalUids}</div>
+                                      </div>
+                                      <div style={{display:"flex",gap:"3px",flexWrap:"wrap"}}>
+                                        {p3VerifyInProgress.batches.map((b,bi)=>{
+                                          const c=b.status==="done"?"#34d399":b.status==="error"?"#f87171":"#475569";
+                                          return <div key={bi} title={`קבוצה ${bi+1}: ${b.status==="done"?"הושלמה":b.status==="error"?("שגיאה: "+(b.error||"")):"ממתינה"}`} style={{flex:"1 0 20px",height:"16px",background:c,borderRadius:"3px",fontSize:"9px",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700"}}>{bi+1}</div>;
+                                        })}
+                                      </div>
+                                      <div style={{marginTop:"6px",fontSize:"9px",color:"#94a3b8"}}>סה"כ עד כה: קלט {p3VerifyInProgress.totalUsage?.input_tokens||0} tok · פלט {p3VerifyInProgress.totalUsage?.output_tokens||0} tok · עלות ${(p3VerifyInProgress.totalCost||0).toFixed(4)}</div>
+                                    </div>
+                                  );
+                                })()}
                                 {p3ShowPrompt&&p3Synthesis._promptSent&&(
                                   <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
                                     <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"6px"}}>אורך פרומפט שהורץ: {p3Synthesis._promptLength?.toLocaleString()||"?"} תווים</div>
