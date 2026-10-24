@@ -5170,14 +5170,6 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   ):(
                                     <>
                                       <button onClick={enterEditMode} style={{padding:"7px 14px",borderRadius:"5px",border:"1px solid #f59e0b",cursor:"pointer",background:"#78350f22",color:"#fcd34d",fontSize:"11px",fontWeight:"700"}}>✏ ערוך</button>
-                                      <button onClick={verifyCitations} disabled={p3VerifyLoading} style={{padding:"7px 14px",borderRadius:"5px",border:"2px solid #06b6d4",cursor:p3VerifyLoading?"wait":"pointer",background:"#083344",color:"#67e8f9",fontSize:"11px",fontWeight:"700"}}>{(()=>{
-                                        if(p3VerifyLoading) return `⏳ ${p3VerifyProgress||"מוודא..."}`;
-                                        if(p3VerifyInProgress){
-                                          const pending=p3VerifyInProgress.batches.filter(b=>b.status!=="done").length;
-                                          if(pending>0) return `▶ המשך בדיקת פרשנים (${pending} קבוצות נותרו)`;
-                                        }
-                                        return p3Verification?"📚 בדיקה מחדש מול הפרשנים":"📚 הרץ בדיקה מול הפרשנים";
-                                      })()}</button>
                                       <button onClick={generateSynthesis} disabled={p3Loading} style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:p3Loading?"wait":"pointer",background:p3Loading?"#334155":"#818cf8",color:"white",fontSize:"11px",fontWeight:"700"}}>{p3Loading?`⏳ ${p3Progress||""}`:"🔄 הרץ שוב (הקיים לארכיון)"}</button>
                                     </>
                                   )}
@@ -5198,88 +5190,10 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   {(stage4Data.phase3_previous_syntheses||[]).length>0&&<span style={{padding:"5px 10px",background:"#1e1b4b22",borderRadius:"5px",fontSize:"10px",color:"#a5b4fc",alignSelf:"center"}}>📜 {stage4Data.phase3_previous_syntheses.length} גרסאות קודמות בארכיון</span>}
                                 </div>
                                 {p3Error&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3Error}</div>}
-                                {p3VerifyError&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ ווידוא: {p3VerifyError}</div>}
-                                {p3VerifyInProgress&&Array.isArray(p3VerifyInProgress.batches)&&(()=>{
-                                  const done=p3VerifyInProgress.batches.filter(b=>b.status==="done").length;
-                                  const errors=p3VerifyInProgress.batches.filter(b=>b.status==="error").length;
-                                  const total=p3VerifyInProgress.batches.length;
-                                  if(done===total&&errors===0) return null; // רק תוך כדי התקדמות
-                                  return (
-                                    <div style={{marginBottom:"10px",padding:"10px 12px",background:"#083344",borderRadius:"6px",border:"1px solid #06b6d4"}}>
-                                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"6px"}}>
-                                        <div style={{fontSize:"12px",fontWeight:"700",color:"#67e8f9"}}>📚 התקדמות בדיקת פרשנים: {done}/{total} קבוצות הושלמו</div>
-                                        <div style={{fontSize:"10px",color:"#cbd5e1"}}>יחידות שנבדקות: {p3VerifyInProgress.totalUids}</div>
-                                      </div>
-                                      <div style={{display:"flex",gap:"3px",flexWrap:"wrap"}}>
-                                        {p3VerifyInProgress.batches.map((b,bi)=>{
-                                          const c=b.status==="done"?"#34d399":b.status==="error"?"#f87171":"#475569";
-                                          return <div key={bi} title={`קבוצה ${bi+1}: ${b.status==="done"?"הושלמה":b.status==="error"?("שגיאה: "+(b.error||"")):"ממתינה"}`} style={{flex:"1 0 20px",height:"16px",background:c,borderRadius:"3px",fontSize:"9px",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700"}}>{bi+1}</div>;
-                                        })}
-                                      </div>
-                                      <div style={{marginTop:"6px",fontSize:"9px",color:"#94a3b8"}}>סה"כ עד כה: קלט {p3VerifyInProgress.totalUsage?.input_tokens||0} tok · פלט {p3VerifyInProgress.totalUsage?.output_tokens||0} tok · עלות ${(p3VerifyInProgress.totalCost||0).toFixed(4)}</div>
-                                    </div>
-                                  );
-                                })()}
                                 {p3ShowPrompt&&p3Synthesis._promptSent&&(
                                   <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
                                     <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"6px"}}>אורך פרומפט שהורץ: {p3Synthesis._promptLength?.toLocaleString()||"?"} תווים</div>
                                     <pre style={{maxHeight:"400px",overflowY:"auto",fontSize:"10px",color:"#86efac",lineHeight:"1.5",whiteSpace:"pre-wrap",direction:"rtl",fontFamily:"inherit",margin:0,padding:"8px",background:"#000",borderRadius:"4px"}}>{p3Synthesis._promptSent}</pre>
-                                  </div>
-                                )}
-
-                                {/* ─ דו"ח ווידוא ציטוטים ─ */}
-                                {p3Verification&&(
-                                  <div style={{marginBottom:"12px",padding:"12px 14px",background:"#083344",borderRadius:"7px",border:"1px solid #06b6d4"}}>
-                                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"8px"}}>
-                                      <div style={{fontSize:"13px",fontWeight:"700",color:"#67e8f9"}}>📚 דו"ח בדיקה מול הפרשנים (מתוך כלי ההשוואה)</div>
-                                      <div style={{fontSize:"10px",color:"#cbd5e1"}}>הופק: {p3Verification.verifiedAt?p3Verification.verifiedAt.slice(0,16).replace("T"," "):"—"} · {p3Verification.unitsChecked||0} יחידות · עלות: ${(p3Verification.costUsd||0).toFixed(4)}</div>
-                                    </div>
-                                    {p3Verification.summary&&<div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"8px"}}>{p3Verification.summary}</div>}
-                                    {p3Verification.overallRecommendation&&(()=>{
-                                      const lbl={accept_as_is:"✓ לקבל כפי שהוא",accept_with_fixes:"⚠ לקבל עם תיקונים נקודתיים",regenerate:"❌ לייצר מחדש"}[p3Verification.overallRecommendation]||p3Verification.overallRecommendation;
-                                      const col={accept_as_is:"#86efac",accept_with_fixes:"#fcd34d",regenerate:"#f87171"}[p3Verification.overallRecommendation]||"#cbd5e1";
-                                      return <div style={{padding:"6px 10px",background:`${col}22`,color:col,borderRadius:"5px",fontSize:"11px",fontWeight:"700",marginBottom:"8px",display:"inline-block"}}>המלצה: {lbl}</div>;
-                                    })()}
-                                    {["unitAssignmentChecks","scholarCitationChecks","verseCitationChecks"].map(key=>{
-                                      const items=p3Verification[key]||[];
-                                      if(items.length===0) return null;
-                                      const title={unitAssignmentChecks:"שיוך ליחידות",scholarCitationChecks:"ציטוטי פרשנים",verseCitationChecks:"ציטוטי פסוקים"}[key];
-                                      const counts={verified:0,partial:0,misassigned:0,not_found:0,not_verifiable:0};
-                                      items.forEach(it=>{ if(counts[it.status]!==undefined) counts[it.status]++; });
-                                      return (
-                                        <details key={key} style={{marginBottom:"6px"}} open={counts.misassigned+counts.not_found+counts.partial>0}>
-                                          <summary style={{cursor:"pointer",fontSize:"11px",color:"#f1f5f9",fontWeight:"700",padding:"6px 8px",background:"#0f172a",borderRadius:"4px"}}>
-                                            {title} ({items.length}): <span style={{color:"#86efac"}}>✓ {counts.verified}</span>{counts.partial>0&&<> · <span style={{color:"#fcd34d"}}>⚠ חלקי {counts.partial}</span></>}{counts.misassigned>0&&<> · <span style={{color:"#f87171"}}>⇄ שיוך שגוי {counts.misassigned}</span></>}{counts.not_found>0&&<> · <span style={{color:"#f87171"}}>✗ לא נמצא {counts.not_found}</span></>}{counts.not_verifiable>0&&<> · <span style={{color:"#94a3b8"}}>○ לא נבדק {counts.not_verifiable}</span></>}
-                                          </summary>
-                                          <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
-                                            {items.map((it,ii)=>{
-                                              const col={verified:"#86efac",partial:"#fcd34d",misassigned:"#f87171",not_found:"#f87171",not_verifiable:"#94a3b8"}[it.status]||"#cbd5e1";
-                                              const stLbl={verified:"✓ אומת",partial:"⚠ חלקי",misassigned:"⇄ שיוך שגוי",not_found:"✗ לא נמצא",not_verifiable:"○ לא נבדק"}[it.status]||it.status;
-                                              return (
-                                                <div key={ii} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${col}`,fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5"}}>
-                                                  <div style={{display:"flex",gap:"6px",alignItems:"flex-start",flexWrap:"wrap",marginBottom:"3px"}}>
-                                                    <span style={{color:col,fontWeight:"700",whiteSpace:"nowrap"}}>{stLbl}</span>
-                                                    {it.subClaimIndex&&<span style={{color:"#64748b"}}>טענה #{it.subClaimIndex}</span>}
-                                                    {it.author&&<span style={{color:"#fcd34d"}}>{it.author}{it.page?`, עמ' ${it.page}`:""}</span>}
-                                                    {it.unitUid&&<span style={{color:"#94a3b8"}}>uid: {it.unitUid}</span>}
-                                                    {it.verseRef&&<span style={{color:"#93c5fd"}}>{it.verseRef}</span>}
-                                                  </div>
-                                                  {it.quotedAs&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>בסינתזה: "{it.quotedAs}"</div>}
-                                                  {it.quote&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>ציטוט: "{it.quote}"</div>}
-                                                  {it.quotedText&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>טקסט: "{it.quotedText}"</div>}
-                                                  {it.actualAuthor&&<div style={{color:"#86efac"}}>מחבר אמיתי: {it.actualAuthor}</div>}
-                                                  {it.actualPage&&<div style={{color:"#86efac"}}>עמוד נכון: {it.actualPage}</div>}
-                                                  {it.actualUnitUid&&<div style={{color:"#86efac"}}>uid נכון: {it.actualUnitUid}</div>}
-                                                  {it.actualQuote&&<div style={{color:"#86efac",marginTop:"2px"}}>ציטוט מדויק: "{it.actualQuote}"</div>}
-                                                  {it.suggestion&&<div style={{marginTop:"3px",color:col}}>💡 {it.suggestion}</div>}
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-                                        </details>
-                                      );
-                                    })}
-                                    <div style={{marginTop:"6px",fontSize:"9px",color:"#67e8f9",fontStyle:"italic"}}>לחצי "✏ ערוך" כדי להחיל את התיקונים בכרטיס.</div>
                                   </div>
                                 )}
 
@@ -5582,6 +5496,120 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                 ); })()}
                               </>
                             )}
+                          </div>
+                        )}
+
+                        {/* ═══ פאזה 3-B — בדיקה מול הפרשנים (כרטיס נפרד) ═══ */}
+                        {conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&p3Synthesis&&(
+                          <div style={{padding:"14px",background:"#083344",borderRadius:"8px",border:"2px solid #06b6d4",marginBottom:"12px"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                              <div style={{fontSize:"14px",fontWeight:"700",color:"#67e8f9"}}>📚 פאזה 3-B — בדיקה מול הפרשנים (מתוך כלי ההשוואה)</div>
+                              <div style={{fontSize:"10px",color:"#94a3b8",fontStyle:"italic"}}>ווידוא ציטוטי פרשנים, שיוך יחידות וציטוטי פסוקים מול המקור המלא</div>
+                            </div>
+
+                            {/* פאנל התקדמות (אם פועל כעת) */}
+                            {p3VerifyInProgress&&Array.isArray(p3VerifyInProgress.batches)&&(()=>{
+                              const done=p3VerifyInProgress.batches.filter(b=>b.status==="done").length;
+                              const errors=p3VerifyInProgress.batches.filter(b=>b.status==="error").length;
+                              const total=p3VerifyInProgress.batches.length;
+                              if(done===total&&errors===0) return null;
+                              return (
+                                <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px"}}>
+                                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"8px",marginBottom:"6px"}}>
+                                    <div style={{fontSize:"12px",fontWeight:"700",color:"#67e8f9"}}>📊 התקדמות קבוצות: {done}/{total} הושלמו</div>
+                                    <div style={{fontSize:"10px",color:"#cbd5e1"}}>יחידות שנבדקות: {p3VerifyInProgress.totalUids}</div>
+                                  </div>
+                                  <div style={{display:"flex",gap:"3px",flexWrap:"wrap"}}>
+                                    {p3VerifyInProgress.batches.map((b,bi)=>{
+                                      const c=b.status==="done"?"#34d399":b.status==="error"?"#f87171":"#475569";
+                                      return <div key={bi} title={`קבוצה ${bi+1}: ${b.status==="done"?"הושלמה":b.status==="error"?("שגיאה: "+(b.error||"")):"ממתינה"}`} style={{flex:"1 0 20px",height:"16px",background:c,borderRadius:"3px",fontSize:"9px",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"700"}}>{bi+1}</div>;
+                                    })}
+                                  </div>
+                                  <div style={{marginTop:"6px",fontSize:"9px",color:"#94a3b8"}}>סה"כ עד כה: קלט {p3VerifyInProgress.totalUsage?.input_tokens||0} tok · פלט {p3VerifyInProgress.totalUsage?.output_tokens||0} tok · עלות ${(p3VerifyInProgress.totalCost||0).toFixed(4)}</div>
+                                </div>
+                              );
+                            })()}
+
+                            {/* כפתורי פעולה */}
+                            <div style={{display:"flex",gap:"8px",marginBottom:"10px",flexWrap:"wrap",alignItems:"center"}}>
+                              <button onClick={verifyCitations} disabled={p3VerifyLoading} style={{padding:"8px 16px",borderRadius:"5px",border:"2px solid #06b6d4",cursor:p3VerifyLoading?"wait":"pointer",background:p3VerifyLoading?"#334155":"#06b6d4",color:"white",fontSize:"12px",fontWeight:"700"}}>{(()=>{
+                                if(p3VerifyLoading) return `⏳ ${p3VerifyProgress||"מוודא..."}`;
+                                if(p3VerifyInProgress){
+                                  const pending=p3VerifyInProgress.batches.filter(b=>b.status!=="done").length;
+                                  if(pending>0) return `▶ המשך בדיקה (${pending} קבוצות נותרו)`;
+                                }
+                                return p3Verification?"🔄 בדיקה מחדש":"📚 הרץ בדיקה מול הפרשנים";
+                              })()}</button>
+                              {!p3Verification&&!p3VerifyInProgress&&<span style={{fontSize:"11px",color:"#fcd34d",padding:"3px 10px",background:"#78350f22",borderRadius:"4px"}}>⚠ מומלץ להריץ לפני כתיבת פסקה בתזה</span>}
+                              {p3Synthesis.generatedAt&&p3Verification&&p3Verification.sourceSynthesisGeneratedAt&&p3Synthesis.generatedAt!==p3Verification.sourceSynthesisGeneratedAt&&<span style={{fontSize:"11px",color:"#fcd34d",padding:"3px 10px",background:"#78350f22",borderRadius:"4px"}}>⚠ הסינתזה התעדכנה — הרצת מחדש מומלצת</span>}
+                            </div>
+                            {p3VerifyError&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3VerifyError}</div>}
+
+                            {/* דו"ח ווידוא */}
+                            {p3Verification?(
+                              <div>
+                                <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",marginBottom:"8px",fontSize:"10px",color:"#cbd5e1"}}>
+                                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
+                                    <span>🏃 הופק: {p3Verification.verifiedAt?p3Verification.verifiedAt.slice(0,16).replace("T"," "):"—"}</span>
+                                    <span style={{color:"#60a5fa"}}>· קלט: {p3Verification.usage?.input_tokens||0} tok</span>
+                                    <span style={{color:"#60a5fa"}}>· פלט: {p3Verification.usage?.output_tokens||0} tok</span>
+                                    <span style={{color:"#86efac",fontWeight:"700"}}>· עלות: ${(p3Verification.costUsd||0).toFixed(4)}</span>
+                                    <span style={{color:"#a78bfa"}}>· {p3Verification.batchCount||1} קבוצות × {p3Verification.batchSize||"?"} יחידות</span>
+                                  </div>
+                                </div>
+                                {p3Verification.summary&&<div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"8px"}}>{p3Verification.summary}</div>}
+                                {p3Verification.overallRecommendation&&(()=>{
+                                  const lbl={accept_as_is:"✓ לקבל כפי שהוא",accept_with_fixes:"⚠ לקבל עם תיקונים נקודתיים",regenerate:"❌ לייצר מחדש"}[p3Verification.overallRecommendation]||p3Verification.overallRecommendation;
+                                  const col={accept_as_is:"#86efac",accept_with_fixes:"#fcd34d",regenerate:"#f87171"}[p3Verification.overallRecommendation]||"#cbd5e1";
+                                  return <div style={{padding:"6px 10px",background:`${col}22`,color:col,borderRadius:"5px",fontSize:"11px",fontWeight:"700",marginBottom:"8px",display:"inline-block"}}>המלצה: {lbl}</div>;
+                                })()}
+                                {["unitAssignmentChecks","scholarCitationChecks","verseCitationChecks"].map(key=>{
+                                  const items=p3Verification[key]||[];
+                                  if(items.length===0) return null;
+                                  const title={unitAssignmentChecks:"🔗 שיוך ליחידות",scholarCitationChecks:"📖 ציטוטי פרשנים",verseCitationChecks:"📜 ציטוטי פסוקים"}[key];
+                                  const counts={verified:0,partial:0,misassigned:0,not_found:0,not_verifiable:0};
+                                  items.forEach(it=>{ if(counts[it.status]!==undefined) counts[it.status]++; });
+                                  return (
+                                    <details key={key} style={{marginBottom:"6px"}} open={counts.misassigned+counts.not_found+counts.partial>0}>
+                                      <summary style={{cursor:"pointer",fontSize:"11px",color:"#f1f5f9",fontWeight:"700",padding:"6px 8px",background:"#0f172a",borderRadius:"4px"}}>
+                                        {title} ({items.length}): <span style={{color:"#86efac"}}>✓ {counts.verified}</span>{counts.partial>0&&<> · <span style={{color:"#fcd34d"}}>⚠ חלקי {counts.partial}</span></>}{counts.misassigned>0&&<> · <span style={{color:"#f87171"}}>⇄ שיוך שגוי {counts.misassigned}</span></>}{counts.not_found>0&&<> · <span style={{color:"#f87171"}}>✗ לא נמצא {counts.not_found}</span></>}{counts.not_verifiable>0&&<> · <span style={{color:"#94a3b8"}}>○ לא נבדק {counts.not_verifiable}</span></>}
+                                      </summary>
+                                      <div style={{marginTop:"6px",display:"flex",flexDirection:"column",gap:"4px"}}>
+                                        {items.map((it,ii)=>{
+                                          const col={verified:"#86efac",partial:"#fcd34d",misassigned:"#f87171",not_found:"#f87171",not_verifiable:"#94a3b8"}[it.status]||"#cbd5e1";
+                                          const stLbl={verified:"✓ אומת",partial:"⚠ חלקי",misassigned:"⇄ שיוך שגוי",not_found:"✗ לא נמצא",not_verifiable:"○ לא נבדק"}[it.status]||it.status;
+                                          return (
+                                            <div key={ii} style={{padding:"6px 8px",background:"#1e293b",borderRadius:"4px",borderRight:`3px solid ${col}`,fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5"}}>
+                                              <div style={{display:"flex",gap:"6px",alignItems:"flex-start",flexWrap:"wrap",marginBottom:"3px"}}>
+                                                <span style={{color:col,fontWeight:"700",whiteSpace:"nowrap"}}>{stLbl}</span>
+                                                {it.subClaimIndex&&<span style={{color:"#64748b"}}>טענה #{it.subClaimIndex}</span>}
+                                                {it.author&&<span style={{color:"#fcd34d"}}>{it.author}{it.page?`, עמ' ${it.page}`:""}</span>}
+                                                {it.unitUid&&<span style={{color:"#94a3b8"}}>uid: {it.unitUid}</span>}
+                                                {it.verseRef&&<span style={{color:"#93c5fd"}}>{it.verseRef}</span>}
+                                              </div>
+                                              {it.quotedAs&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>בסינתזה: "{it.quotedAs}"</div>}
+                                              {it.quote&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>ציטוט: "{it.quote}"</div>}
+                                              {it.quotedText&&<div style={{color:"#cbd5e1",fontStyle:"italic"}}>טקסט: "{it.quotedText}"</div>}
+                                              {it.actualAuthor&&<div style={{color:"#86efac"}}>מחבר אמיתי: {it.actualAuthor}</div>}
+                                              {it.actualPage&&<div style={{color:"#86efac"}}>עמוד נכון: {it.actualPage}</div>}
+                                              {it.actualUnitUid&&<div style={{color:"#86efac"}}>uid נכון: {it.actualUnitUid}</div>}
+                                              {it.actualQuote&&<div style={{color:"#86efac",marginTop:"2px"}}>ציטוט מדויק: "{it.actualQuote}"</div>}
+                                              {it.suggestion&&<div style={{marginTop:"3px",color:col}}>💡 {it.suggestion}</div>}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </details>
+                                  );
+                                })}
+                                <div style={{marginTop:"6px",fontSize:"10px",color:"#67e8f9",fontStyle:"italic"}}>לחצי "✏ ערוך" בכרטיס הסינתזה שלמעלה כדי להחיל את התיקונים.</div>
+                              </div>
+                            ):(!p3VerifyInProgress&&!p3VerifyLoading&&(
+                              <div style={{padding:"20px",textAlign:"center",color:"#94a3b8",fontSize:"12px",fontStyle:"italic"}}>
+                                טרם הורצה בדיקה מול הפרשנים.<br/>
+                                הבדיקה תעבור על כל ציטוטי הפרשנים ושיוכי היחידות בסינתזה, ותאמת אותם מול הפרשנות המלאה (קנופרס, קליין, יפת, דירקסון, מיירס, קרטיס ומדיסון, בראון) + הטקסטים המלאים של דה"י והמקבילה.
+                              </div>
+                            ))}
                           </div>
                         )}
 
