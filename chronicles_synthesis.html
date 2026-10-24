@@ -4049,8 +4049,33 @@ ${unitsSection}
     const all=stageResults||LS_get("stageResults",{});
     const updated={...all,[resultsKey]:newData};
     if(setStageResults) setStageResults(updated);
-    LS_set("stageResults",updated);
+    // ל-Firebase: שומרים הכל (מקור האמת, אין מגבלת quota מעשית)
     fbSaveStageResults(updated);
+    // ל-localStorage: שומרים גרסה רזה — ללא ה-result המלא של כל קבוצה
+    // (ה-result יכול להיות עשרות KB לקבוצה × 6 קבוצות × 22 מושגים × 2 דמויות = הצפת quota)
+    try{
+      const leanInProg=inProg?{
+        ...inProg,
+        batches:(inProg.batches||[]).map(b=>({
+          idx:b.idx,
+          unitUids:b.unitUids,
+          status:b.status,
+          error:b.error,
+          processedAt:b.processedAt,
+          usage:b.usage,
+          costUsd:b.costUsd,
+          _promptLength:b._promptLength,
+          _findingsCount:b.result&&Array.isArray(b.result.batchFindings)?b.result.batchFindings.length:0,
+          _hasResult:!!b.result // סמן שה-result קיים ב-Firebase
+        }))
+      }:null;
+      const leanStage4={...newStage4,phase3_academic_in_progress:leanInProg};
+      const leanData={...newData,stage4:leanStage4};
+      const leanUpdated={...all,[resultsKey]:leanData};
+      LS_set("stageResults",leanUpdated);
+    }catch(e){
+      console.warn("LS lean save failed, מסתמכים על Firebase",e);
+    }
   }
 
   // תכנון קבוצות: לכל יחידה בשלב 3 (עם מסקנה) תהיה שליחה בקבוצה
@@ -5739,7 +5764,7 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                             {!p3AcademicDraft?(
                               <>
                                 <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.7"}}>
-                                  יוצר טיוטה אקדמית רציפה (~400-600 מילים) למושג <strong>"{concept}"</strong> בעיצוב {character==="solomon"?"שלמה":"דוד"}.<br/>
+                                  יוצר טיוטה אקדמית רציפה (~350-500 מילים) למושג <strong>"{concept}"</strong> בעיצוב {character==="solomon"?"שלמה":"דוד"}, מעוגנת בהגדרה ובהבהרת היישום.<br/>
                                   <strong>תהליך:</strong> ({P3_BATCH_COUNT} קבוצות × ~{p3BatchSizeFor((stageData.stage3?.detailedConclusions||[]).length)} יחידות) לקבוצה — ה-AI קורא את הפירוש המלא של הפרשנים ומחלץ ממצאים. אחרי כל קבוצה שומר, מאפשר להמשיך אם נקטע. מיזוג סופי כותב את הטיוטה.
                                 </div>
                                 {/* פאנל התקדמות — אם יש in-progress */}
