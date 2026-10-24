@@ -2749,6 +2749,10 @@ ${materialSection}
   const [p3DraftProgress,setP3DraftProgress]=useState("");
   const [p3DraftEditing,setP3DraftEditing]=useState(false);
   const [p3DraftEditDraft,setP3DraftEditDraft]=useState(null);
+  // ─ בדיקת פרשנים בטיוטה האקדמית ─
+  const [p3DraftVerifyLoading,setP3DraftVerifyLoading]=useState(false);
+  const [p3DraftVerifyError,setP3DraftVerifyError]=useState("");
+  const [p3DraftVerifyProgress,setP3DraftVerifyProgress]=useState("");
 
   // תצוגה מקדימה של הקלט המדויק שיעבור ל-AI ליחידה אחת (בלי להריץ)
   function buildPreviewForUnit(uid){
@@ -4076,6 +4080,166 @@ ${unitsSection}
     }catch(e){
       console.warn("LS lean save failed, מסתמכים על Firebase",e);
     }
+  }
+
+  // ─ בדיקת פרשנים לטיוטה האקדמית ─
+  const DRAFT_VERIFY_PROMPT_VERSION="v1-2026-10-25-draft-verification";
+  const p3DraftVerification=stage4Data.phase3_draft_verification||null;
+
+  // בונה את ה-prompt לווידוא: מקבל את הטיוטה + ציטוטי פרשנים זמינים ליחידות שהוזכרו
+  function buildDraftVerifyPrompt(draft,commentarySection,footnotesList){
+    const who=character==="solomon"?"שלמה":"דוד";
+    return `אתה עוזר מחקר אקדמי. תפקידך לוודא שההפניות לפרשנים בטיוטה אקדמית תואמות למה שהפרשנים כותבים בחומר שאני נותן לך.
+
+גרסת פרומפט: ${DRAFT_VERIFY_PROMPT_VERSION}
+
+### המושג: "${concept}" · הדמות: ${who}
+
+### הטיוטה המלאה (כולל סימוני הערות שוליים):
+${draft.draft||"(ריק)"}
+
+### הערות שוליים לווידוא (${footnotesList.length}):
+${footnotesList.map(f=>`[${f.num}] ${f.text}`).join("\n")}
+
+### פרשנות מלאה של היחידות המצוטטות בטיוטה (זהו הבסיס הבלעדי לווידוא):
+${commentarySection}
+
+### תפקידך
+עבור כל הערת שוליים ברשימה למעלה:
+1. זהה את המחבר/ים ואת מספר/י העמוד המצוטטים.
+2. חפש בחומר הפרשנות: האם המחבר הזה אומר באופן סביר את מה שמיוחס לו בהערה (לפי ההקשר של המספר העל-כתבי בטיוטה)?
+3. אם מצאת — האם מספר העמוד תואם או קרוב?
+4. אם לא מצאת — דווח במפורש; אל תמציא.
+
+### רמות וידוא (status)
+- **verified** — נמצא בחומר, התוכן תואם, העמוד מתאים (±2 עמודים).
+- **verified_different_page** — נמצא בחומר, התוכן תואם, אבל העמוד שונה מהותית.
+- **paraphrase_only** — נמצא רעיון דומה אבל לא ציטוט מדויק, או שהמחבר אומר דבר קרוב ולא זהה.
+- **not_found** — לא מצאתי שהמחבר אומר את זה בחומר שסופק (אולי כן אומר במקום אחר שאינו בחומר).
+- **no_commentary_in_material** — אין בכלל פירוש של המחבר הזה ליחידה הרלוונטית בחומר שסופק.
+
+### כללים נוקשים
+- **אל תמציא ציטוטים** מהחומר. אם לא ראית — אמור "not_found".
+- **אל תחליף שם מחבר**. אם ההערה מצטטת "קנופרס" והחומר מכיל רק "מיירס" ליחידה — זה "no_commentary_in_material".
+- **ההמלצה שלך חייבת להיות ברורה**: לשמור / לתקן עמוד / להמיר לפרפרזה / להסיר.
+
+### פורמט JSON — חובה
+- אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת; השתמש בגרשיים טיפוגרפיים (״ ״).
+- פלט רק JSON, ללא טקסט או markdown.
+
+### פלט נדרש:
+
+{
+  "footnoteVerifications": [
+    {
+      "num": 1,
+      "originalText": "ההפניה כפי שהיא בהערה",
+      "status": "verified|verified_different_page|paraphrase_only|not_found|no_commentary_in_material",
+      "finding": "מה מצאת בחומר (ציטוט קצר אם מתאים, או ריק אם לא נמצא)",
+      "foundAtUnit": "שם היחידה שבה מצאת (ריק אם לא נמצא)",
+      "pageInMaterial": "העמוד המופיע בחומר (ריק אם לא רלוונטי)",
+      "recommendation": "לשמור כפי שהוא | לתקן עמוד ל-X | להמיר לפרפרזה | להסיר את הציטוט"
+    }
+  ],
+  "overallSummary": "משפט אחד על איכות ההפניות הכוללת",
+  "overallRecommendation": "accept_as_is|accept_with_fixes|rebuild_citations",
+  "verifiedCount": 0,
+  "problemsCount": 0
+}`;
+  }
+
+  // פונקציית ההרצה: עובר על הטיוטה הקיימת ומוודא כל הערת שוליים מול הפרשנות שבחומר
+  async function verifyDraftFootnotes(){
+    if(!p3AcademicDraft){ setP3DraftVerifyError("אין טיוטה אקדמית לוודא."); return; }
+    const footnotes=Array.isArray(p3AcademicDraft.footnotes)?p3AcademicDraft.footnotes:[];
+    if(!footnotes.length){ setP3DraftVerifyError("אין הערות שוליים בטיוטה."); return; }
+    if(p3DraftVerification){
+      if(!confirm(`קיים דו״ח ווידוא קיים. להריץ שוב (הקיים יידרס)?`)) return;
+    }
+
+    setP3DraftVerifyError(""); setP3DraftVerifyLoading(true);
+    setP3DraftVerifyProgress("אוסף יחידות מצוטטות...");
+
+    try{
+      // 1. איסוף UIDs של יחידות המופיעות ב-evidenceMap
+      const unitsByUid={};
+      (raw.units||[]).forEach(u=>{ unitsByUid[String(u.id)]=u; });
+      const allS3Units=stageData.stage3?.detailedConclusions||[];
+
+      const refUids=new Set();
+      (p3AcademicDraft.evidenceMap||[]).forEach(em=>{
+        const refs=Array.isArray(em.basedOnUnitRefs)?em.basedOnUnitRefs
+                 :Array.isArray(em.basedOnUnits)?em.basedOnUnits:[];
+        refs.forEach(ref=>{
+          if(typeof ref==="string"){
+            // ננסה למצוא יחידה שה-chapter שלה מופיע ב-ref או להפך
+            const found=allS3Units.find(u=>{
+              const ch=u.chapter||"";
+              return ch && (ref.includes(ch)||ch.includes(ref));
+            });
+            if(found) refUids.add(String(found.uid));
+          }else if(ref&&typeof ref==="object"&&ref.uid){
+            refUids.add(String(ref.uid));
+          }
+        });
+      });
+
+      // אם לא זיהינו שום יחידה — ניקח את כל יחידות שלב 3 (הטיוטה בטח קשורה אליהן)
+      if(refUids.size===0){
+        allS3Units.forEach(u=>refUids.add(String(u.uid)));
+      }
+
+      setP3DraftVerifyProgress(`${refUids.size} יחידות זוהו · טוען פרשנות...`);
+
+      // 2. בניית חבילת פרשנות: לכל יחידה — כל הפרשנים עם הטקסט המלא (עד 4000 תווים לכל פרשן)
+      const commentarySection=[...refUids].map(uid=>{
+        const u=unitsByUid[uid]||{};
+        const name=u.chapter||uid;
+        const commentary=(raw.commentary&&raw.commentary[uid])||{};
+        const texts=Object.entries(commentary).map(([author,text])=>{
+          const t=typeof text==="string"?text:"";
+          const limited=t.length>4000?t.substring(0,4000)+"\n[קוצר ב-4000 תווים]":t;
+          return `─── ${author} ───\n${limited}`;
+        }).join("\n\n");
+        return `━━━ יחידה: ${name} (uid=${uid}) ━━━\n${texts||"(אין פירוש מתועד לחלוטין)"}`;
+      }).join("\n\n");
+
+      const prompt=buildDraftVerifyPrompt(p3AcademicDraft,commentarySection,footnotes);
+      setP3DraftVerifyProgress(`שולח ל-AI (${prompt.length.toLocaleString()} תווים) · ${footnotes.length} הערות לבדיקה...`);
+
+      // 3. הרצה (קריאה אחת; אם נכשל בגלל גודל — נוסיף batching בעתיד)
+      const r=await aiCallDirectWithUsage(prompt,16000);
+      const {parsed,error}=tryParseJson(r.text);
+      if(!parsed){
+        setP3DraftVerifyError(`JSON parse נכשל: ${error?error.message:"לא נמצא"}`);
+        setP3DraftVerifyLoading(false); setP3DraftVerifyProgress(""); return;
+      }
+
+      // 4. שמירה
+      const report={
+        ...parsed,
+        verifiedAt:new Date().toISOString(),
+        promptVersion:DRAFT_VERIFY_PROMPT_VERSION,
+        sourceDraftGeneratedAt:p3AcademicDraft.generatedAt||null,
+        unitsChecked:refUids.size,
+        footnotesChecked:footnotes.length,
+        usage:r.usage,
+        costUsd:r.costUsd,
+        _promptLength:prompt.length
+      };
+      const newStage4={...stage4Data,phase3_draft_verification:report,lastUpdated:Date.now()};
+      const newData={...stageData,stage4:newStage4,lastUpdated:Date.now()};
+      setStageData(newData);
+      const all=stageResults||LS_get("stageResults",{});
+      const updated={...all,[resultsKey]:newData};
+      if(setStageResults) setStageResults(updated);
+      LS_set("stageResults",updated);
+      fbSaveStageResults(updated);
+      setP3DraftVerifyProgress("");
+    }catch(e){
+      setP3DraftVerifyError(`שגיאה: ${e.message||e}`);
+    }
+    setP3DraftVerifyLoading(false);
   }
 
   // תכנון קבוצות: לכל יחידה בשלב 3 (עם מסקנה) תהיה שליחה בקבוצה
@@ -5965,6 +6129,71 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                     </div>
                                   </details>
                                 )}
+
+                                {/* ─ בדיקת פרשנים מול הטיוטה האקדמית ─ */}
+                                <div style={{marginTop:"14px",padding:"12px 14px",background:"#083344",borderRadius:"8px",border:"2px solid #06b6d4"}}>
+                                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+                                    <div style={{fontSize:"13px",fontWeight:"700",color:"#67e8f9"}}>📚 בדיקת פרשנים מול הטיוטה האקדמית</div>
+                                    {p3DraftVerification&&(
+                                      <div style={{fontSize:"10px",color:"#94a3b8"}}>
+                                        הורץ: {p3DraftVerification.verifiedAt?.slice(0,16).replace("T"," ")||"—"} · עלות: ${(p3DraftVerification.costUsd||0).toFixed(4)}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"10px"}}>
+                                    עבור על כל הערת שוליים: האם המחבר שהוזכר אכן אומר את מה שמיוחס לו, בעמוד הנכון, בחומר שבכלי ההשוואה.
+                                  </div>
+                                  <div style={{display:"flex",gap:"8px",marginBottom:"10px",flexWrap:"wrap",alignItems:"center"}}>
+                                    <button onClick={verifyDraftFootnotes} disabled={p3DraftVerifyLoading||!p3AcademicDraft} style={{padding:"8px 16px",borderRadius:"5px",border:"2px solid #06b6d4",cursor:p3DraftVerifyLoading?"wait":"pointer",background:p3DraftVerifyLoading?"#334155":"#06b6d4",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                                      {p3DraftVerifyLoading?`⏳ ${p3DraftVerifyProgress||"מוודא..."}`:(p3DraftVerification?"🔄 בדיקה מחדש":"📚 הרץ בדיקה מול הפרשנים")}
+                                    </button>
+                                    {!p3DraftVerification&&!p3DraftVerifyLoading&&<span style={{fontSize:"11px",color:"#fcd34d",padding:"3px 10px",background:"#78350f22",borderRadius:"4px"}}>⚠ מומלץ להריץ לפני עריכה סופית</span>}
+                                    {p3DraftVerification&&p3AcademicDraft.generatedAt&&p3DraftVerification.sourceDraftGeneratedAt&&p3AcademicDraft.generatedAt!==p3DraftVerification.sourceDraftGeneratedAt&&<span style={{fontSize:"11px",color:"#fcd34d",padding:"3px 10px",background:"#78350f22",borderRadius:"4px"}}>⚠ הטיוטה עודכנה מאז הבדיקה — הרץ מחדש</span>}
+                                  </div>
+                                  {p3DraftVerifyError&&<div style={{marginBottom:"10px",padding:"8px 10px",background:"#7f1d1d33",borderRadius:"5px",fontSize:"11px",color:"#fca5a5"}}>❌ {p3DraftVerifyError}</div>}
+
+                                  {p3DraftVerification&&(
+                                    <div>
+                                      {/* כותרת הדו"ח */}
+                                      <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",marginBottom:"8px"}}>
+                                        <div style={{display:"flex",gap:"10px",flexWrap:"wrap",fontSize:"10px",color:"#cbd5e1",marginBottom:"6px"}}>
+                                          <span>הערות שוליים שנבדקו: {p3DraftVerification.footnotesChecked||0}</span>
+                                          <span>· יחידות מעורבות: {p3DraftVerification.unitsChecked||0}</span>
+                                          <span>· קלט: {p3DraftVerification.usage?.input_tokens||0} tok · פלט: {p3DraftVerification.usage?.output_tokens||0} tok</span>
+                                        </div>
+                                        {p3DraftVerification.overallSummary&&<div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"6px",fontStyle:"italic"}}>{p3DraftVerification.overallSummary}</div>}
+                                        {p3DraftVerification.overallRecommendation&&(()=>{
+                                          const lbl={accept_as_is:"✓ לקבל כפי שהוא",accept_with_fixes:"⚠ לקבל עם תיקונים נקודתיים",rebuild_citations:"❌ לבנות ציטוטים מחדש"}[p3DraftVerification.overallRecommendation]||p3DraftVerification.overallRecommendation;
+                                          const col={accept_as_is:"#86efac",accept_with_fixes:"#fcd34d",rebuild_citations:"#f87171"}[p3DraftVerification.overallRecommendation]||"#cbd5e1";
+                                          return <div style={{display:"inline-block",padding:"3px 10px",background:col+"22",color:col,borderRadius:"4px",fontSize:"11px",fontWeight:"700",border:`1px solid ${col}55`}}>{lbl}</div>;
+                                        })()}
+                                      </div>
+
+                                      {/* פירוט לכל הערת שוליים */}
+                                      {Array.isArray(p3DraftVerification.footnoteVerifications)&&p3DraftVerification.footnoteVerifications.length>0&&(
+                                        <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                                          {p3DraftVerification.footnoteVerifications.map((fv,fi)=>{
+                                            const statusCol={verified:"#86efac",verified_different_page:"#fcd34d",paraphrase_only:"#fcd34d",not_found:"#f87171",no_commentary_in_material:"#f87171"}[fv.status]||"#cbd5e1";
+                                            const statusLbl={verified:"✓ מאומת",verified_different_page:"⚠ עמוד שונה",paraphrase_only:"⚠ פרפרזה בלבד",not_found:"❌ לא נמצא",no_commentary_in_material:"🚫 אין פרשנות בחומר"}[fv.status]||fv.status;
+                                            return (
+                                              <div key={fi} style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",borderRight:`4px solid ${statusCol}`}}>
+                                                <div style={{display:"flex",gap:"6px",alignItems:"center",marginBottom:"4px",flexWrap:"wrap"}}>
+                                                  <span style={{color:"#fcd34d",fontWeight:"700",fontSize:"12px"}}>[{fv.num||fi+1}]</span>
+                                                  <span style={{padding:"2px 6px",background:statusCol+"22",color:statusCol,borderRadius:"3px",fontSize:"10px",fontWeight:"700"}}>{statusLbl}</span>
+                                                  {fv.foundAtUnit&&<span style={{fontSize:"10px",color:"#94a3b8"}}>· נמצא ב: {fv.foundAtUnit}</span>}
+                                                  {fv.pageInMaterial&&<span style={{fontSize:"10px",color:"#67e8f9"}}>· עמ' בחומר: {fv.pageInMaterial}</span>}
+                                                </div>
+                                                {fv.originalText&&<div style={{fontSize:"11px",color:"#cbd5e1",marginBottom:"3px"}}><strong style={{color:"#94a3b8"}}>בטיוטה:</strong> {fv.originalText}</div>}
+                                                {fv.finding&&<div style={{fontSize:"11px",color:"#cbd5e1",marginBottom:"3px"}}><strong style={{color:"#94a3b8"}}>בחומר:</strong> {fv.finding}</div>}
+                                                {fv.recommendation&&<div style={{fontSize:"11px",color:statusCol,fontWeight:"600"}}>➔ {fv.recommendation}</div>}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
                                 </>
                                 ); })()}
                               </>
