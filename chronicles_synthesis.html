@@ -3062,7 +3062,7 @@ ${buildUnitBlock(unit)}
 
   // ─ שלב 4 פאזה 3: סינתזה ─
   const PROMPT_VERSION_P3="v6-2026-10-24-textual-changes";
-  const PROMPT_VERSION_DRAFT="v1-2026-10-24-academic-draft";
+  const PROMPT_VERSION_DRAFT="v2-2026-10-25-definition-anchored";
   const p3AcademicDraft=stage4Data.phase3_academic_draft||null;
   const P3_BATCH_COUNT=6;
   const P3_BATCH_MAX_TOKENS=24000;
@@ -4124,6 +4124,9 @@ ${commentaryText||"(אין פרשנות מתועדת)"}
 `;
     }).join("\n");
 
+    const defVersion=(conceptDef.editedAt||conceptDef.savedAt||"").slice(0,10)||"unversioned";
+    const clarVersion=(conceptDef.clarification&&(conceptDef.clarification.editedAt||conceptDef.clarification.generatedAt||""))?(conceptDef.clarification.editedAt||conceptDef.clarification.generatedAt).slice(0,10):"unversioned";
+
     return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד ושלמה בדברי הימים לאור החזון הנבואי של ישעיהו, ירמיהו ויחזקאל.
 
 גרסת פרומפט: ${PROMPT_VERSION_DRAFT} · קבוצה ${batchIdx+1}/${totalBatches}
@@ -4131,27 +4134,33 @@ ${commentaryText||"(אין פרשנות מתועדת)"}
 ### המושג: "${concept}" · הדמות: ${who}
 ### קבוצה ${batchIdx+1} מתוך ${totalBatches} · ${batchUnits.length} יחידות (${startGlobal+1}-${startGlobal+batchUnits.length} מתוך ${totalUnits})
 
-### ההגדרה המחייבת (מפרק ב׳):
+### ההגדרה המחייבת (מפרק ב׳) — גרסה ${defVersion}:
 ${conceptDef.text}
 
-### הבהרת היישום:
+### הבהרת היישום — גרסה ${clarVersion}:
 ${conceptDef.clarification.text}
 
+### תפקיד המקורות (קריאה חובה לפני כל פעולה)
+- **ההגדרה וההבהרה** אינן מידע נוסף אלא **אמת המידה**: הן מכתיבות מה בכלל נחשב למימוש של "${concept}" ואילו ממצאים ראויים לשאת את הטיעון.
+- **שלב 2 (אינדיקטורים) ושלב 3 (compareNotes וניתוח השוואתי) ופרשנות** מספקים את המאגר של **ממצאים אפשריים**. **לא כל ממצא שסומן בשלב 2 נושא את הטיעון** — חובה שיתאים ספציפית להגדרה.
+- אם ממצא יכול לשרת באותה מידה מושג סמוך (למשל: ייחוס להישגים לה׳ יכול לשרת ענווה, יראת ה׳, אמונה, או צניעות — תלוי בהגדרה) — זהו **לא ממצא חזק עבור "${concept}"** אלא אם כן ההגדרה עצמה הופכת אותו לכזה. במצב כזה סמן אותו ב-\`weakForThisConcept: true\`.
+
 ### תפקידך בקבוצה הזאת
-עבור על ${batchUnits.length} היחידות שבקבוצה הנוכחית וחלץ **מידע ממוקד שיאפשר כתיבה אקדמית של טיוטה**. אל תכתוב פרוזה — חלץ ממצאים מובנים. כל ממצא חייב להיות מעוגן בציטוט מדויק מהחומר שלפניך (פסוק, אינדיקטור, פרשן) — **אל תמציא**.
+עבור על ${batchUnits.length} היחידות שבקבוצה הנוכחית וחלץ **ממצאים שההגדרה הופכת לרלוונטיים עבור "${concept}" ספציפית**. אל תאסוף ממצאים "חביבים" — שאל לכל ממצא: **מה בהתנהגות המלך או בהצגת מעמדו כאן מבטא את "${concept}" כפי שהוגדר למעלה**? אם אין תשובה ספציפית — אל תכלול.
 
 ### מה לחלץ מהקבוצה
-- **ממצאים בשדה הגלוי** — מילים מהשדה הסמנטי, הופעה מפורשת של המושג (למי מיוחסת?), פסוקים קונקרטיים.
-- **ממצאים בשדה הנרמז** — פעולות, בחירות ספרותיות, פרמטרים חיוביים שמבטאים את המושג.
-- **שינויי הכרוניסט ביחס למקבילה** — תוספת, השמטה, החלפה, שינוי מבני (עם ציטוט מהמקבילה ומדה״י).
+- **ממצאים בשדה הגלוי** — הופעה מפורשת של המושג או של השדה הסמנטי שלו, פסוקים קונקרטיים.
+- **ממצאים בשדה הנרמז** — פעולות ובחירות ספרותיות **שספציפית תואמות את ההגדרה** (לא רק "נראות דתיות").
+- **שינויי הכרוניסט ביחס למקבילה** — תוספת/השמטה/החלפה. חובה להסביר **את משמעות השינוי למושג**, לא רק את העובדה שהוא קיים.
 - **ציטוטי פרשנים רלוונטיים** — אך ורק פרשנים שקראת את טקסטם בחומר הזה, עם שם מחבר, חיבור ועמוד כפי שהם בחומר.
 - **ראיות נגד / סייגים** — יחידות שבהן המושג חלש או ההסקה בעייתית.
 
-### כללים
+### כללים נוקשים
 - **אל תמציא ציטוטים** — אם לא ראית ציטוט בחומר, אל תכלול אותו.
 - **שמור שמות פרשנים ועמודים בדיוק** כפי שהם בחומר.
-- **הבחן בין המלך לדמויות אחרות** — אם רוח מיוחסת לעמשי ולא לדוד, ציין זאת.
-- **אל תסיק מגמה מלאה מקבוצה בודדת** — זו רק קבוצה אחת מ-${totalBatches}; המסקנה הכוללת תיווצר במיזוג.
+- **הבחן בין המלך לדמויות אחרות** — אם המושג מיוחס לאדם אחר ולא לדוד/שלמה, ציין זאת.
+- **אל תסיק מגמה מלאה מקבוצה בודדת** — זו רק קבוצה אחת מ-${totalBatches}.
+- **אסור להשתמש ב-UID בטקסט חופשי**. ה-UID הוא רק מזהה פנימי בשדה \`basedOnUnits\`. הפניה אנושית ליחידה (למשל "דה״י א׳ י״ד" או "סיפור העלאת הארון") שייכת לשדה \`unitRefs\`.
 
 ### פורמט JSON — חובה
 - אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״) או בגרש בודד ʼ.
@@ -4166,20 +4175,27 @@ ${unitsSection}
   "batchFindings": [
     {
       "finding": "ממצא בנוסח שאפשר להעתיק כמעט כמות שהוא לטיוטה (משפט אחד-שניים)",
+      "whyRealizesConcept": "חובה: הסבר ספציפי כיצד הממצא הזה מממש את '${concept}' לפי ההגדרה למעלה. אל תסתפק ב-'מראה אדיקות' או 'מראה תלות בה''. ציין איזה חלק של ההגדרה הממצא נוגע בו.",
+      "weakForThisConcept": false,
       "basedOnUnits": [{"uid":"","unitName":"","chapter":""}],
+      "unitRefs": "הפניה אנושית: 'דה״י א׳ י״ד' או 'סיפור x'. אסור UID.",
       "field": "explicit|implicit|both",
-      "evidence": "ציטוט מהחומר (פסוק/אינדיקטור/תיאור) שמבסס את הממצא",
+      "evidence": "ציטוט מדויק מהחומר (פסוק/אינדיקטור/תיאור) שמבסס את הממצא",
       "scholarCitations": [
         {"author":"","work":"","page":"","quote":"ציטוט מדויק או תמצית מהפרשנות"}
       ],
-      "textualChange": "אם רלוונטי: תוספת/השמטה/החלפה — מה בדיוק עשה הכרוניסט"
+      "textualChange": "אם רלוונטי: תוספת/השמטה/החלפה — מה בדיוק עשה הכרוניסט (עובדה בלבד)",
+      "textualChangeSignificance": "אם יש textualChange: למה השינוי הזה תורם ל-'${concept}' כפי שהוגדר? אל תסתפק ב-'מדגיש את ה''. ציין את החיבור הספציפי להגדרה."
     }
   ],
   "batchCounterEvidence": [
-    {"finding":"","basedOnUnits":[{"uid":"","unitName":""}],"explanation":""}
+    {"finding":"","basedOnUnits":[{"uid":"","unitName":""}],"unitRefs":"","explanation":"מה ביחידה סותר/מגביל את הטענה על '${concept}' לפי ההגדרה"}
   ],
   "batchQualifications": [
     "סייג או אזהרה מתודית שעולה מהיחידות בקבוצה"
+  ],
+  "adjacentConceptLeakage": [
+    "אם זיהית ממצאים שחומר הקבוצה פיתה להתייחס אליהם כ-'${concept}' אבל שייכים למושג סמוך — פרט כאן. לדוגמה: 'הכרוניסט מוסיף שה׳ נתן לדוד מנוחה — זה שייך למושג מנוחה/יראה, לא ל-${concept}'."
   ],
   "batchNotes": "הערות כלליות על הקבוצה — דפוסים ייחודיים, קונטרסטים בין יחידות, מה שעשוי להועיל במיזוג"
 }`;
@@ -4197,23 +4213,36 @@ ${unitsSection}
       if(r.batchNotes) batchNotes.push(`[קבוצה ${b.idx+1}] ${r.batchNotes}`);
     });
 
-    return `אתה עוזר מחקר. בשלב קודם איסופנו ממצאים מכל יחידות ${who} בדה״י למושג "${concept}". עכשיו תפקידך לכתוב **טיוטה אקדמית רציפה לפרק בתזה**.
+    const defVersion=(conceptDef.editedAt||conceptDef.savedAt||"").slice(0,10)||"unversioned";
+    const clarVersion=(conceptDef.clarification&&(conceptDef.clarification.editedAt||conceptDef.clarification.generatedAt||""))?(conceptDef.clarification.editedAt||conceptDef.clarification.generatedAt).slice(0,10):"unversioned";
+    const weakCount=allFindings.filter(x=>x.weakForThisConcept).length;
+    const strongFindings=allFindings.filter(x=>!x.weakForThisConcept);
+
+    return `אתה עוזר מחקר. בשלב קודם אספנו ממצאים מכל יחידות ${who} בדה״י למושג "${concept}". עכשיו תפקידך לכתוב **טיוטה אקדמית רציפה לפרק בתזה**.
 
 גרסת פרומפט: ${PROMPT_VERSION_DRAFT} · מיזוג סופי
 
 ### המושג: "${concept}" · הדמות: ${who}
 
-### ההגדרה המחייבת (מפרק ב׳):
+### ההגדרה המחייבת (מפרק ב׳) — גרסה ${defVersion}:
 ${conceptDef.text}
 
-### הבהרת היישום:
+### הבהרת היישום — גרסה ${clarVersion}:
 ${conceptDef.clarification.text}
 
-### ממצאים מכל הקבוצות (${allFindings.length} ממצאים · ${allCounter.length} ראיות נגד · ${allQuals.length} סייגים)
+### תפקיד המקורות (עליונות ההגדרה)
+- ההגדרה וההבהרה הן **אמת המידה** של הטיוטה. הן מכתיבות מה הפרק צריך להוכיח ואילו ממצאים נושאים טיעון.
+- הממצאים הם **מאגר**. חובה לסנן: ממצאים שסומנו \`weakForThisConcept: true\` (${weakCount} מתוך ${allFindings.length}) או שעלו ב-\`adjacentConceptLeakage\` **אסורים כבסיס מרכזי לטיעון**. אפשר להזכיר אותם כסייג או כראיית רקע, אך לא כעמוד תווך.
+- **המעבר הקריטי**: לא "לאסוף ממצאים שסומנו תחת '${concept}'" אלא "לבנות טיעון המסביר מדוע הממצאים הנבחרים מממשים את ההגדרה הספציפית של '${concept}'". אם ממצא לא עונה על השאלה "מה בדיוק בהתנהגות המלך או בהצגת מעמדו **כאן** מבטא את '${concept}' כפי שהוגדר" — הוא אינו בסיס לטיעון, גם אם הוא נכון לכשעצמו.
 
-### ממצאים:
-${JSON.stringify(allFindings,null,2)}
+### ממצאים (${strongFindings.length} חזקים · ${weakCount} חלשים · ${allCounter.length} ראיות נגד · ${allQuals.length} סייגים)
 
+### ממצאים חזקים (יסוד הטיוטה):
+${JSON.stringify(strongFindings,null,2)}
+
+${weakCount?`### ממצאים חלשים (לא כבסיס מרכזי; רק כסייג, קישור בין-מושגי, או הפניה חיצונית):
+${JSON.stringify(allFindings.filter(x=>x.weakForThisConcept),null,2)}
+`:""}
 ${allCounter.length?`### ראיות נגד:
 ${JSON.stringify(allCounter,null,2)}
 `:""}
@@ -4223,21 +4252,27 @@ ${allQuals.map(q=>"- "+q).join("\n")}
 ${batchNotes.length?`### הערות קבוצות:
 ${batchNotes.join("\n")}
 `:""}
-### כללי כתיבה
-1. **פרוזה אקדמית רציפה** 400-600 מילים — ללא כותרות, סעיפים ממוספרים, או רשימות.
-2. **אין ספירת אינדיקטורים** כהוכחה למושג.
-3. **אין לדרוש הופעת מילת המפתח** לזיהוי נרמז.
-4. **הבחן בין המלך לאחרים** ובין בקשת כושר, ייחוסו ומימושו.
-5. **הפרד בין דברי פרשן למסקנת המחקר**. שמות הפרשנים והעמודים **רק** בהערות שוליים.
-6. **אין ליצור ציטוט מניסוח משוער**. אם אין נוסח מדויק — פרפרזה והפניה.
-7. **אין להוסיף השוואה עצמאית לנביאים**.
-8. **אל תסיים ב-"לסיכום" פורמלי**.
+### כללי כתיבה נוקשים
+1. **פרוזה אקדמית רציפה** 350-500 מילים (צמצום מהגרסה הקודמת — פחות ראיות מבוססות היטב עדיף על יותר ראיות חלשות). ללא כותרות, סעיפים ממוספרים או רשימות.
+2. **כל פסקה חייבת לחבר במפורש בין הממצא לבין ההגדרה**: לא לכתוב "המעשה X מראה אדיקות" ולהישען על זה בלבד; לכתוב "X מממש את ${concept} משום ש[חיבור ספציפי להגדרה]". אם לא תוכל לנסח את החיבור בלי להשתמש במילים ממושג סמוך — זה לא ממצא ל-${concept}.
+3. **אין ספירת אינדיקטורים** כהוכחה למושג.
+4. **הבחן בין הממצא למשמעותו בהשוואה**: תוספת/השמטה/שינוי של הכרוניסט הם **נתון**. התרומה שלהם לעיצוב ${concept} טעונה הנמקה. אל תסתפק ב"הכרוניסט הוסיף X, כלומר ${concept}" — הסבר את הגשר.
+5. **ניסוח היקף נכון**: אם הראיות באות מ-5 יחידות מתוך 48, כתוב "ביחידות אלה מצטייר דפוס של..." ולא "פרקי ${who} בדה״י מאופיינים ב...". אל תעשה הכללה מעבר לבסיס הראיות.
+6. **הפרד בין דברי פרשן למסקנת המחקר**. שמות הפרשנים והעמודים **רק** בהערות שוליים.
+7. **אין ליצור ציטוט מניסוח משוער**. אם אין נוסח מדויק — פרפרזה והפניה.
+8. **אין להוסיף השוואה עצמאית לנביאים** או למושגים אחרים (זה שייך לפרקי השוואה).
+9. **אל תסיים ב-"לסיכום" פורמלי**.
+10. **הערות שוליים = ציטוטים ביבליוגרפיים בלבד** (מחבר + חיבור + עמוד). **אסור** לכתוב בהערת שוליים הפניה פנימית מהסוג "ראה ראיות נגד, יחידה X" או "ראה הערה למעלה". גם **אסור UID** בהערות שוליים או בטקסט הטיוטה — השתמש בהפניה אנושית ("דה״י א׳ י״ד").
+11. **אל תמציא תוכן של פרשנים** — אם ממצא לא כולל ציטוט פרשן בחומר, אל תוסיף אחד.
+
+### בוחן יציאה — בצע אותו בלב לפני סיום
+לפני שאתה כותב \`gaps\`, קרא את \`draft\` וענה בלב על שתי שאלות עבור כל פסקה: (א) האם מישהו שיקרא רק את הפסקה הזאת + ההגדרה למעלה יסכים שהפסקה מממשת את ההגדרה הזאת ולא מושג סמוך? (ב) האם כל טענה היקפית בה ("פרקי ${who} מאופיינים ב...") מבוססת על די יחידות? אם לא — תקן לפני פלט.
 
 ### תהליך
-- פתח במשפט-שניים שמנסחים טיעון מרכזי.
-- פתח כל מוקד בפסקה שמשלבת ממצאי שדה גלוי + שדה נרמז + שינוי מקבילה + פרשנות.
-- שלב סייגים וראיות נגד.
-- סיים בניסוח התובנה המרכזית מחדש.
+- פתח במשפט-שניים שמנסחים טיעון מרכזי, המנוסח בשפת ההגדרה.
+- לכל מוקד — פסקה המשלבת שדה גלוי + שדה נרמז + שינוי מקבילה + פרשנות + **קישור מפורש להגדרה**.
+- שלב סייגים וראיות נגד בלשון בוחנת, לא דחויה.
+- סיים בניסוח התובנה המרכזית מחדש בשפת ההגדרה.
 
 ### פורמט JSON — חובה
 - אל תשתמש בגרשיים כפולים (") בתוך ערכי מחרוזת. השתמש בגרשיים טיפוגרפיים (״ ״).
@@ -4246,16 +4281,26 @@ ${batchNotes.join("\n")}
 ### פלט:
 
 {
-  "centralClaim": "טיעון מרכזי של הטיוטה (משפט-שניים)",
-  "draft": "הטיוטה האקדמית הרציפה (400-600 מילים). הערות שוליים מסומנות ¹ ² ³ וכדומה.",
+  "centralClaim": "טיעון מרכזי של הטיוטה (משפט-שניים), מנוסח בשפת ההגדרה",
+  "definitionAnchorStatement": "משפט אחד שמוכיח שהבנת את ההגדרה: 'עבור מושג זה, לפי ההגדרה והבהרת היישום, הסימנים העיקריים ליישום הם: _____, בעוד תופעות כגון _____ שייכות למושגים סמוכים ולא כאן.'",
+  "draft": "הטיוטה האקדמית הרציפה (350-500 מילים). הערות שוליים מסומנות ¹ ² ³ וכדומה. אסור UID. אסור הפניות צולבות פנימיות.",
   "footnotes": [
-    {"num": 1, "text": "ציטוט + שם מחבר + חיבור + עמוד כפי שבממצאים"}
+    {"num": 1, "text": "מחבר, חיבור, עמוד — ו/או פרפרזה קצרה מהפרשנות. אסור 'ראה הערה X' או 'ראה יחידה [UID]'."}
   ],
   "evidenceMap": [
-    {"paragraph":"משפט פתיחה או מוטיב מרכזי של הפסקה","basedOnUnits":["uid1"],"mainEvidence":"תמצית הראיה"}
+    {
+      "paragraph":"משפט פתיחה או מוטיב מרכזי של הפסקה",
+      "basedOnUnitRefs":["דה״י א׳ י״ד","דה״י א׳ ט״ו-ט״ז"],
+      "defAnchor":"חובה: איזה חלק מההגדרה הזאת הפסקה מממשת? ציטוט קצר מההגדרה או פרפרזה.",
+      "mainEvidence":"תמצית הראיה",
+      "boundaryCheck":"האם הפסקה הזאת יכולה הייתה להופיע באותה מידה גם בפרק על מושג סמוך? אם כן — למה היא כאן ולא שם?"
+    }
   ],
-  "gaps": ["פער/חוסר/סתירה שלא נכלל בטיוטה"],
-  "wordCount": מספר מילים בטיוטה
+  "gaps": ["פער/חוסר/סתירה שלא נכלל בטיוטה. אסור לכלול כאן השוואות לפרקים אחרים או דברים ששייכים לפרק אחר בתזה."],
+  "rejectedForBoundary": ["ממצאים שהוזנו לך אבל לא הכנסת לטיוטה כי הם שייכים למושג סמוך — ציין את הממצא ואת המושג הנכון שלו"],
+  "wordCount": 420,
+  "definitionVersionUsed": "${defVersion}",
+  "clarificationVersionUsed": "${clarVersion}"
 }`;
   }
 
@@ -4611,10 +4656,29 @@ ${unitsSection}
       lines.push("");
       draft.evidenceMap.forEach((em,i)=>{
         lines.push(`### ${i+1}. ${em.paragraph||""}`);
-        if(Array.isArray(em.basedOnUnits)&&em.basedOnUnits.length) lines.push(`**יחידות:** ${em.basedOnUnits.join(", ")}`);
+        const unitRefs=Array.isArray(em.basedOnUnitRefs)&&em.basedOnUnitRefs.length?em.basedOnUnitRefs:(Array.isArray(em.basedOnUnits)?em.basedOnUnits:[]);
+        if(unitRefs.length) lines.push(`**יחידות:** ${unitRefs.join(", ")}`);
+        if(em.defAnchor) lines.push(`**עיגון להגדרה:** ${em.defAnchor}`);
         if(em.mainEvidence) lines.push(`**ראיה מרכזית:** ${em.mainEvidence}`);
+        if(em.boundaryCheck) lines.push(`**בדיקת גבול מושגי:** ${em.boundaryCheck}`);
         lines.push("");
       });
+    }
+    if(Array.isArray(draft.rejectedForBoundary)&&draft.rejectedForBoundary.length){
+      lines.push("---");
+      lines.push("");
+      lines.push("## ממצאים שנדחו בגלל גבול מושגי (שייכים למושג סמוך)");
+      lines.push("");
+      draft.rejectedForBoundary.forEach(r=>lines.push(`- ${r}`));
+      lines.push("");
+    }
+    if(draft.definitionAnchorStatement){
+      lines.push("---");
+      lines.push("");
+      lines.push("## עיגון להגדרה (הצהרת ה-AI)");
+      lines.push("");
+      lines.push(draft.definitionAnchorStatement);
+      lines.push("");
     }
     if(Array.isArray(draft.gaps)&&draft.gaps.length){
       lines.push("---");
@@ -4622,6 +4686,15 @@ ${unitsSection}
       lines.push("## חוסרים / בעיות נקודתיות");
       lines.push("");
       draft.gaps.forEach(g=>lines.push(`- ${g}`));
+      lines.push("");
+    }
+    if(draft.definitionVersionUsed||draft.clarificationVersionUsed){
+      lines.push("---");
+      lines.push("");
+      lines.push("## גרסאות קלט");
+      lines.push("");
+      if(draft.definitionVersionUsed) lines.push(`- **הגדרה:** ${draft.definitionVersionUsed}`);
+      if(draft.clarificationVersionUsed) lines.push(`- **הבהרת יישום:** ${draft.clarificationVersionUsed}`);
       lines.push("");
     }
     return lines.join("\n");
@@ -5805,14 +5878,41 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
                                   <details style={{marginBottom:"10px"}}>
                                     <summary style={{cursor:"pointer",padding:"8px 12px",background:"#0f172a",borderRadius:"7px",fontSize:"11px",color:dimColor,fontWeight:"700"}}>🗺 מפת ביסוס (עבודה פנימית — אילו יחידות עומדות מאחורי כל פסקה)</summary>
                                     <div style={{marginTop:"6px",padding:"10px 12px",background:"#0f172a",borderRadius:"5px"}}>
-                                      {dd.evidenceMap.map((em,emi)=>(
+                                      {dd.evidenceMap.map((em,emi)=>{
+                                        const unitRefs=Array.isArray(em.basedOnUnitRefs)&&em.basedOnUnitRefs.length?em.basedOnUnitRefs:(Array.isArray(em.basedOnUnits)?em.basedOnUnits:[]);
+                                        return (
                                         <div key={emi} style={{marginBottom:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",fontSize:"11px",color:"#cbd5e1"}}>
                                           <div style={{fontWeight:"700",color:"#f1f5f9",marginBottom:"3px"}}>{emi+1}. {em.paragraph}</div>
-                                          {Array.isArray(em.basedOnUnits)&&em.basedOnUnits.length>0&&<div style={{color:"#94a3b8",fontSize:"10px",marginBottom:"2px"}}>יחידות: {em.basedOnUnits.join(", ")}</div>}
+                                          {unitRefs.length>0&&<div style={{color:"#94a3b8",fontSize:"10px",marginBottom:"2px"}}>יחידות: {unitRefs.join(", ")}</div>}
+                                          {em.defAnchor&&<div style={{color:"#fcd34d",fontSize:"10px",marginBottom:"2px",fontStyle:"italic"}}>עיגון להגדרה: {em.defAnchor}</div>}
                                           {em.mainEvidence&&<div style={{color:"#cbd5e1",lineHeight:"1.5"}}>{em.mainEvidence}</div>}
-                                        </div>
-                                      ))}
+                                          {em.boundaryCheck&&<div style={{color:"#86efac",fontSize:"10px",marginTop:"3px",lineHeight:"1.5"}}>🚧 בדיקת גבול: {em.boundaryCheck}</div>}
+                                        </div>);
+                                      })}
                                     </div>
+                                  </details>
+                                )}
+
+                                {/* הצהרת עיגון להגדרה */}
+                                {dd.definitionAnchorStatement&&(
+                                  <div style={{padding:"10px 12px",background:"#064e3b22",borderRadius:"7px",marginBottom:"10px",border:"1px solid #10b98155"}}>
+                                    <div style={{fontSize:"11px",fontWeight:"700",color:"#86efac",marginBottom:"6px"}}>🎯 הצהרת ה-AI על עיגון להגדרה</div>
+                                    <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",fontStyle:"italic"}}>{dd.definitionAnchorStatement}</div>
+                                    {(dd.definitionVersionUsed||dd.clarificationVersionUsed)&&(
+                                      <div style={{marginTop:"6px",fontSize:"10px",color:"#64748b"}}>
+                                        גרסאות קלט: הגדרה {dd.definitionVersionUsed||"?"} · הבהרת יישום {dd.clarificationVersionUsed||"?"}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* ממצאים שנדחו בגלל גבול מושגי */}
+                                {Array.isArray(dd.rejectedForBoundary)&&dd.rejectedForBoundary.length>0&&(
+                                  <details style={{marginBottom:"10px"}}>
+                                    <summary style={{cursor:"pointer",padding:"8px 12px",background:"#312e8122",borderRadius:"7px",fontSize:"11px",color:"#a78bfa",fontWeight:"700",border:"1px solid #6366f155"}}>🚧 ממצאים שנדחו בגלל גבול מושגי ({dd.rejectedForBoundary.length}) — שייכים למושג סמוך</summary>
+                                    <ul style={{margin:"6px 0 0 0",padding:"8px 20px 8px 10px",fontSize:"11px",color:"#cbd5e1",lineHeight:"1.6",background:"#1e1b4b22",borderRadius:"5px"}}>
+                                      {dd.rejectedForBoundary.map((r,ri)=>(<li key={ri}>{r}</li>))}
+                                    </ul>
                                   </details>
                                 )}
 
