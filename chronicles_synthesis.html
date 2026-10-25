@@ -990,14 +990,27 @@ function IndicatorMatrixModal({raw,onClose}){
               <button onClick={exportToCsv} style={{marginRight:"auto",padding:"4px 10px",borderRadius:"4px",border:"1px solid #10b981",background:"#064e3b22",color:"#86efac",fontSize:"10px",fontWeight:"700",cursor:"pointer"}}>📥 ייצא ל-CSV / Excel</button>
             </div>
 
+            {/* מפתח האינדיקטורים (מקרא מעל הטבלה) */}
+            <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
+              <div style={{fontSize:"11px",color:"#67e8f9",fontWeight:"700",marginBottom:"6px"}}>🗂 מפתח האינדיקטורים (עמודות הטבלה)</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"4px 10px",fontSize:"10px",color:"#cbd5e1"}}>
+                {indicators.map((ind,i)=>(
+                  <div key={ind} style={{padding:"3px 6px",background:"#1e293b",borderRadius:"3px",display:"flex",gap:"6px",alignItems:"baseline"}}>
+                    <span style={{color:"#fcd34d",fontWeight:"700",minWidth:"20px"}}>{i+1}.</span>
+                    <span style={{lineHeight:"1.4"}}>{ind}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             {/* טבלת המטריצה */}
             <div style={{overflowX:"auto",background:"#1e293b",borderRadius:"6px",padding:"8px"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:"10px",color:"#cbd5e1"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:"11px",color:"#cbd5e1"}}>
                 <thead>
                   <tr style={{background:"#0f172a",position:"sticky",top:0}}>
                     <th style={{padding:"6px 8px",textAlign:"right",border:"1px solid #334155",fontWeight:"700",color:"#67e8f9",minWidth:"180px",position:"sticky",right:0,background:"#0f172a",zIndex:1}}>יחידה (פרק)</th>
-                    {indicators.map(ind=>(
-                      <th key={ind} title={ind} style={{padding:"6px 4px",textAlign:"center",border:"1px solid #334155",fontWeight:"700",color:"#fcd34d",fontSize:"9px",maxWidth:"80px",wordWrap:"break-word",verticalAlign:"bottom"}}>{ind}</th>
+                    {indicators.map((ind,i)=>(
+                      <th key={ind} title={ind} style={{padding:"8px 6px",textAlign:"center",border:"1px solid #334155",fontWeight:"700",color:"#fcd34d",fontSize:"12px",minWidth:"34px",cursor:"help"}}>{i+1}</th>
                     ))}
                     <th style={{padding:"6px 8px",textAlign:"center",border:"1px solid #334155",fontWeight:"700",color:"#86efac",minWidth:"50px"}}>סה״כ</th>
                   </tr>
@@ -1054,6 +1067,361 @@ function IndicatorMatrixModal({raw,onClose}){
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ── מסך ייצוא לכתיבה חיצונית ────────────────────────────────────────────
+// מכין קובץ מרוכז לכל (מושג × דמות): הגדרה מאושרת + הבהרה + כל יחידה
+// עם טקסטים, מקבילות, אינדיקטורים, השוואות ומסקנות שלב ב', פרשנות,
+// והמלצות AI (מסומנות כבלתי מאושרות). להעלאה ישירה לצ'אט חיצוני.
+// ═══════════════════════════════════════════════════════════════════════
+function ExportForChatScreen({raw,stageResults,onBackHome}){
+  const [character,setCharacter]=React.useState("david");
+  const [dimId,setDimId]=React.useState("d1");
+  const [concept,setConcept]=React.useState("");
+  const [conceptDef,setConceptDef]=React.useState(null);
+  const [loadingDef,setLoadingDef]=React.useState(false);
+  const [errMsg,setErrMsg]=React.useState("");
+  const currentDim=DIMS.find(d=>d.id===dimId)||DIMS[0];
+
+  // טעינת הגדרת מושג מפיירבייס (per concept)
+  React.useEffect(()=>{
+    if(!concept){ setConceptDef(null); return; }
+    setLoadingDef(true); setErrMsg("");
+    fbLoadConceptDefinition(concept,data=>{
+      setConceptDef(data||null);
+      setLoadingDef(false);
+    });
+  },[concept]);
+
+  // יחידות של הדמות הנבחרת
+  const units=React.useMemo(()=>{
+    const all=(raw&&raw.units)||[];
+    return all.filter(u=>u.character===character||(character==="david"&&!u.character));
+  },[raw,character]);
+
+  // סטטיסטיקה מקדימה
+  const stats=React.useMemo(()=>{
+    if(!concept||!raw) return null;
+    let withCommentary=0,withApprovedConclusion=0,withIndicators=0,withExplicit=0,withSourceText=0;
+    units.forEach(u=>{
+      const comm=raw.commentary&&raw.commentary[u.id];
+      if(comm&&Object.keys(comm).length) withCommentary++;
+      const cn=raw.compareNotes&&raw.compareNotes[u.id]&&raw.compareNotes[u.id][concept];
+      if(cn&&cn.trim()) withApprovedConclusion++;
+      const ac=raw.analysis_chronicles&&raw.analysis_chronicles[u.id]&&raw.analysis_chronicles[u.id][concept];
+      if(ac&&ac.params&&ac.params.some(p=>p&&p.found!==null&&p.found!==undefined)) withIndicators++;
+      if(ac&&ac.explicit_note&&ac.explicit_note.trim()) withExplicit++;
+      if(u.sourceText) withSourceText++;
+    });
+    return {total:units.length,withCommentary,withApprovedConclusion,withIndicators,withExplicit,withSourceText};
+  },[units,concept,raw]);
+
+  function buildMarkdown(){
+    if(!concept||!conceptDef) return "";
+    const who=character==="solomon"?"שלמה":"דוד";
+    const dimLabel=currentDim.label;
+    const dateStr=new Date().toISOString().slice(0,10);
+    const defVersion=(conceptDef.editedAt||conceptDef.savedAt||"").slice(0,10)||"ללא תאריך";
+    const clarVersion=conceptDef.clarification?((conceptDef.clarification.editedAt||conceptDef.clarification.generatedAt||"").slice(0,10)||"ללא תאריך"):"אין";
+
+    const lines=[];
+    lines.push(`# חומר מחקרי לכתיבה — ${concept} · ${who}`);
+    lines.push("");
+    lines.push(`**ממד:** ${dimLabel}  `);
+    lines.push(`**דמות:** ${who}  `);
+    lines.push(`**מושג:** ${concept}  `);
+    lines.push(`**תאריך ייצוא:** ${dateStr}  `);
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    lines.push("## הגדרה מאושרת (פרק ב׳)");
+    lines.push("");
+    lines.push(`*גרסה: ${defVersion}*`);
+    lines.push("");
+    lines.push(conceptDef.text||"(אין הגדרה מאושרת)");
+    lines.push("");
+
+    if(conceptDef.clarification&&conceptDef.clarification.text){
+      lines.push("## הבהרת יישום מאושרת");
+      lines.push("");
+      lines.push(`*גרסה: ${clarVersion}${conceptDef.clarification.editedByUser?" · נערכה ידנית":""}*`);
+      lines.push("");
+      lines.push(conceptDef.clarification.text);
+      lines.push("");
+    }
+
+    lines.push("---");
+    lines.push("");
+    lines.push(`## היחידות הספרותיות (${units.length})`);
+    lines.push("");
+
+    units.forEach((u,ui)=>{
+      const uid=u.id;
+      const ac=(raw.analysis_chronicles&&raw.analysis_chronicles[uid]&&raw.analysis_chronicles[uid][concept])||null;
+      const asrc=(raw.analysis_source&&raw.analysis_source[uid]&&raw.analysis_source[uid][concept])||null;
+      const cf=(raw.compareFactual&&raw.compareFactual[uid]&&raw.compareFactual[uid][concept])||"";
+      const cn=(raw.compareNotes&&raw.compareNotes[uid]&&raw.compareNotes[uid][concept])||"";
+      const us=(raw.unitSummary&&raw.unitSummary[uid])||null;
+      const commentary=(raw.commentary&&raw.commentary[uid])||{};
+      const paramDefs=(raw.concepts&&raw.concepts[concept]&&raw.concepts[concept].params)||[];
+
+      lines.push("---");
+      lines.push("");
+      lines.push(`### יחידה [${ui+1}/${units.length}] · ${u.chapter||""}`);
+      lines.push("");
+      if(u.name) lines.push(`**שם:** ${u.name}  `);
+      if(u.sourceRef) lines.push(`**מקביל:** ${u.sourceRef}  `);
+      else lines.push(`**מקביל:** סונדרגוט (אין מקבילה בשמואל/מלכים)  `);
+      lines.push("");
+
+      lines.push(`#### טקסט דה״י`);
+      lines.push("");
+      lines.push(u.chroniclesText||"(לא נטען)");
+      lines.push("");
+
+      if(u.sourceText){
+        lines.push(`#### טקסט המקבילה (${u.sourceRef||"ש״ב/מל״א"})`);
+        lines.push("");
+        lines.push(u.sourceText);
+        lines.push("");
+      }
+
+      // שדה גלוי · דה"י
+      lines.push(`#### שדה גלוי · דה״י`);
+      lines.push("");
+      lines.push(ac&&ac.explicit_note&&ac.explicit_note.trim()?ac.explicit_note:"(לא תועד)");
+      lines.push("");
+
+      // שדה גלוי · מקבילה
+      if(u.sourceText||asrc){
+        lines.push(`#### שדה גלוי · מקבילה`);
+        lines.push("");
+        lines.push(asrc&&asrc.explicit_note&&asrc.explicit_note.trim()?asrc.explicit_note:"(לא תועד)");
+        lines.push("");
+      }
+
+      // שדה נרמז · דה"י (אינדיקטורים)
+      lines.push(`#### שדה נרמז · דה״י — אינדיקטורים`);
+      lines.push("");
+      if(ac&&Array.isArray(ac.params)&&ac.params.length>0){
+        ac.params.forEach((p,pi)=>{
+          const def=paramDefs[pi];
+          const defText=def?(typeof def==="object"?(def.q||def.paramLabel||""):String(def)):`אינדיקטור ${pi+1}`;
+          const defLabel=def&&typeof def==="object"&&def.paramLabel?` (${def.paramLabel})`:"";
+          const status=p.found===true?"✓ נמצא":p.found===false?"✗ לא נמצא":"? לא סומן";
+          lines.push(`${pi+1}. **${status}**${defLabel} — ${defText}`);
+          if(p.verse) lines.push(`   - פסוק: ${p.verse}`);
+          if(p.note) lines.push(`   - הערה: ${p.note}`);
+        });
+      }else{
+        lines.push("(לא תועד)");
+      }
+      lines.push("");
+
+      // שדה נרמז · מקבילה
+      if(u.sourceText||(asrc&&Array.isArray(asrc.params)&&asrc.params.length)){
+        lines.push(`#### שדה נרמז · מקבילה — אינדיקטורים`);
+        lines.push("");
+        if(asrc&&Array.isArray(asrc.params)&&asrc.params.length>0){
+          asrc.params.forEach((p,pi)=>{
+            const def=paramDefs[pi];
+            const defText=def?(typeof def==="object"?(def.q||def.paramLabel||""):String(def)):`אינדיקטור ${pi+1}`;
+            const defLabel=def&&typeof def==="object"&&def.paramLabel?` (${def.paramLabel})`:"";
+            const status=p.found===true?"✓ נמצא":p.found===false?"✗ לא נמצא":"? לא סומן";
+            lines.push(`${pi+1}. **${status}**${defLabel} — ${defText}`);
+            if(p.verse) lines.push(`   - פסוק: ${p.verse}`);
+            if(p.note) lines.push(`   - הערה: ${p.note}`);
+          });
+        }else{
+          lines.push("(לא תועד)");
+        }
+        lines.push("");
+      }
+
+      // ניתוח השוואתי עובדתי (שלב ב')
+      if(cf&&cf.trim()){
+        lines.push(`#### ניתוח השוואתי עובדתי (שלב ב׳)`);
+        lines.push("");
+        lines.push(cf);
+        lines.push("");
+      }
+
+      // מסקנה מחקרית מאושרת (compareNotes)
+      lines.push(`#### 🟢 מסקנה מחקרית מאושרת (compareNotes) — אושר על ידי החוקרת`);
+      lines.push("");
+      lines.push(cn&&cn.trim()?cn:"(אין מסקנה מאושרת)");
+      lines.push("");
+
+      // סיכום יחידה
+      if(us&&(us.patterns||us.conclusion||us.notes||(us.changes&&us.changes[concept]))){
+        lines.push(`#### סיכום יחידה (unitSummary) — נכתב על ידי החוקרת`);
+        lines.push("");
+        if(us.changes&&us.changes[concept]) lines.push(`- **שינוי במושג זה:** ${us.changes[concept]}`);
+        if(us.patterns) lines.push(`- **דפוסים:** ${us.patterns}`);
+        if(us.conclusion) lines.push(`- **מסקנה כללית ליחידה:** ${us.conclusion}`);
+        if(us.notes) lines.push(`- **הערות:** ${us.notes}`);
+        lines.push("");
+      }
+
+      // פרשנות מלאה
+      lines.push(`#### פרשנות מלאה (לפי שמות מחברים ועמודים)`);
+      lines.push("");
+      const commEntries=Object.entries(commentary);
+      if(commEntries.length){
+        commEntries.forEach(([author,text])=>{
+          lines.push(`##### ${author}`);
+          lines.push("");
+          lines.push(text||"(ריק)");
+          lines.push("");
+        });
+      }else{
+        lines.push("(לא תועדה פרשנות ליחידה זו)");
+        lines.push("");
+      }
+
+      // המלצות AI (לא מאושרות)
+      const sr=(ac&&ac.scholarRecommendations)||null;
+      if(sr&&typeof sr==="object"&&Object.keys(sr).length>0){
+        lines.push(`#### 🤖 המלצות AI (למידע בלבד — לא אושרו על ידי החוקרת)`);
+        lines.push("");
+        Object.entries(sr).forEach(([author,recommendation])=>{
+          if(recommendation){
+            lines.push(`- **${author}:** ${typeof recommendation==="string"?recommendation:JSON.stringify(recommendation)}`);
+          }
+        });
+        lines.push("");
+      }
+    });
+
+    lines.push("---");
+    lines.push("");
+    lines.push("## סוף הקובץ");
+    lines.push("");
+    lines.push(`הופק מכלי הסינתזה בתאריך ${dateStr}. המסקנות המחקריות המאושרות (compareNotes) מסומנות בטקסט בירוק 🟢; המלצות AI מסומנות בכתום 🤖 ואין להתייחס אליהן כמאושרות.`);
+
+    return lines.join("\n");
+  }
+
+  function doDownload(fmt){
+    if(!concept||!conceptDef){ alert("יש לבחור מושג (והגדרה חייבת להיות קיימת)"); return; }
+    const md=buildMarkdown();
+    if(!md){ alert("הייצוא נכשל — החומר ריק"); return; }
+    const who=character==="solomon"?"שלמה":"דוד";
+    const baseName=safeFilename(`חומר_${concept}_${who}_${todayStamp()}`);
+    const dl=downloadAllFormats(md,baseName,`חומר מחקרי — ${concept} · ${who}`);
+    if(fmt==="word") dl.word();
+    else if(fmt==="md") dl.md();
+    else if(fmt==="pdf") dl.pdf();
+  }
+
+  return (
+    <div style={{maxWidth:"1100px",margin:"0 auto",padding:"28px 20px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"26px"}}>
+        <div>
+          <div style={{fontSize:"22px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"3px"}}>📤 ייצוא חומר לכתיבה חיצונית</div>
+          <div style={{fontSize:"12px",color:"#94a3b8"}}>מכין קובץ מרוכז לכל (מושג × דמות) — הגדרה מאושרת + כל יחידה עם הטקסטים, האינדיקטורים, המסקנות והפרשנות. מוכן להעלאה לצ'אט חיצוני.</div>
+        </div>
+        <button onClick={onBackHome} style={{padding:"7px 13px",borderRadius:"7px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ ראשי</button>
+      </div>
+
+      {/* פילטרים */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"12px",marginBottom:"18px",background:"#1e293b",borderRadius:"10px",padding:"14px",border:"1px solid #334155"}}>
+        <div>
+          <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"6px",fontWeight:"700"}}>דמות</div>
+          <div style={{display:"flex",gap:"5px"}}>
+            {[["david","דוד"],["solomon","שלמה"]].map(([id,lbl])=>(
+              <button key={id} onClick={()=>{setCharacter(id);setConcept("");}} style={{flex:1,padding:"8px 14px",borderRadius:"6px",border:character===id?"2px solid #818cf8":"1px solid #334155",background:character===id?"#312e8166":"#0f172a",color:character===id?"#c7d2fe":"#94a3b8",fontSize:"12px",fontWeight:"700",cursor:"pointer"}}>{lbl}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"6px",fontWeight:"700"}}>ממד</div>
+          <select value={dimId} onChange={e=>{setDimId(e.target.value);setConcept("");}} style={{width:"100%",padding:"8px 10px",background:"#0f172a",color:"#f1f5f9",border:"1px solid #334155",borderRadius:"6px",fontSize:"12px"}}>
+            {DIMS.map(d=>(<option key={d.id} value={d.id}>{d.label}</option>))}
+          </select>
+        </div>
+        <div>
+          <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"6px",fontWeight:"700"}}>מושג</div>
+          <select value={concept} onChange={e=>setConcept(e.target.value)} style={{width:"100%",padding:"8px 10px",background:"#0f172a",color:"#f1f5f9",border:"1px solid #334155",borderRadius:"6px",fontSize:"12px"}}>
+            <option value="">— בחרי מושג —</option>
+            {currentDim.concepts.map(c=>(<option key={c} value={c}>{c}</option>))}
+          </select>
+        </div>
+      </div>
+
+      {/* תצוגה מקדימה + הורדה */}
+      {!concept?(
+        <div style={{padding:"40px 20px",textAlign:"center",color:"#94a3b8",fontSize:"13px",background:"#1e293b",borderRadius:"8px"}}>בחרי דמות, ממד ומושג לייצוא</div>
+      ):loadingDef?(
+        <div style={{padding:"30px",textAlign:"center",color:"#67e8f9",fontSize:"13px",background:"#083344",borderRadius:"8px"}}>⏳ טוען הגדרה מפיירבייס...</div>
+      ):!conceptDef||!conceptDef.text?(
+        <div style={{padding:"20px",textAlign:"center",color:"#fca5a5",fontSize:"13px",background:"#7f1d1d22",borderRadius:"8px",border:"1px dashed #7f1d1d"}}>
+          ❌ לא נמצאה הגדרה מאושרת למושג "{concept}". יש להיכנס למושג (דרך "התחלת ניתוח") ולהזין הגדרה + הבהרת יישום בפאזה 1 לפני הייצוא.
+        </div>
+      ):(
+        <>
+          {/* תצוגה מקדימה */}
+          <div style={{background:"#1e293b",borderRadius:"10px",padding:"16px",border:"1px solid #334155",marginBottom:"14px"}}>
+            <div style={{fontSize:"14px",fontWeight:"700",color:"#67e8f9",marginBottom:"10px"}}>תצוגה מקדימה של הקובץ</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:"8px",fontSize:"11px"}}>
+              <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px"}}>
+                <div style={{color:"#94a3b8",fontSize:"10px"}}>יחידות</div>
+                <div style={{color:"#f1f5f9",fontWeight:"700",fontSize:"16px"}}>{stats?.total||0}</div>
+              </div>
+              <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px"}}>
+                <div style={{color:"#94a3b8",fontSize:"10px"}}>עם מקבילה</div>
+                <div style={{color:"#f1f5f9",fontWeight:"700",fontSize:"16px"}}>{stats?.withSourceText||0}<span style={{color:"#64748b",fontSize:"11px"}}> / סונדרגוט: {(stats?.total||0)-(stats?.withSourceText||0)}</span></div>
+              </div>
+              <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px"}}>
+                <div style={{color:"#94a3b8",fontSize:"10px"}}>עם פרשנות מלאה</div>
+                <div style={{color:"#86efac",fontWeight:"700",fontSize:"16px"}}>{stats?.withCommentary||0}</div>
+              </div>
+              <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px"}}>
+                <div style={{color:"#94a3b8",fontSize:"10px"}}>עם אינדיקטורים</div>
+                <div style={{color:"#fbbf24",fontWeight:"700",fontSize:"16px"}}>{stats?.withIndicators||0}</div>
+              </div>
+              <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px"}}>
+                <div style={{color:"#94a3b8",fontSize:"10px"}}>עם שדה גלוי</div>
+                <div style={{color:"#60a5fa",fontWeight:"700",fontSize:"16px"}}>{stats?.withExplicit||0}</div>
+              </div>
+              <div style={{padding:"8px 10px",background:"#0f172a",borderRadius:"5px",border:"1px solid #10b98155"}}>
+                <div style={{color:"#86efac",fontSize:"10px",fontWeight:"700"}}>עם מסקנה מאושרת 🟢</div>
+                <div style={{color:"#86efac",fontWeight:"700",fontSize:"16px"}}>{stats?.withApprovedConclusion||0}</div>
+              </div>
+            </div>
+
+            {/* מידע על ההגדרה */}
+            <div style={{marginTop:"12px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:"3px solid #67e8f9"}}>
+              <div style={{fontSize:"10px",color:"#67e8f9",fontWeight:"700",marginBottom:"4px"}}>הגדרה מאושרת שתיכנס לקובץ (גרסה {(conceptDef.editedAt||conceptDef.savedAt||"").slice(0,10)})</div>
+              <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.5",maxHeight:"70px",overflow:"auto"}}>{conceptDef.text}</div>
+            </div>
+            {conceptDef.clarification&&conceptDef.clarification.text&&(
+              <div style={{marginTop:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:"3px solid #a78bfa"}}>
+                <div style={{fontSize:"10px",color:"#a78bfa",fontWeight:"700",marginBottom:"4px"}}>הבהרת יישום (גרסה {(conceptDef.clarification.editedAt||conceptDef.clarification.generatedAt||"").slice(0,10)}){conceptDef.clarification.editedByUser?" · נערכה ידנית":""}</div>
+                <div style={{fontSize:"11px",color:"#cbd5e1",lineHeight:"1.5",maxHeight:"70px",overflow:"auto"}}>{conceptDef.clarification.text}</div>
+              </div>
+            )}
+          </div>
+
+          {/* כפתורי הורדה */}
+          <div style={{background:"#083344",borderRadius:"10px",padding:"16px",border:"2px solid #06b6d4"}}>
+            <div style={{fontSize:"13px",fontWeight:"700",color:"#67e8f9",marginBottom:"10px"}}>📥 הורד את הקובץ</div>
+            <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
+              <button onClick={()=>doDownload("word")} style={{padding:"12px 24px",borderRadius:"8px",border:"2px solid #2563eb",background:"#1e3a8a",color:"white",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>📄 הורדה כ-Word (.doc)</button>
+              <button onClick={()=>doDownload("md")} style={{padding:"12px 24px",borderRadius:"8px",border:"2px solid #10b981",background:"#064e3b",color:"white",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>📝 הורדה כ-Markdown (.md)</button>
+              <button onClick={()=>doDownload("pdf")} style={{padding:"12px 24px",borderRadius:"8px",border:"2px solid #dc2626",background:"#7f1d1d",color:"white",fontSize:"13px",fontWeight:"700",cursor:"pointer"}}>📑 הורדה כ-PDF</button>
+            </div>
+            <div style={{marginTop:"10px",fontSize:"11px",color:"#94a3b8",lineHeight:"1.6"}}>
+              💡 <strong>לכתיבה בצ'אט חיצוני</strong>: הורידי Word או Markdown והעלי לצ'אט (ChatGPT / Claude). שני הפורמטים נקראים היטב ב-AI. Word יותר מוכר למחקר ועריכה; Markdown שומר על מבנה סמנטי טוב יותר.
+            </div>
+          </div>
+
+          {errMsg&&<div style={{marginTop:"12px",padding:"10px 12px",background:"#7f1d1d33",borderRadius:"6px",fontSize:"11px",color:"#fca5a5"}}>{errMsg}</div>}
+        </>
+      )}
     </div>
   );
 }
@@ -6152,8 +6520,8 @@ ${extra?`\nהנחיות נוספות מהמשתמשת: ${extra}\n`:""}
 
                         {/* בדיקת זמינות הועברה למעלה (לפני ההגדרה) — נדרש ע״י החוקרת, 22.10.2026 */}
 
-                        {/* ═══ פאזה 3 — טיוטה אקדמית (24.10.2026, פלט הקצה) ═══ */}
-                        {conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&(
+                        {/* ═══ פאזה 3 — טיוטה אקדמית — הוסתרה (הועבר ל-"ייצוא חומר לכתיבה" במסך הראשי) ═══ */}
+                        {false&&conceptDef&&conceptDef.text&&conceptDef.clarification&&stage4Availability.stage3IsNewFormat&&(
                           <div style={{padding:"14px",background:"#1e293b",borderRadius:"8px",border:`2px solid ${dimColor}`,marginBottom:"12px"}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
                               <div style={{fontSize:"14px",fontWeight:"700",color:dimColor}}>✍ פאזה 3 — טיוטה אקדמית לפרק בתזה</div>
@@ -7489,6 +7857,39 @@ function App(){
     fbLoadStageResults(sr=>{
       // Firebase הוא המקור הסמכותי; מעדכן את ה-React state ואת ה-LS כמטמון מקומי.
       if(sr && Object.keys(sr).length){
+        // ─ מיגרציה חד-פעמית: ניקוי נתוני AI drafting ישנים (phase2, phase3_synthesis, phase3_academic_draft וכו׳) ─
+        // רץ רק פעם אחת לפי flag ב-localStorage. שומר רק הגדרות, הבהרות, stage2, stage3 ו-approvedStages.
+        const CLEANUP_FLAG="synth_cleanup_v1_done";
+        const alreadyDone=LS_get(CLEANUP_FLAG,false);
+        if(!alreadyDone){
+          const KEYS_TO_REMOVE_FROM_STAGE4=[
+            "phase3_synthesis","phase3_in_progress","phase3_verification",
+            "phase3_academic_draft","phase3_academic_in_progress","phase3_draft_verification",
+            "phase2_check","phase2_in_progress"
+          ];
+          let changedCount=0;
+          const cleaned={};
+          for(const k of Object.keys(sr)){
+            const entry=sr[k]||{};
+            let newStage4=entry.stage4||null;
+            if(newStage4&&typeof newStage4==="object"){
+              const trimmed={...newStage4};
+              let removedAny=false;
+              for(const field of KEYS_TO_REMOVE_FROM_STAGE4){
+                if(trimmed[field]!==undefined){ delete trimmed[field]; removedAny=true; }
+              }
+              if(removedAny){ changedCount++; newStage4=trimmed; }
+            }
+            cleaned[k]={...entry,stage4:newStage4};
+          }
+          if(changedCount>0){
+            console.log(`[cleanup v1] ניקיתי נתוני AI drafting ישנים מ-${changedCount} צירופים (מושג×דמות).`);
+            sr=cleaned;
+            LS_set("stageResults",sr);
+            fbSaveStageResults(sr);
+          }
+          LS_set(CLEANUP_FLAG,true);
+        }
         LS_set("stageResults",sr);
         setStageResults(sr);
       }
@@ -7581,9 +7982,14 @@ function App(){
       {screen==="home"&&<WelcomeScreen onBackupLoaded={handleBackup} hasBackup={!!raw} hasApiKey={!!apiKey} onOpenApiKey={()=>setShowApiModal(true)} backupStats={backupStats} fbStatus={fbStatus} rawSource={rawSource} onDownloadSynth={downloadSynthBackup} onUploadSynth={uploadSynthBackup}/>}
       {screen==="home"&&canStart&&bootDone&&(
         <div style={{textAlign:"center",marginTop:"-20px",paddingBottom:"30px"}}>
-          <button onClick={()=>setScreen("selector")} style={{padding:"14px 36px",borderRadius:"10px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"15px",fontWeight:"700"}}>
-            🚀 התחלת ניתוח
-          </button>
+          <div style={{display:"flex",gap:"12px",justifyContent:"center",flexWrap:"wrap"}}>
+            <button onClick={()=>setScreen("selector")} style={{padding:"14px 30px",borderRadius:"10px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"15px",fontWeight:"700"}}>
+              🚀 התחלת ניתוח
+            </button>
+            <button onClick={()=>setScreen("export")} style={{padding:"14px 30px",borderRadius:"10px",border:"2px solid #06b6d4",cursor:"pointer",background:"#083344",color:"#67e8f9",fontSize:"15px",fontWeight:"700"}}>
+              📤 ייצוא חומר לכתיבה
+            </button>
+          </div>
           <div style={{marginTop:"10px",fontSize:"11px",color:"#64748b"}}>
             {Object.keys(stageResults).length>0 ? `✓ נטענו ${Object.keys(stageResults).length} מושגים עם תוצאות שלבים מ-Firebase` : "ללא תוצאות שלבים שמורות — נתחיל מאפס"}
           </div>
@@ -7602,6 +8008,7 @@ function App(){
         onBackHome={()=>setScreen("home")} stageResults={stageResults}/>}
       {screen==="analyze"&&selection&&selection.concept&&<AnalysisScreen raw={raw} character={selection.character} dimId={selection.dimId} concept={selection.concept} apiKey={apiKey} onBackToSelector={()=>setScreen("selector")} stageResults={stageResults} setStageResults={setStageResults}/>}
       {screen==="dim4"&&selection&&<DimensionStage4Screen raw={raw} character={selection.character} dimId={selection.dimId} apiKey={apiKey} onBack={()=>setScreen("selector")} stageResults={stageResults} setStageResults={setStageResults}/>}
+      {screen==="export"&&raw&&<ExportForChatScreen raw={raw} stageResults={stageResults} onBackHome={()=>setScreen("home")}/>}
 
       {showApiModal&&<ApiKeyModal currentKey={apiKey} onSave={handleApiKey} onClose={()=>setShowApiModal(false)}/>}
     </div>
