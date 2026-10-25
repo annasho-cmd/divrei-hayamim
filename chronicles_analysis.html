@@ -1176,7 +1176,7 @@ function Header({msg,tab,setTab,analysisMode,setAnalysisMode}){
           ))}
         </div>
         <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
-        {[["home","🏠"],["stagea","🔬 שלב א׳"],["stageb","✨ שלב ב׳"],["stagec","📊 שלב ג׳"],["rmatrix","🗂️ מטריצת מחקר"],["reports","📄 דו״חות"],["byconcept","מאגר מושגים"]].map(([t,l])=>(
+        {[["home","🏠"],["stagea","🔬 שלב א׳"],["stageb","✨ שלב ב׳"],["stagec","📊 שלב ג׳"],["rmatrix","🗂️ מטריצת מחקר"],["indmatrix","📊 ריכוז אינדיקטורים"],["reports","📄 דו״חות"],["byconcept","מאגר מושגים"]].map(([t,l])=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600",background:tab===t?"#818cf8":"transparent",color:tab===t?"white":"#64748b"}}>{l}</button>
         ))}
       </div>
@@ -3238,6 +3238,264 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
 
 
 // ════════════════════════════════════════════════════════════════════════
+// ── ריכוז אינדיקטורים — מטריצה למושג יחיד ×יחידות × אינדיקטורים (read-only) ──
+// שני מצבי תצוגה: דה"י בלבד · דה"י + מקבילה (שתי שורות ליחידה). מקרא ממוספר מעל הטבלה.
+// ════════════════════════════════════════════════════════════════════════
+function IndicatorMatrixReport({allUnits,allConcepts,getE,getParams}){
+  const [fConcept,setFConcept]=React.useState("");
+  const [fChar,setFChar]=React.useState("david");
+  const [viewMode,setViewMode]=React.useState("chr"); // chr | both
+
+  // יחידות של הדמות הנבחרת (ברירת מחדל: david — "ללא character" נספר כדוד לפי התבנית בכלי)
+  const units=React.useMemo(()=>{
+    if(fChar==="all") return allUnits;
+    return allUnits.filter(u=>u.character===fChar||(fChar==="david"&&!u.character));
+  },[allUnits,fChar]);
+
+  // האינדיקטורים של המושג הנבחר — לפי getParams(name) שמחזיר [{q,paramLabel,...}] או מחרוזות
+  const indicatorDefs=React.useMemo(()=>{
+    if(!fConcept) return [];
+    return validParamDefs(getParams(fConcept));
+  },[fConcept,getParams]);
+
+  // תווית תצוגה לכותרת: אם יש paramLabel קצר — נשתמש; אחרת ה-q הארוך
+  const indLabel=(p)=>paramLabelOf(p)||paramText(p);
+
+  // חישוב המטריצה: לכל יחידה — מערך אינדיקטורים × 2 מקורות
+  const matrix=React.useMemo(()=>{
+    if(!fConcept) return [];
+    return units.map(u=>{
+      const ec=getE(u.id,fConcept,"chronicles")||null;
+      const es=getE(u.id,fConcept,"source")||null;
+      const hasChr=!!ec;
+      const hasSrc=!!es;
+      const hasSourceText=!!(u.sourceText||u.sourceRef);
+      const chrCells=indicatorDefs.map((p,i)=>{
+        const pe=(ec&&ec.params)?ec.params[i]:null;
+        if(!pe) return {state:"missing"};
+        return {state:pe.found===true?"found":pe.found===false?"notfound":"null",verse:pe.verse||"",note:pe.note||""};
+      });
+      const srcCells=indicatorDefs.map((p,i)=>{
+        if(!hasSourceText) return {state:"sondergut"};
+        const pe=(es&&es.params)?es.params[i]:null;
+        if(!pe) return {state:"missing"};
+        return {state:pe.found===true?"found":pe.found===false?"notfound":"null",verse:pe.verse||"",note:pe.note||""};
+      });
+      return {u,hasChr,hasSrc,hasSourceText,chrCells,srcCells,
+        chrFound:chrCells.filter(c=>c.state==="found").length,
+        srcFound:srcCells.filter(c=>c.state==="found").length,
+        total:indicatorDefs.length};
+    });
+  },[units,fConcept,indicatorDefs,getE]);
+
+  // סיכום לפי אינדיקטור (מצב דה"י)
+  const chrPerInd=React.useMemo(()=>{
+    const s=indicatorDefs.map(()=>({found:0,analyzed:0}));
+    matrix.forEach(r=>r.chrCells.forEach((c,i)=>{
+      if(c.state==="found"||c.state==="notfound"||c.state==="null") s[i].analyzed++;
+      if(c.state==="found") s[i].found++;
+    }));
+    return s;
+  },[matrix,indicatorDefs]);
+  const srcPerInd=React.useMemo(()=>{
+    const s=indicatorDefs.map(()=>({found:0,analyzed:0}));
+    matrix.forEach(r=>r.srcCells.forEach((c,i)=>{
+      if(c.state==="found"||c.state==="notfound"||c.state==="null") s[i].analyzed++;
+      if(c.state==="found") s[i].found++;
+    }));
+    return s;
+  },[matrix,indicatorDefs]);
+
+  function cellStyle(state){
+    if(state==="found") return {bg:"#064e3b",color:"#86efac",content:"✓"};
+    if(state==="notfound") return {bg:"#1e293b",color:"#64748b",content:"✗"};
+    if(state==="null") return {bg:"#1e293b",color:"#475569",content:"?"};
+    if(state==="sondergut") return {bg:"#2a1a4a",color:"#a78bfa",content:"ס"};
+    return {bg:"#0f172a",color:"#475569",content:"—"}; // missing
+  }
+
+  function exportCsv(){
+    if(!fConcept||!indicatorDefs.length) return;
+    const nums=indicatorDefs.map((_,i)=>i+1);
+    const header=["יחידה","פרק","מקור",...nums,"סה״כ ✓"].join(",");
+    const lines=[header];
+    matrix.forEach(r=>{
+      const chrLine=[`"${r.u.label||""}"`,`"${r.u.sourceRef||""}"`,"דה״י",
+        ...r.chrCells.map(c=>c.state==="found"?"✓":c.state==="notfound"?"✗":c.state==="null"?"?":"—"),
+        `${r.chrFound}/${r.total}`].join(",");
+      lines.push(chrLine);
+      if(viewMode==="both"){
+        const srcLine=[`"${r.u.label||""}"`,`"${r.u.sourceRef||""}"`,r.hasSourceText?"מקבילה":"סונדרגוט",
+          ...r.srcCells.map(c=>c.state==="found"?"✓":c.state==="notfound"?"✗":c.state==="null"?"?":c.state==="sondergut"?"ס":"—"),
+          r.hasSourceText?`${r.srcFound}/${r.total}`:"—"].join(",");
+        lines.push(srcLine);
+      }
+    });
+    // שורות סיכום
+    lines.push(["— סה״כ ✓ (דה״י) —","","",...chrPerInd.map(s=>`${s.found}/${s.analyzed}`),""].join(","));
+    if(viewMode==="both") lines.push(["— סה״כ ✓ (מקבילה) —","","",...srcPerInd.map(s=>`${s.found}/${s.analyzed}`),""].join(","));
+    // מקרא בסוף
+    lines.push("");
+    lines.push("מקרא האינדיקטורים:");
+    indicatorDefs.forEach((p,i)=>lines.push(`${i+1},"${indLabel(p).replace(/"/g,'""')}"`));
+    const blob=new Blob(["﻿"+lines.join("\n")],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`ריכוז_אינדיקטורים_${fConcept}_${fChar==="all"?"הכל":fChar==="david"?"דוד":"שלמה"}_${viewMode==="both"?"השוואה":"דה״י"}.csv`;
+    a.click();
+  }
+
+  return (
+    <div style={{maxWidth:"1400px",margin:"0 auto",padding:"22px 16px"}}>
+      <div style={{fontSize:"20px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"2px"}}>📊 ריכוז אינדיקטורים</div>
+      <div style={{fontSize:"13px",color:"#64748b",marginBottom:"18px"}}>לכל מושג — טבלת ✓/✗ של כל האינדיקטורים לכל היחידות. אפשר להציג רק דה״י או דה״י + מקבילה.</div>
+
+      <div style={{display:"flex",gap:"10px",flexWrap:"wrap",alignItems:"flex-end",marginBottom:"16px",background:"#1e293b",borderRadius:"10px",padding:"12px",border:"1px solid #334155"}}>
+        <div>
+          <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"4px",fontWeight:"700"}}>מושג</div>
+          <select value={fConcept} onChange={e=>setFConcept(e.target.value)} style={{padding:"7px 10px",borderRadius:"6px",border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",fontSize:"12px",minWidth:"180px"}}>
+            <option value="">— בחרי מושג —</option>
+            {DIMS.map(d=><optgroup key={d.id} label={d.label}>{d.concepts.map(name=><option key={name} value={name}>{name}</option>)}</optgroup>)}
+          </select>
+        </div>
+        <div>
+          <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"4px",fontWeight:"700"}}>דמות</div>
+          <div style={{display:"flex",gap:"3px"}}>
+            {[["david","דוד"],["solomon","שלמה"],["all","שתיהן"]].map(([v,l])=>(
+              <button key={v} onClick={()=>setFChar(v)} style={{padding:"6px 12px",borderRadius:"5px",border:fChar===v?"2px solid #818cf8":"1px solid #334155",background:fChar===v?"#312e8166":"#0f172a",color:fChar===v?"#c7d2fe":"#94a3b8",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"4px",fontWeight:"700"}}>תצוגה</div>
+          <div style={{display:"flex",gap:"3px"}}>
+            {[["chr","📘 דה״י בלבד"],["both","📘📙 דה״י + מקבילה"]].map(([v,l])=>(
+              <button key={v} onClick={()=>setViewMode(v)} style={{padding:"6px 12px",borderRadius:"5px",border:viewMode===v?"2px solid #06b6d4":"1px solid #334155",background:viewMode===v?"#083344":"#0f172a",color:viewMode===v?"#67e8f9":"#94a3b8",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{flex:1}}/>
+        {fConcept&&indicatorDefs.length>0&&<button onClick={exportCsv} style={{padding:"7px 14px",borderRadius:"6px",border:"1px solid #10b981",background:"#064e3b22",color:"#86efac",fontSize:"11px",fontWeight:"700",cursor:"pointer"}}>📥 ייצא CSV / Excel</button>}
+      </div>
+
+      {!fConcept?(
+        <div style={{padding:"40px 20px",textAlign:"center",color:"#94a3b8",fontSize:"13px",background:"#1e293b",borderRadius:"8px"}}>בחרי מושג לראות את מטריצת האינדיקטורים</div>
+      ):indicatorDefs.length===0?(
+        <div style={{padding:"40px 20px",textAlign:"center",color:"#fca5a5",fontSize:"13px",background:"#7f1d1d22",borderRadius:"8px",border:"1px dashed #7f1d1d"}}>אין אינדיקטורים מוגדרים למושג "{fConcept}" · ייתכן שהוא לא הוגדר בכלי</div>
+      ):(
+        <>
+          {/* סרגל סיכום כולל */}
+          <div style={{display:"flex",gap:"12px",flexWrap:"wrap",padding:"10px 14px",background:"#083344",borderRadius:"6px",marginBottom:"12px",fontSize:"12px",color:"#cbd5e1",border:"1px solid #0e7490"}}>
+            <span>🎯 מושג: <strong style={{color:"#67e8f9"}}>{fConcept}</strong></span>
+            <span>· 🧩 אינדיקטורים: <strong style={{color:"#86efac"}}>{indicatorDefs.length}</strong></span>
+            <span>· 📜 יחידות: <strong style={{color:"#fcd34d"}}>{units.length}</strong></span>
+            {viewMode==="both"&&<span>· 📙 מקבילה: <strong style={{color:"#a78bfa"}}>{matrix.filter(r=>r.hasSourceText).length} עם מקבילה · {matrix.filter(r=>!r.hasSourceText).length} סונדרגוט</strong></span>}
+          </div>
+
+          {/* מפתח האינדיקטורים (מקרא ממוספר) */}
+          <div style={{marginBottom:"12px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
+            <div style={{fontSize:"11px",color:"#67e8f9",fontWeight:"700",marginBottom:"6px"}}>🗂 מפתח האינדיקטורים (עמודות הטבלה)</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:"4px 10px",fontSize:"10px",color:"#cbd5e1"}}>
+              {indicatorDefs.map((p,i)=>(
+                <div key={i} style={{padding:"4px 6px",background:"#1e293b",borderRadius:"3px",display:"flex",gap:"6px",alignItems:"baseline"}}>
+                  <span style={{color:"#fcd34d",fontWeight:"700",minWidth:"24px"}}>{i+1}.</span>
+                  <span style={{lineHeight:"1.4"}}>{indLabel(p)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* המטריצה */}
+          <div style={{overflowX:"auto",background:"#1e293b",borderRadius:"6px",padding:"8px",border:"1px solid #334155"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:"11px",color:"#cbd5e1"}}>
+              <thead>
+                <tr style={{background:"#0f172a"}}>
+                  <th style={{padding:"6px 10px",textAlign:"right",border:"1px solid #334155",color:"#67e8f9",minWidth:"180px",position:"sticky",right:0,background:"#0f172a",zIndex:2}}>יחידה (פרק)</th>
+                  {viewMode==="both"&&<th style={{padding:"6px 8px",textAlign:"center",border:"1px solid #334155",color:"#94a3b8",minWidth:"60px",position:"sticky",right:180,background:"#0f172a",zIndex:1}}>מקור</th>}
+                  {indicatorDefs.map((p,i)=>(
+                    <th key={i} title={indLabel(p)} style={{padding:"8px 6px",textAlign:"center",border:"1px solid #334155",color:"#fcd34d",fontSize:"12px",minWidth:"36px",cursor:"help"}}>{i+1}</th>
+                  ))}
+                  <th style={{padding:"6px 8px",textAlign:"center",border:"1px solid #334155",color:"#86efac",minWidth:"55px"}}>סה״כ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matrix.map((r,ri)=>{
+                  const rowBg=ri%2===0?"#1e293b":"#2a3a52";
+                  const totalCol=(cnt)=>r.total?(cnt/r.total>=0.6?"#86efac":cnt/r.total>=0.3?"#fcd34d":"#f87171"):"#64748b";
+                  return (
+                    <React.Fragment key={ri}>
+                      <tr style={{background:rowBg}}>
+                        <td rowSpan={viewMode==="both"?2:1} style={{padding:"6px 10px",border:"1px solid #334155",fontWeight:"600",color:"#f1f5f9",position:"sticky",right:0,background:rowBg,zIndex:1,verticalAlign:"top"}}>
+                          <div>{r.u.label||"(ללא שם)"}</div>
+                          {r.u.sourceRef&&<div style={{fontSize:"9px",color:"#94a3b8",marginTop:"2px"}}>מקביל: {r.u.sourceRef}</div>}
+                          {!r.u.sourceRef&&<div style={{fontSize:"9px",color:"#a78bfa",marginTop:"2px"}}>סונדרגוט</div>}
+                        </td>
+                        {viewMode==="both"&&<td style={{padding:"4px 6px",textAlign:"center",border:"1px solid #334155",background:"#1e3a5f22",color:"#60a5fa",fontSize:"10px",fontWeight:"700",position:"sticky",right:180,background:rowBg,zIndex:1}}>דה״י</td>}
+                        {r.chrCells.map((c,ci)=>{
+                          const s=cellStyle(c.state);
+                          const title=c.state==="found"?`✓ ${c.verse?`פס' ${c.verse}: `:""}${c.note||""}`:c.state==="notfound"?`✗ ${c.note||"לא נמצא"}`:c.state==="null"?`? לא סומן`:"— לא נבדק";
+                          return <td key={ci} title={title} style={{padding:"4px",textAlign:"center",border:"1px solid #334155",background:s.bg,color:s.color,cursor:"help",fontSize:"14px",fontWeight:"700"}}>{s.content}</td>;
+                        })}
+                        <td style={{padding:"5px 8px",textAlign:"center",border:"1px solid #334155",color:totalCol(r.chrFound),fontWeight:"700"}}>{r.hasChr?`${r.chrFound}/${r.total}`:"—"}</td>
+                      </tr>
+                      {viewMode==="both"&&(
+                        <tr style={{background:rowBg}}>
+                          <td style={{padding:"4px 6px",textAlign:"center",border:"1px solid #334155",background:r.hasSourceText?"#78350f22":"#312e8122",color:r.hasSourceText?"#fbbf24":"#a78bfa",fontSize:"10px",fontWeight:"700",position:"sticky",right:180,zIndex:1}}>{r.hasSourceText?"מקבילה":"סונדרגוט"}</td>
+                          {r.srcCells.map((c,ci)=>{
+                            const s=cellStyle(c.state);
+                            const title=c.state==="found"?`✓ ${c.verse?`פס' ${c.verse}: `:""}${c.note||""}`:c.state==="notfound"?`✗ ${c.note||"לא נמצא"}`:c.state==="null"?`? לא סומן`:c.state==="sondergut"?"סונדרגוט — אין מקבילה בש״ב/מל״א":"— לא נבדק";
+                            return <td key={ci} title={title} style={{padding:"4px",textAlign:"center",border:"1px solid #334155",background:s.bg,color:s.color,cursor:"help",fontSize:"14px",fontWeight:"700"}}>{s.content}</td>;
+                          })}
+                          <td style={{padding:"5px 8px",textAlign:"center",border:"1px solid #334155",color:r.hasSourceText?totalCol(r.srcFound):"#a78bfa",fontWeight:"700"}}>{r.hasSourceText?(r.hasSrc?`${r.srcFound}/${r.total}`:"—"):"—"}</td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+                {/* שורות סיכום לפי אינדיקטור */}
+                <tr style={{background:"#0f172a",borderTop:"2px solid #06b6d4"}}>
+                  <td style={{padding:"6px 10px",border:"1px solid #334155",fontWeight:"700",color:"#67e8f9",position:"sticky",right:0,background:"#0f172a",zIndex:1}}>סה״כ ✓ (דה״י)</td>
+                  {viewMode==="both"&&<td style={{padding:"4px 6px",textAlign:"center",border:"1px solid #334155",color:"#60a5fa",fontSize:"10px",fontWeight:"700",position:"sticky",right:180,background:"#0f172a",zIndex:1}}>דה״י</td>}
+                  {chrPerInd.map((s,i)=>{
+                    const pct=s.analyzed?Math.round((s.found/s.analyzed)*100):0;
+                    const col=pct>=60?"#86efac":pct>=30?"#fcd34d":"#f87171";
+                    return <td key={i} style={{padding:"5px 4px",textAlign:"center",border:"1px solid #334155",color:col,fontWeight:"700",fontSize:"10px"}}>{s.found}/{s.analyzed}<div style={{fontSize:"8px",color:"#64748b"}}>{pct}%</div></td>;
+                  })}
+                  <td style={{padding:"5px 4px",border:"1px solid #334155"}}></td>
+                </tr>
+                {viewMode==="both"&&(
+                  <tr style={{background:"#0f172a"}}>
+                    <td style={{padding:"6px 10px",border:"1px solid #334155",fontWeight:"700",color:"#fbbf24",position:"sticky",right:0,background:"#0f172a",zIndex:1}}>סה״כ ✓ (מקבילה)</td>
+                    <td style={{padding:"4px 6px",textAlign:"center",border:"1px solid #334155",color:"#fbbf24",fontSize:"10px",fontWeight:"700",position:"sticky",right:180,background:"#0f172a",zIndex:1}}>מקבילה</td>
+                    {srcPerInd.map((s,i)=>{
+                      const pct=s.analyzed?Math.round((s.found/s.analyzed)*100):0;
+                      const col=pct>=60?"#86efac":pct>=30?"#fcd34d":"#f87171";
+                      return <td key={i} style={{padding:"5px 4px",textAlign:"center",border:"1px solid #334155",color:col,fontWeight:"700",fontSize:"10px"}}>{s.found}/{s.analyzed}<div style={{fontSize:"8px",color:"#64748b"}}>{pct}%</div></td>;
+                    })}
+                    <td style={{padding:"5px 4px",border:"1px solid #334155"}}></td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* מקרא */}
+          <div style={{marginTop:"10px",fontSize:"10px",color:"#64748b",lineHeight:"1.8",padding:"8px 12px",background:"#1e293b",borderRadius:"6px"}}>
+            <strong style={{color:"#94a3b8"}}>מקרא:</strong>
+            <span style={{color:"#86efac",marginInlineStart:"8px"}}>✓ נמצא</span> ·
+            <span style={{color:"#64748b",marginInlineStart:"8px"}}>✗ נבדק ולא נמצא</span> ·
+            <span style={{color:"#475569",marginInlineStart:"8px"}}>? לא סומן</span> ·
+            <span style={{color:"#475569",marginInlineStart:"8px"}}>— היחידה לא נותחה למושג זה</span> ·
+            <span style={{color:"#a78bfa",marginInlineStart:"8px"}}>ס סונדרגוט (אין מקבילה)</span> ·
+            <span style={{marginInlineStart:"8px"}}>ריחוף על תא מציג את ההערה והפסוק</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // ── מטריצת המחקר — תצוגת ממצאים (read-only) ──
 // אוספת אוטומטית מכל היחידות שיש בהן נתונים, משלב א' וב'. אין הזנה.
 // ════════════════════════════════════════════════════════════════════════
@@ -3815,6 +4073,7 @@ function App(){
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
       {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
+      {tab==="indmatrix"&&<IndicatorMatrixReport allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams}/>}
       {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
       {tab==="byunit"&&<ByUnitTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} onUnitSelect={setActiveUnit} analysisMode={analysisMode}/>}
       {tab==="byconcept"&&<ByConceptTab allUnits={allUnits} allConcepts={allConcepts} raw={raw} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} initConcept={initConcept} setInitConcept={setInitConcept} setEditConcept={setEditConcept} analysisMode={analysisMode}/>}
