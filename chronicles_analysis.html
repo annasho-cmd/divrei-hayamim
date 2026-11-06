@@ -2963,7 +2963,7 @@ function PreWritingSummary({conceptName,character,dimension,allUnits,getE,getPar
 //   4. מציג פסוקים, הערות ופרשנות (scholarship) ליחידה
 //   5. מאפשר אישור של החוקרת ("שמור") ומעבר לחלון הכתיבה
 // ════════════════════════════════════════════════════════════════════════
-function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,getParams,getCompareNote,getNarrowDef,setNarrowDef,getVerified,setVerified,onBack,onContinueToWriting}){
+function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,getParams,getCompareNote,setCompareNote,getNarrowDef,setNarrowDef,getVerified,setVerified,onBack,onContinueToWriting}){
   const [editNDef,setEditNDef]=useState(false);
   const [ndefText,setNdefText]=useState(getNarrowDef?getNarrowDef(conceptName):"");
   const [itemChecks,setItemChecks]=useState(()=>{
@@ -2974,12 +2974,21 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,getParam
     const v=getVerified?getVerified(character,conceptName,unit?.id):null;
     return (v&&v.note)||"";
   });
+  // עריכת ממצא ספציפי: מצב עריכה + ערכי הזמני
+  const [editingIdx,setEditingIdx]=useState(null); // אינדקס הפרמטר בעריכה
+  const [editVerse,setEditVerse]=useState("");
+  const [editNote,setEditNote]=useState("");
+  // עריכת compareNote
+  const [editCompareNoteMode,setEditCompareNoteMode]=useState(false);
+  const [editCompareNoteText,setEditCompareNoteText]=useState("");
 
   useEffect(()=>{
     setNdefText(getNarrowDef?getNarrowDef(conceptName):"");
     const v=getVerified?getVerified(character,conceptName,unit?.id):null;
     setItemChecks((v&&v.itemChecks)||{});
     setNote((v&&v.note)||"");
+    setEditingIdx(null);
+    setEditCompareNoteMode(false);
   },[unit?.id,conceptName,character]);
 
   if(!unit){
@@ -3024,6 +3033,112 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,getParam
       });
     }
     alert(`✓ הניתוח נשמר. ${checkedCount}/${totalItems} ממצאים סומנו כאושרו.`);
+  }
+
+  // עריכת פסוק/הערה של אינדיקטור בודד
+  function startEditItem(idx){
+    const existing=(ec.params||[])[idx]||{};
+    setEditingIdx(idx);
+    setEditVerse(existing.verse||"");
+    setEditNote(existing.note||"");
+  }
+  function cancelEditItem(){
+    setEditingIdx(null); setEditVerse(""); setEditNote("");
+  }
+  function saveEditItem(idx){
+    if(!setE) return;
+    const currentParams=(ec.params||[]).slice();
+    while(currentParams.length<=idx) currentParams.push(null);
+    currentParams[idx]={...(currentParams[idx]||{found:true}),verse:editVerse,note:editNote};
+    setE(unit.id,conceptName,{...ec,params:currentParams},"chronicles");
+    setEditingIdx(null);
+  }
+
+  // עריכת compareNote
+  function startEditCompareNote(){
+    setEditCompareNoteMode(true);
+    setEditCompareNoteText(compareNote||"");
+  }
+  function saveCompareNote(){
+    if(setCompareNote) setCompareNote(unit.id,conceptName,editCompareNoteText);
+    setEditCompareNoteMode(false);
+  }
+  function cancelEditCompareNote(){
+    setEditCompareNoteMode(false); setEditCompareNoteText("");
+  }
+
+  // הורדת כל המידע של הניתוח ליחידה כקובץ Word
+  function downloadAllAsWord(){
+    const hebDate=new Date().toLocaleDateString("he-IL");
+    const indsHtml=(indList,color,title)=>indList.length?`
+      <h3 style='color:${color};'>${title} (${indList.length})</h3>
+      <ul>${indList.map(i=>`<li style='margin-bottom:6px;'>
+        <strong>#${i._idx+1} ${(i._def&&i._def.paramLabel)||""}</strong>: ${(i._def&&i._def.q)||""}
+        ${i.verse?`<br/><span style='color:#555;'>📍 פסוק: ${i.verse}</span>`:""}
+        ${i.note?`<br/><span style='color:#555;'>✎ הערה: ${i.note.replace(/</g,'&lt;')}</span>`:""}
+      </li>`).join("")}</ul>`:"";
+
+    const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+<meta charset='utf-8'/>
+<title>${conceptName} — ${unit.name}</title>
+<style>
+body{font-family:'David','Times New Roman',serif;direction:rtl;text-align:right;font-size:12pt;line-height:1.75;}
+h1{font-size:18pt;color:#1a365d;border-bottom:2px solid #1a365d;padding-bottom:6px;}
+h2{font-size:14pt;color:#2c5282;border-bottom:1px solid #cbd5e1;padding-bottom:4px;margin-top:20px;}
+h3{font-size:12pt;margin-top:14px;}
+.meta{background:#f1f5f9;padding:10px;border:1px solid #cbd5e1;border-radius:4px;margin-bottom:14px;font-size:10pt;}
+.ndef{background:#fef9c3;padding:12px;border-right:4px solid #ca8a04;margin-bottom:14px;font-size:11pt;white-space:pre-wrap;line-height:1.8;}
+.compare{background:#dcfce7;padding:12px;border-right:4px solid #15803d;margin-bottom:14px;font-size:11pt;white-space:pre-wrap;line-height:1.8;}
+.schol{background:#f3e8ff;padding:12px;border-right:4px solid #7e22ce;margin-bottom:14px;font-size:11pt;white-space:pre-wrap;line-height:1.8;}
+.text-box{background:#f8fafc;padding:12px;border:1px solid #cbd5e1;border-radius:4px;margin-bottom:10px;font-size:11pt;line-height:1.9;white-space:pre-wrap;}
+.researcher-note{background:#dbeafe;padding:12px;border-right:4px solid #2563eb;margin-bottom:14px;font-size:11pt;white-space:pre-wrap;line-height:1.8;}
+ul{padding-right:24px;}
+li{margin-bottom:4px;}
+</style>
+</head>
+<body>
+<h1>${conceptName} ב${charName} · ${unit.name}</h1>
+<div class='meta'>
+  <strong>פרק:</strong> ${unit.chapter||"?"} · <strong>מקבילה:</strong> ${unit.sourceRef||"יחידת סונדרגוט"} · <strong>הופק:</strong> ${hebDate}
+</div>
+
+${ndefText?`<h2>ההגדרה הצרה למושג "${conceptName}" (מפרק ב׳)</h2><div class='ndef'>${ndefText.replace(/</g,'&lt;')}</div>`:""}
+
+<h2>הקריטריון הצר לאינדיקטורים</h2>
+<p><strong>מאושרים (${narrowDef.approved.length}):</strong> ${narrowDef.approved.map(i=>`#${i+1} ${validParams[i]?.paramLabel||""}`).join(" | ")||"—"}</p>
+<p><strong>גבוליים (${narrowDef.borderline.length}):</strong> ${narrowDef.borderline.map(i=>`#${i+1} ${validParams[i]?.paramLabel||""}`).join(" | ")||"—"}</p>
+
+<h2>טקסט דה"י</h2>
+<div class='text-box'>${(unit.chroniclesText||"—").replace(/</g,'&lt;')}</div>
+
+${unit.sourceText?`<h2>טקסט המקבילה (${unit.sourceRef||""})</h2><div class='text-box'>${unit.sourceText.replace(/</g,'&lt;')}</div>`:"<p><em>⚠ יחידת סונדרגוט — אין טקסט מקבילה</em></p>"}
+
+<h2>ממצאים מתוך הכלי האנליטי</h2>
+${indsHtml(approvedInd,"#15803d","✓ ממצאים מאושרים")}
+${indsHtml(borderlineInd,"#a16207","~ ממצאים גבוליים")}
+${rejectedInd.length?`<h3 style='color:#64748b;'>✗ ממצאים נדחים (לא בהגדרה הצרה) · ${rejectedInd.length}</h3><ul>${rejectedInd.map(i=>`<li style='color:#777;'><strong>#${i._idx+1} ${(i._def&&i._def.paramLabel)||""}</strong>: ${(i._def&&i._def.q)||""}${i.verse?` [פסוק ${i.verse}]`:""}${i.note?` — ${i.note.replace(/</g,'&lt;')}`:""}</li>`).join("")}</ul>`:""}
+
+${scholarship?`<h2>פרשנות ליחידה (scholarship)</h2><div class='schol'>${scholarship.replace(/</g,'&lt;')}</div>`:""}
+
+${compareNote?`<h2>הערת ההשוואה שלך (compareNote)</h2><div class='compare'>${compareNote.replace(/</g,'&lt;')}</div>`:""}
+
+${note?`<h2>הערת החוקרת לניתוח (לפני מעבר לכתיבה)</h2><div class='researcher-note'>${note.replace(/</g,'&lt;')}</div>`:""}
+
+<h2>סטטוס האישור</h2>
+<p>${Object.values(itemChecks).filter(Boolean).length} מתוך ${approvedInd.length+borderlineInd.length} ממצאים סומנו כאישרה החוקרת.</p>
+</body>
+</html>`;
+
+    const blob=new Blob(['﻿'+html],{type:"application/msword"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    const safeConcept=conceptName.replace(/[\/\s]/g,'_');
+    const safeName=(unit.name||"unit").replace(/[\/\s,"]/g,'_').substring(0,40);
+    a.download=`ניתוח_${safeConcept}_${safeName}_${new Date().toISOString().slice(0,10)}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
 
   const verified=getVerified?getVerified(character,conceptName,unit.id):null;
@@ -3109,57 +3224,84 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,getParam
         )}
       </div>
 
-      {/* ממצאים — מאושרים */}
-      {approvedInd.length>0&&(
-        <div style={{marginBottom:"12px",padding:"14px 16px",background:"#06402822",borderRadius:"8px",border:"1px solid #34d39944"}}>
-          <div style={{fontSize:"13px",color:"#34d399",fontWeight:"700",marginBottom:"10px"}}>✓ ממצאים מאושרים ({approvedInd.length}) — עונים על ההגדרה הצרה</div>
-          {approvedInd.map((ind,j)=>(
-            <div key={j} style={{marginBottom:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:"3px solid #34d399"}}>
+      {/* פונקציה פנימית להצגת ממצא בודד עם עריכה inline */}
+      {(()=>{
+        function renderInd(ind,j,prefix,barColor,bgOuter,borderOuter,labelColor,noteColor){
+          const isEditing=editingIdx===ind._idx;
+          return(
+            <div key={j} style={{marginBottom:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:`3px solid ${barColor}`}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"10px"}}>
                 <label style={{display:"flex",alignItems:"flex-start",gap:"8px",cursor:"pointer",flex:1}}>
-                  <input type="checkbox" checked={!!itemChecks[`a_${ind._idx}`]} onChange={()=>toggleItemCheck(`a_${ind._idx}`)}
-                    style={{width:"16px",height:"16px",cursor:"pointer",accentColor:"#34d399",marginTop:"2px",flexShrink:0}}/>
+                  <input type="checkbox" checked={!!itemChecks[`${prefix}_${ind._idx}`]} onChange={()=>toggleItemCheck(`${prefix}_${ind._idx}`)}
+                    style={{width:"16px",height:"16px",cursor:"pointer",accentColor:barColor,marginTop:"2px",flexShrink:0}}/>
                   <div style={{flex:1}}>
-                    <div style={{fontSize:"12px",color:"#86efac",fontWeight:"700",marginBottom:"3px"}}>אינדיקטור #{ind._idx+1} — {(ind._def&&ind._def.paramLabel)||"—"}</div>
+                    <div style={{fontSize:"12px",color:labelColor,fontWeight:"700",marginBottom:"3px"}}>אינדיקטור #{ind._idx+1} — {(ind._def&&ind._def.paramLabel)||"—"}</div>
                     <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"4px"}}>{(ind._def&&ind._def.q)||""}</div>
-                    {(ind.verse||ind.note)&&(
-                      <div style={{marginTop:"5px",paddingTop:"5px",borderTop:"1px dashed #475569",fontSize:"11px",color:"#94a3b8"}}>
-                        {ind.verse&&<div>📍 פסוק: <strong style={{color:"#f1f5f9"}}>{ind.verse}</strong></div>}
-                        {ind.note&&<div style={{marginTop:"3px"}}>✎ הערה: {ind.note}</div>}
-                      </div>
-                    )}
                   </div>
                 </label>
+                {!isEditing&&(
+                  <button onClick={()=>startEditItem(ind._idx)}
+                    style={{padding:"4px 10px",fontSize:"10px",background:"transparent",border:`1px solid ${barColor}66`,borderRadius:"4px",color:labelColor,cursor:"pointer",fontWeight:"600",whiteSpace:"nowrap"}}>
+                    ✎ ערוך פסוק/הערה
+                  </button>
+                )}
               </div>
-            </div>
-          ))}
-        </div>
-      )}
 
-      {/* ממצאים — גבוליים */}
-      {borderlineInd.length>0&&(
-        <div style={{marginBottom:"12px",padding:"14px 16px",background:"#78350f22",borderRadius:"8px",border:"1px solid #fbbf2444"}}>
-          <div style={{fontSize:"13px",color:"#fbbf24",fontWeight:"700",marginBottom:"10px"}}>~ ממצאים גבוליים ({borderlineInd.length}) — בדקי בקפידה מול ההגדרה</div>
-          {borderlineInd.map((ind,j)=>(
-            <div key={j} style={{marginBottom:"8px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",borderRight:"3px solid #fbbf24"}}>
-              <label style={{display:"flex",alignItems:"flex-start",gap:"8px",cursor:"pointer"}}>
-                <input type="checkbox" checked={!!itemChecks[`b_${ind._idx}`]} onChange={()=>toggleItemCheck(`b_${ind._idx}`)}
-                  style={{width:"16px",height:"16px",cursor:"pointer",accentColor:"#fbbf24",marginTop:"2px",flexShrink:0}}/>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:"12px",color:"#fcd34d",fontWeight:"700",marginBottom:"3px"}}>אינדיקטור #{ind._idx+1} — {(ind._def&&ind._def.paramLabel)||"—"}</div>
-                  <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"4px"}}>{(ind._def&&ind._def.q)||""}</div>
-                  {(ind.verse||ind.note)&&(
-                    <div style={{marginTop:"5px",paddingTop:"5px",borderTop:"1px dashed #475569",fontSize:"11px",color:"#94a3b8"}}>
-                      {ind.verse&&<div>📍 פסוק: <strong style={{color:"#f1f5f9"}}>{ind.verse}</strong></div>}
-                      {ind.note&&<div style={{marginTop:"3px"}}>✎ הערה: {ind.note}</div>}
-                    </div>
-                  )}
+              {/* מצב תצוגה */}
+              {!isEditing&&(ind.verse||ind.note)&&(
+                <div style={{marginTop:"5px",paddingTop:"5px",borderTop:"1px dashed #475569",fontSize:"11px",color:"#94a3b8"}}>
+                  {ind.verse&&<div>📍 פסוק: <strong style={{color:"#f1f5f9"}}>{ind.verse}</strong></div>}
+                  {ind.note&&<div style={{marginTop:"3px"}}>✎ הערה: {ind.note}</div>}
                 </div>
-              </label>
+              )}
+
+              {/* מצב עריכה */}
+              {isEditing&&(
+                <div style={{marginTop:"8px",paddingTop:"8px",borderTop:`1px dashed ${barColor}66`}}>
+                  <label style={{display:"block",fontSize:"10px",color:"#94a3b8",fontWeight:"700",marginBottom:"3px"}}>📍 פסוק</label>
+                  <input type="text" value={editVerse} onChange={e=>setEditVerse(e.target.value)}
+                    placeholder="למשל: יא, ו"
+                    style={{width:"100%",padding:"6px 8px",background:"#1e293b",border:"1px solid #334155",borderRadius:"5px",color:"#f1f5f9",fontSize:"12px",direction:"rtl",marginBottom:"8px"}}/>
+                  <label style={{display:"block",fontSize:"10px",color:"#94a3b8",fontWeight:"700",marginBottom:"3px"}}>✎ הערה</label>
+                  <textarea value={editNote} onChange={e=>setEditNote(e.target.value)}
+                    placeholder="הערה על הממצא — ניתוח, הקשר, או הפניה לפרשן"
+                    style={{width:"100%",minHeight:"80px",padding:"6px 8px",background:"#1e293b",border:"1px solid #334155",borderRadius:"5px",color:"#f1f5f9",fontSize:"12px",direction:"rtl",resize:"vertical",fontFamily:"inherit",lineHeight:"1.6"}}/>
+                  <div style={{marginTop:"8px",display:"flex",gap:"6px"}}>
+                    <button onClick={()=>saveEditItem(ind._idx)}
+                      style={{padding:"6px 14px",borderRadius:"5px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"11px",fontWeight:"700"}}>
+                      💾 שמור
+                    </button>
+                    <button onClick={cancelEditItem}
+                      style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px",fontWeight:"600"}}>
+                      ❌ ביטול
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          ))}
-        </div>
-      )}
+          );
+        }
+
+        return(
+          <>
+            {/* ממצאים — מאושרים */}
+            {approvedInd.length>0&&(
+              <div style={{marginBottom:"12px",padding:"14px 16px",background:"#06402822",borderRadius:"8px",border:"1px solid #34d39944"}}>
+                <div style={{fontSize:"13px",color:"#34d399",fontWeight:"700",marginBottom:"10px"}}>✓ ממצאים מאושרים ({approvedInd.length}) — עונים על ההגדרה הצרה</div>
+                {approvedInd.map((ind,j)=>renderInd(ind,j,"a","#34d399","#06402822","#34d39944","#86efac","#94a3b8"))}
+              </div>
+            )}
+
+            {/* ממצאים — גבוליים */}
+            {borderlineInd.length>0&&(
+              <div style={{marginBottom:"12px",padding:"14px 16px",background:"#78350f22",borderRadius:"8px",border:"1px solid #fbbf2444"}}>
+                <div style={{fontSize:"13px",color:"#fbbf24",fontWeight:"700",marginBottom:"10px"}}>~ ממצאים גבוליים ({borderlineInd.length}) — בדקי בקפידה מול ההגדרה</div>
+                {borderlineInd.map((ind,j)=>renderInd(ind,j,"b","#fbbf24","#78350f22","#fbbf2444","#fcd34d","#94a3b8"))}
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* ממצאים — נדחים */}
       {rejectedInd.length>0&&(
@@ -3188,15 +3330,45 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,getParam
         </div>
       )}
 
-      {/* הערת ההשוואה של הכותבת */}
-      {compareNote&&(
-        <div style={{marginBottom:"12px",padding:"14px 16px",background:"#1e293b",borderRadius:"8px",border:"1px solid #34d39944"}}>
-          <div style={{fontSize:"13px",color:"#34d399",fontWeight:"700",marginBottom:"8px"}}>✎ הערת השוואה שלך ליחידה (compareNote)</div>
-          <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"12px",color:"#e2e8f0",lineHeight:"1.75",whiteSpace:"pre-wrap"}}>
-            {compareNote}
-          </div>
+      {/* הערת ההשוואה של הכותבת — ניתנת לעריכה */}
+      <div style={{marginBottom:"12px",padding:"14px 16px",background:"#1e293b",borderRadius:"8px",border:"1px solid #34d39944"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+          <div style={{fontSize:"13px",color:"#34d399",fontWeight:"700"}}>✎ הערת השוואה שלך ליחידה (compareNote)</div>
+          {!editCompareNoteMode&&(
+            <button onClick={startEditCompareNote}
+              style={{padding:"4px 10px",fontSize:"10px",background:"transparent",border:"1px solid #34d39966",borderRadius:"4px",color:"#34d399",cursor:"pointer",fontWeight:"600"}}>
+              ✎ ערוך
+            </button>
+          )}
         </div>
-      )}
+        {editCompareNoteMode?(
+          <>
+            <textarea value={editCompareNoteText} onChange={e=>setEditCompareNoteText(e.target.value)}
+              placeholder="כתבי כאן את הערת ההשוואה שלך ליחידה..."
+              style={{width:"100%",minHeight:"180px",padding:"10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"6px",color:"#e2e8f0",fontSize:"13px",lineHeight:"1.8",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+            <div style={{marginTop:"8px",display:"flex",gap:"6px"}}>
+              <button onClick={saveCompareNote}
+                style={{padding:"7px 16px",borderRadius:"5px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                💾 שמור
+              </button>
+              <button onClick={cancelEditCompareNote}
+                style={{padding:"7px 16px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>
+                ❌ ביטול
+              </button>
+            </div>
+          </>
+        ):(
+          compareNote?(
+            <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"12px",color:"#e2e8f0",lineHeight:"1.75",whiteSpace:"pre-wrap"}}>
+              {compareNote}
+            </div>
+          ):(
+            <div style={{padding:"10px 12px",background:"#0f172a",borderRadius:"6px",fontSize:"11px",color:"#64748b",fontStyle:"italic",border:"1px dashed #475569"}}>
+              עדיין לא נכתבה הערת השוואה. לחצי "✎ ערוך" כדי להוסיף.
+            </div>
+          )
+        )}
+      </div>
 
       {/* סיכום החוקרת + אישור */}
       <div style={{marginBottom:"18px",padding:"14px 16px",background:"#1e293b",borderRadius:"8px",border:`2px solid ${dimColor}66`}}>
@@ -3205,11 +3377,15 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,getParam
           placeholder="כתבי כאן את המחשבות הראשוניות שלך על המושג ביחידה — מה הממצא המרכזי? מה דורש הבהרה?"
           style={{width:"100%",minHeight:"90px",padding:"10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"6px",color:"#e2e8f0",fontSize:"13px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
 
-        <div style={{marginTop:"12px",display:"flex",gap:"10px",justifyContent:"space-between",flexWrap:"wrap"}}>
+        <div style={{marginTop:"12px",display:"flex",gap:"10px",justifyContent:"space-between",flexWrap:"wrap",alignItems:"center"}}>
           <div style={{fontSize:"11px",color:"#94a3b8"}}>
             {`סומנו ${Object.values(itemChecks).filter(Boolean).length} מתוך ${approvedInd.length+borderlineInd.length} ממצאים ככאלה שעברתי עליהם`}
           </div>
-          <div style={{display:"flex",gap:"8px"}}>
+          <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+            <button onClick={downloadAllAsWord}
+              style={{padding:"9px 18px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#2563eb",color:"white",fontSize:"12px",fontWeight:"700"}}>
+              📥 הורד הכל לוורד
+            </button>
             <button onClick={saveVerification}
               style={{padding:"9px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"13px",fontWeight:"700"}}>
               💾 שמור אישור
@@ -3390,7 +3566,7 @@ ${bodyHtml}
   );
 }
 
-function StageC({allUnits,allConcepts,dim4concept,getE,getParams,getCompareNote,getUnitSummary,getStage3Result,setStage3Result,raw,getNarrowDef,setNarrowDef,getWritingDraft,setWritingDraft,getVerified,setVerified}){
+function StageC({allUnits,allConcepts,dim4concept,getE,setE,getParams,getCompareNote,setCompareNote,getUnitSummary,getStage3Result,setStage3Result,raw,getNarrowDef,setNarrowDef,getWritingDraft,setWritingDraft,getVerified,setVerified}){
   const [screen,setScreen]=useState("select");
   const [character,setCharacter]=useState(null);
   const [dimension,setDimension]=useState(null);
@@ -3983,8 +4159,10 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
         dimension={dimension}
         conceptName={conceptName}
         getE={getE}
+        setE={setE}
         getParams={getParams}
         getCompareNote={getCompareNote}
+        setCompareNote={setCompareNote}
         getNarrowDef={getNarrowDef}
         setNarrowDef={setNarrowDef}
         getVerified={getVerified}
@@ -5128,7 +5306,7 @@ function App(){
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} backupData={backupData} resetNirmaz={resetNirmaz}/>}
       {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
-      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified}/>}
+      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} setE={setE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
       {tab==="indmatrix"&&<IndicatorMatrixReport allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams}/>}
       {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
