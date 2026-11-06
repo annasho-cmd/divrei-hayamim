@@ -460,6 +460,52 @@ ${otherUnitsContext}
     setAiLoading(false);
   }
 
+  async function suggestQuestion(){
+    setAiLoading(true);setAiResult('');
+    try{
+      const ctx=`טקסט דה"י: ${unit.chroniclesText||'—'}
+טקסט מקביל: ${unit.sourceText||'—'}
+ממצאי השוואה: ${buildDiffSummary(unit)}
+הערות: ${unit.scholarship||'—'}`;
+
+      const prompt=`אתה חוקר מקרא שעוזר לחוקרת תזה לנסח שאלה פרשנית פותחת לפסקה בפרק על דוד/שלמה בדה"י.
+
+דרישות מנחה המחקר: השאלה חייבת (א) לנבוע מהטקסט הספציפי, לא מהגדרה מושגית מופשטת; (ב) להיות שאלה אמיתית שלפסקה יש תשובה עליה; (ג) לעגן בפעולה, שינוי או סתירה ספציפית בטקסט; (ד) לא לפתוח ב"איך מתבטא X" או "מה המשמעות של".
+
+דוגמאות טובות:
+• "מדוע דוד, שהתאווה למים, מסרב לשתות אותם ומנסך אותם לה'?"
+• "מדוע הכרוניסט הוסיף 'כדבר ה' ביד שמואל' למעמד ההכתרה?"
+• "מדוע יוזמה שזכתה להסכמה רחבה מסתיימת באסון?"
+
+דוגמאות שלא לחקות:
+• "איך מתבטא רועה אצל דוד?" (מושג מופשט)
+• "מה המשמעות של הארון בדה"י?" (כללי)
+• "כיצד עולה המודל הנבואי ביחידה?" (לא טקסטואלי)
+
+${ctx}
+
+הצע 2-3 שאלות פרשניות אפשריות ממוקדות בטקסט. לכל שאלה ציין "נקודת מוקד" — הפסוק או השינוי הספציפי שממנו היא נובעת. פורמט:
+
+הצעה 1: [שאלה]
+מוקד: [פסוק/שינוי]
+
+הצעה 2: [שאלה]
+מוקד: [פסוק/שינוי]
+
+הצעה 3: [שאלה אופציונלית]
+מוקד: [פסוק/שינוי]`;
+
+      const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,
+          messages:[{role:'user',content:prompt}]})
+      });
+      const data=await res.json();
+      setAiResult(data.content?.map(b=>b.text||'').join('')||'שגיאה בתגובה');
+    }catch(e){setAiResult('שגיאת חיבור: '+e.message);}
+    setAiLoading(false);
+  }
+
   const inp={width:'100%',border:'1px solid #e2e8f0',borderRadius:'7px',padding:'8px 10px',
     fontSize:'14px',outline:'none',boxSizing:'border-box',fontFamily:'inherit'};
 
@@ -487,6 +533,12 @@ ${otherUnitsContext}
               background:aiLoading?'#e2e8f0':'#6366f1',color:aiLoading?'#94a3b8':'white',
               fontWeight:'700',fontSize:'13px',whiteSpace:'nowrap'}}>
             {aiLoading?'⏳ חושב...':'שאל'}
+          </button>
+          <button onClick={suggestQuestion} disabled={aiLoading}
+            style={{padding:'8px 16px',borderRadius:'7px',border:'none',cursor:aiLoading?'wait':'pointer',
+              background:aiLoading?'#e2e8f0':'#10b981',color:aiLoading?'#94a3b8':'white',
+              fontWeight:'700',fontSize:'13px',whiteSpace:'nowrap'}}>
+            🎯 הצע שאלה פרשנית
           </button>
         </div>
         {aiResult&&(
