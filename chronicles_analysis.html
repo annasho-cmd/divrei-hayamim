@@ -3254,12 +3254,20 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,get
   // עריכת compareNote
   const [editCompareNoteMode,setEditCompareNoteMode]=useState(false);
   const [editCompareNoteText,setEditCompareNoteText]=useState("");
+  // החלטות על גבוליים: {idx: 'accepted' | 'rejected'}
+  const [borderlineDecisions,setBorderlineDecisions]=useState(()=>{
+    const v=getVerified?getVerified(character,conceptName,unit?.id):null;
+    return (v&&v.borderlineDecisions)||{};
+  });
+  // מצב ייצור של AI
+  const [generating,setGenerating]=useState(false);
 
   useEffect(()=>{
     setNdefText(getNarrowDef?getNarrowDef(conceptName):"");
     const v=getVerified?getVerified(character,conceptName,unit?.id):null;
     setItemChecks((v&&v.itemChecks)||{});
     setNote((v&&v.note)||"");
+    setBorderlineDecisions((v&&v.borderlineDecisions)||{});
     setEditingIdx(null);
     setEditCompareNoteMode(false);
   },[unit?.id,conceptName,character]);
@@ -3293,26 +3301,113 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,get
   function toggleItemCheck(idx){
     setItemChecks(prev=>({...prev,[idx]:!prev[idx]}));
   }
-  // ממצאים נדחים שהמשתמשת אישרה ידנית (סימנה ✓ בסקשן "לאישור ידני")
-  const userApprovedFromRejected=rejectedInd.filter(ind=>!!itemChecks[`m_${ind._idx}`]);
-  // רשימת "מאושרים" מורחבת לכל תצרוכת (ספירה, ייצוא, דו"ח ריכוז): אוטומטיים + מאושרים ידנית
-  const effectiveApprovedInd=[...approvedInd,...userApprovedFromRejected];
+  // גבוליים שקובלו ע"י המשתמשת → מצטרפים למאושרים
+  const acceptedBorderlineInd=borderlineInd.filter(i=>borderlineDecisions[i._idx]==="accepted");
+  const rejectedBorderlineInd=borderlineInd.filter(i=>borderlineDecisions[i._idx]==="rejected");
+  const pendingBorderlineInd=borderlineInd.filter(i=>!borderlineDecisions[i._idx]);
+  // רשימת "מאושרים" מורחבת לכל תצרוכת (ספירה, ייצוא, דו"ח ריכוז): אוטומטיים + גבוליים שקובלו
+  const effectiveApprovedInd=[...approvedInd,...acceptedBorderlineInd];
 
   function saveVerification(){
-    const totalItems=approvedInd.length+borderlineInd.length+rejectedInd.length;
-    const checkedCount=Object.values(itemChecks).filter(Boolean).length;
+    const totalDecided=approvedInd.length+Object.keys(borderlineDecisions).length;
+    const totalPossible=approvedInd.length+borderlineInd.length;
     if(setVerified){
       setVerified(character,conceptName,unit.id,{
         itemChecks:itemChecks,
         note:note,
         verifiedAt:Date.now(),
-        verifiedCount:checkedCount,
-        totalCount:totalItems,
-        userApprovedIdxs:userApprovedFromRejected.map(i=>i._idx)
+        verifiedCount:totalDecided,
+        totalCount:totalPossible,
+        borderlineDecisions:borderlineDecisions,
+        // לתאימות לאחור עם ConceptSummary — מעבירים גם את ה-idxs של הגבוליים שקובלו
+        userApprovedIdxs:acceptedBorderlineInd.map(i=>i._idx)
       });
     }
-    const manualApprCount=userApprovedFromRejected.length;
-    alert(`✓ הניתוח נשמר. ${checkedCount} פריטים סומנו${manualApprCount?` (מתוכם ${manualApprCount} אושרו ידנית ומצטרפים למאושרים)`:"."}.`);
+    const accC=acceptedBorderlineInd.length;
+    const rejC=rejectedBorderlineInd.length;
+    const pendC=pendingBorderlineInd.length;
+    alert(`✓ הניתוח נשמר. ${approvedInd.length} מאושרים אוטומטית${accC?` + ${accC} גבוליים קובלו`:""}${rejC?` · ${rejC} גבוליים נדחו`:""}${pendC?` · ${pendC} עוד לא הוכרעו`:""}.`);
+  }
+
+  // החלטות על גבוליים (accepted / rejected / null)
+  function setBorderlineDecision(idx,decision){
+    setBorderlineDecisions(prev=>{
+      const next={...prev};
+      if(decision===null) delete next[idx]; else next[idx]=decision;
+      return next;
+    });
+  }
+
+  // יצירת הערת השוואה ע"י AI על בסיס כל הנתונים וההחלטות
+  async function generateCompareNoteByAI(){
+    setGenerating(true);
+    try{
+      const ndef=getNarrowDef?getNarrowDef(conceptName):"";
+      const chrText=(unit.chroniclesText||"").substring(0,2500);
+      const srcText=(unit.sourceText||"").substring(0,2500);
+      const schol=(unit.scholarship||"").substring(0,3000);
+      // בניית רשימת מאושרים סופית = אוטומטיים + גבוליים שקובלו
+      const acceptedBorderlines=borderlineInd.filter(i=>borderlineDecisions[i._idx]==="accepted");
+      const rejectedBorderlines=borderlineInd.filter(i=>borderlineDecisions[i._idx]==="rejected");
+      const pendingBorderlines=borderlineInd.filter(i=>!borderlineDecisions[i._idx]);
+      const finalApproved=[...approvedInd,...acceptedBorderlines];
+
+      const fmtInd=(ind)=>`- אינדיקטור #${ind._idx+1} (${(ind._def&&ind._def.paramLabel)||""}): ${(ind._def&&ind._def.q)||""}${ind.verse?` [פסוק: ${ind.verse}]`:""}${ind.note?` — ${ind.note}`:""}`;
+      const approvedList=finalApproved.length?finalApproved.map(fmtInd).join("\n"):"(אין)";
+      const pendingList=pendingBorderlines.length?pendingBorderlines.map(fmtInd).join("\n"):"(אין)";
+      const rejectedList=rejectedBorderlines.length?rejectedBorderlines.map(fmtInd).join("\n"):"(אין)";
+
+      const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד/שלמה בדברי הימים. אנא כתוב הערת השוואה (compareNote) ליחידה ספרותית בודדת.
+
+הדמות: ${charName}
+המושג: ${conceptName}
+היחידה: ${unit.name} (${unit.chapter||""})
+מקבילה: ${unit.sourceRef||"יחידת סונדרגוט — אין מקבילה"}
+
+ההגדרה הצרה מפרק ב׳ של המושג:
+${ndef||"(לא הוזנה)"}
+
+טקסט דה"י:
+${chrText||"—"}
+
+${srcText?`טקסט המקבילה:\n${srcText}`:"אין טקסט מקבילה"}
+
+ממצאים מאושרים (עונים על ההגדרה הצרה):
+${approvedList}
+
+ממצאים גבוליים שקובלו ומצטרפים למאושרים:
+${acceptedBorderlines.length?acceptedBorderlines.map(fmtInd).join("\n"):"(אין)"}
+
+ממצאים גבוליים שנדחו (לא ייכללו):
+${rejectedList}
+
+ממצאים גבוליים שעוד לא הוכרעו (ציין אותם קצר כפתוחים, אם רלוונטי):
+${pendingList}
+
+${schol?`פרשנות שאספה החוקרת ליחידה (scholarship):\n${schol}`:""}
+
+הנחיות לכתיבת הערת ההשוואה:
+1. כתוב 2-4 פסקאות בעברית מחקרית, בגוף ראשון של החוקרת.
+2. פתח בקביעה ברורה: האם המושג "${conceptName}" נוכח ביחידה או נעדר? אם נוכח — באיזו עוצמה?
+3. התבסס אך ורק על הממצאים המאושרים והגבוליים שקובלו — אל תביא ראיות שנדחו או שלא הוזכרו.
+4. אם יש מקבילה — התייחס במפורש למה הכרוניסט ${srcText?"שינה / הוסיף / השמיט":"יצר (סונדרגוט)"} ביחס לדגם הקודם.
+5. צטט פסוקים ספציפיים ואת הפרשנים שאוזכרו בחומר הפרשנות, עם מספרי עמודים אם יש.
+6. אם שום דבר לא עונה על ההגדרה הצרה — ציין זאת בפירוש כממצא.
+7. סיים בשורה אחת על התרומה הייחודית של היחידה לדיון על המושג.
+
+החזר רק את הטקסט של הערת ההשוואה, ללא כותרת וללא הסברים נוספים.`;
+
+      const response=await aiCall(prompt,4000);
+      const text=(response||"").trim();
+      if(!text){throw new Error("תגובה ריקה מ-AI");}
+      // ממלא את compareNote בעריכה — החוקרת יכולה לערוך לפני שמירה
+      setEditCompareNoteText(text);
+      setEditCompareNoteMode(true);
+    }catch(e){
+      alert("שגיאה בייצור הערת השוואה: "+(e.message||e));
+    }finally{
+      setGenerating(false);
+    }
   }
 
   // עריכת פסוק/הערה של אינדיקטור בודד
@@ -3395,8 +3490,9 @@ ${ndefText?`<h2>ההגדרה הצרה למושג "${conceptName}" (מפרק ב׳
 ${unit.sourceText?`<h2>טקסט המקבילה (${unit.sourceRef||""})</h2><div class='text-box'>${unit.sourceText.replace(/</g,'&lt;')}</div>`:"<p><em>⚠ יחידת סונדרגוט — אין טקסט מקבילה</em></p>"}
 
 <h2>ממצאים מתוך הכלי האנליטי</h2>
-${indsHtml(effectiveApprovedInd,"#15803d","✓ ממצאים מאושרים"+(userApprovedFromRejected.length?` (כולל ${userApprovedFromRejected.length} שאושרו ידנית)`:""))}
-${indsHtml(borderlineInd,"#a16207","~ ממצאים גבוליים")}
+${indsHtml(effectiveApprovedInd,"#15803d","✓ ממצאים מאושרים"+(acceptedBorderlineInd.length?` (כולל ${acceptedBorderlineInd.length} גבוליים שקובלו)`:""))}
+${indsHtml(pendingBorderlineInd,"#a16207","~ ממצאים גבוליים שלא הוכרעו")}
+${rejectedBorderlineInd.length?`<h3 style='color:#991b1b;'>✗ ממצאים גבוליים שנדחו · ${rejectedBorderlineInd.length}</h3><ul>${rejectedBorderlineInd.map(i=>`<li style='color:#777;'><strong>#${i._idx+1} ${(i._def&&i._def.paramLabel)||""}</strong>: ${(i._def&&i._def.q)||""}${i.verse?` [פסוק ${i.verse}]`:""}</li>`).join("")}</ul>`:""}
 
 ${scholarship?`<h2>פרשנות ליחידה (scholarship)</h2><div class='schol'>${scholarship.replace(/</g,'&lt;')}</div>`:""}
 
@@ -3571,24 +3667,78 @@ ${note?`<h2>הערת החוקרת לניתוח (לפני מעבר לכתיבה)<
               </div>
             )}
 
-            {/* ממצאים — גבוליים (מההגדרה הצרה) */}
+            {/* ממצאים — גבוליים: קבלה/דחייה פרטנית */}
             {borderlineInd.length>0&&(
               <div style={{marginBottom:"12px",padding:"14px 16px",background:"#78350f22",borderRadius:"8px",border:"1px solid #fbbf2444"}}>
-                <div style={{fontSize:"13px",color:"#fbbf24",fontWeight:"700",marginBottom:"10px"}}>~ ממצאים גבוליים ({borderlineInd.length}) — בדקי בקפידה מול ההגדרה</div>
-                {borderlineInd.map((ind,j)=>renderInd(ind,j,"b","#fbbf24","#78350f22","#fbbf2444","#fcd34d","#94a3b8"))}
-              </div>
-            )}
-
-            {/* ממצאים לאישור ידני — סומנו "כן" אך אינם ב"מאושרים" של ההגדרה הצרה. סימון = אישור וכלילה ברשימה */}
-            {rejectedInd.length>0&&(
-              <div style={{marginBottom:"12px",padding:"14px 16px",background:"#1e293b",borderRadius:"8px",border:"1px dashed #94a3b8"}}>
-                <div style={{fontSize:"13px",color:"#e2e8f0",fontWeight:"700",marginBottom:"6px"}}>
-                  ⚐ ממצאים לאישור ידני ({rejectedInd.length})
-                </div>
+                <div style={{fontSize:"13px",color:"#fbbf24",fontWeight:"700",marginBottom:"6px"}}>~ ממצאים גבוליים ({borderlineInd.length}) — החלטי אם להוסיף או לדחות</div>
                 <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.5"}}>
-                  אינדיקטורים שסומנו "כן" בשלב ב׳ אבל אינם בהגדרה הצרה המחמירה. סמני ✓ אם לדעתך הטקסט כאן עונה על ההגדרה — אז יצטרפו למאושרים.
+                  עברי על כל ממצא. לחצי "✓ קבלי" כדי להוסיף למאושרים ("✗ דחי" להסיר מהניתוח). ממצא לא-מוכרע יישאר גבולי.
                 </div>
-                {rejectedInd.map((ind,j)=>renderInd(ind,j,"m","#a78bfa","#1e293b","#94a3b844","#c4b5fd","#94a3b8"))}
+                {borderlineInd.map((ind,j)=>{
+                  const decision=borderlineDecisions[ind._idx]||null; // 'accepted' | 'rejected' | null
+                  const isEditing=editingIdx===ind._idx;
+                  const baseBar=decision==="accepted"?"#34d399":decision==="rejected"?"#ef4444":"#fbbf24";
+                  const bgBand=decision==="accepted"?"#06402833":decision==="rejected"?"#7f1d1d22":"#78350f22";
+                  const labelClr=decision==="accepted"?"#86efac":decision==="rejected"?"#fca5a5":"#fcd34d";
+                  const stateLbl=decision==="accepted"?"✓ קובלה — נספרת כמאושר":decision==="rejected"?"✗ נדחתה — לא נספרת":"⚪ טרם הוכרעה";
+                  return(
+                    <div key={j} style={{marginBottom:"10px",padding:"10px 12px",background:bgBand,borderRadius:"6px",borderRight:`3px solid ${baseBar}`,opacity:decision==="rejected"?0.7:1}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:"10px",flexWrap:"wrap"}}>
+                        <div style={{flex:1,minWidth:"220px"}}>
+                          <div style={{fontSize:"12px",color:labelClr,fontWeight:"700",marginBottom:"3px"}}>אינדיקטור #{ind._idx+1} — {(ind._def&&ind._def.paramLabel)||"—"}</div>
+                          <div style={{fontSize:"12px",color:"#cbd5e1",lineHeight:"1.6",marginBottom:"4px"}}>{(ind._def&&ind._def.q)||""}</div>
+                          <div style={{fontSize:"10px",color:labelClr,fontWeight:"700",marginTop:"3px"}}>{stateLbl}</div>
+                        </div>
+                        <div style={{display:"flex",gap:"5px",flexShrink:0,flexWrap:"wrap"}}>
+                          <button onClick={()=>setBorderlineDecision(ind._idx,decision==="accepted"?null:"accepted")}
+                            style={{padding:"5px 12px",borderRadius:"5px",border:decision==="accepted"?"2px solid #34d399":"1px solid #34d39966",cursor:"pointer",background:decision==="accepted"?"#34d39933":"transparent",color:decision==="accepted"?"#34d399":"#86efac",fontSize:"11px",fontWeight:"700"}}>
+                            ✓ קבלי
+                          </button>
+                          <button onClick={()=>setBorderlineDecision(ind._idx,decision==="rejected"?null:"rejected")}
+                            style={{padding:"5px 12px",borderRadius:"5px",border:decision==="rejected"?"2px solid #ef4444":"1px solid #ef444466",cursor:"pointer",background:decision==="rejected"?"#ef444433":"transparent",color:decision==="rejected"?"#ef4444":"#fca5a5",fontSize:"11px",fontWeight:"700"}}>
+                            ✗ דחי
+                          </button>
+                          {!isEditing&&(
+                            <button onClick={()=>startEditItem(ind._idx)}
+                              style={{padding:"5px 10px",fontSize:"10px",background:"transparent",border:"1px solid #64748b",borderRadius:"4px",color:"#94a3b8",cursor:"pointer",fontWeight:"600"}}>
+                              ✎ ערוך
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* מצב תצוגה */}
+                      {!isEditing&&(ind.verse||ind.note)&&(
+                        <div style={{marginTop:"6px",paddingTop:"6px",borderTop:"1px dashed #475569",fontSize:"11px",color:"#94a3b8"}}>
+                          {ind.verse&&<div>📍 פסוק: <strong style={{color:"#f1f5f9"}}>{ind.verse}</strong></div>}
+                          {ind.note&&<div style={{marginTop:"3px"}}>✎ הערה: {ind.note}</div>}
+                        </div>
+                      )}
+
+                      {/* מצב עריכה */}
+                      {isEditing&&(
+                        <div style={{marginTop:"8px",paddingTop:"8px",borderTop:`1px dashed ${baseBar}66`}}>
+                          <label style={{display:"block",fontSize:"10px",color:"#94a3b8",fontWeight:"700",marginBottom:"3px"}}>📍 פסוק</label>
+                          <input type="text" value={editVerse} onChange={e=>setEditVerse(e.target.value)}
+                            style={{width:"100%",padding:"6px 8px",background:"#1e293b",border:"1px solid #334155",borderRadius:"5px",color:"#f1f5f9",fontSize:"12px",direction:"rtl",marginBottom:"8px"}}/>
+                          <label style={{display:"block",fontSize:"10px",color:"#94a3b8",fontWeight:"700",marginBottom:"3px"}}>✎ הערה</label>
+                          <textarea value={editNote} onChange={e=>setEditNote(e.target.value)}
+                            style={{width:"100%",minHeight:"80px",padding:"6px 8px",background:"#1e293b",border:"1px solid #334155",borderRadius:"5px",color:"#f1f5f9",fontSize:"12px",direction:"rtl",resize:"vertical",fontFamily:"inherit",lineHeight:"1.6"}}/>
+                          <div style={{marginTop:"8px",display:"flex",gap:"6px"}}>
+                            <button onClick={()=>saveEditItem(ind._idx)}
+                              style={{padding:"6px 14px",borderRadius:"5px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"11px",fontWeight:"700"}}>
+                              💾 שמור
+                            </button>
+                            <button onClick={cancelEditItem}
+                              style={{padding:"6px 14px",borderRadius:"5px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px",fontWeight:"600"}}>
+                              ❌ ביטול
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </>
@@ -3606,16 +3756,25 @@ ${note?`<h2>הערת החוקרת לניתוח (לפני מעבר לכתיבה)<
         </div>
       )}
 
-      {/* הערת ההשוואה של הכותבת — ניתנת לעריכה */}
+      {/* הערת ההשוואה של הכותבת — ניתנת לעריכה + ייצור ע"י AI */}
       <div style={{marginBottom:"12px",padding:"14px 16px",background:"#1e293b",borderRadius:"8px",border:"1px solid #34d39944"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"6px"}}>
           <div style={{fontSize:"13px",color:"#34d399",fontWeight:"700"}}>✎ הערת השוואה שלך ליחידה (compareNote)</div>
-          {!editCompareNoteMode&&(
-            <button onClick={startEditCompareNote}
-              style={{padding:"4px 10px",fontSize:"10px",background:"transparent",border:"1px solid #34d39966",borderRadius:"4px",color:"#34d399",cursor:"pointer",fontWeight:"600"}}>
-              ✎ ערוך
+          <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+            <button onClick={generateCompareNoteByAI} disabled={generating}
+              style={{padding:"5px 12px",fontSize:"10px",background:generating?"#475569":"#8b5cf6",border:"none",borderRadius:"4px",color:"white",cursor:generating?"wait":"pointer",fontWeight:"700"}}>
+              {generating?"⏳ כותב...":"✍ כתוב הערת השוואה (AI)"}
             </button>
-          )}
+            {!editCompareNoteMode&&(
+              <button onClick={startEditCompareNote}
+                style={{padding:"4px 10px",fontSize:"10px",background:"transparent",border:"1px solid #34d39966",borderRadius:"4px",color:"#34d399",cursor:"pointer",fontWeight:"600"}}>
+                ✎ ערוך ידנית
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={{fontSize:"10px",color:"#94a3b8",marginBottom:"8px",lineHeight:"1.5"}}>
+          "✍ כתוב הערת השוואה (AI)" מייצר טיוטה על בסיס ההגדרה הצרה + המאושרים + הגבוליים שקובלו. לאחר הייצור — תוכלי לערוך לפני שמירה.
         </div>
         {editCompareNoteMode?(
           <>
@@ -3654,9 +3813,10 @@ ${note?`<h2>הערת החוקרת לניתוח (לפני מעבר לכתיבה)<
           style={{width:"100%",minHeight:"90px",padding:"10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"6px",color:"#e2e8f0",fontSize:"13px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
 
         <div style={{marginTop:"12px",display:"flex",gap:"10px",justifyContent:"space-between",flexWrap:"wrap",alignItems:"center"}}>
-          <div style={{fontSize:"11px",color:"#94a3b8"}}>
-            {`סומנו ${Object.values(itemChecks).filter(Boolean).length} מתוך ${approvedInd.length+borderlineInd.length+rejectedInd.length}`}
-            {userApprovedFromRejected.length>0&&<span style={{color:"#a78bfa"}}> · ⚐ {userApprovedFromRejected.length} אושרו ידנית ומצטרפים למאושרים</span>}
+          <div style={{fontSize:"11px",color:"#94a3b8",lineHeight:"1.6"}}>
+            <strong style={{color:"#34d399"}}>{effectiveApprovedInd.length}</strong> מאושרים ({approvedInd.length} אוטו׳{acceptedBorderlineInd.length?` + ${acceptedBorderlineInd.length} קובלו ידנית`:""})
+            {rejectedBorderlineInd.length>0&&<> · <strong style={{color:"#ef4444"}}>{rejectedBorderlineInd.length}</strong> נדחו</>}
+            {pendingBorderlineInd.length>0&&<> · <strong style={{color:"#fbbf24"}}>{pendingBorderlineInd.length}</strong> גבוליים לא-מוכרעים</>}
           </div>
           <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
             <button onClick={downloadAllAsWord}
