@@ -2966,7 +2966,7 @@ function PreWritingSummary({conceptName,character,dimension,allUnits,getE,getPar
 // יחידה ופסוקים | אינדיקטור בהגדרה הצרה | ראיה והסברה | פרשנים ועמ' | מידת ההתאמה | תרומה ייחודית
 // ו-4 שאלות מחקר בסוף להשלמה טקסטואלית.
 // ════════════════════════════════════════════════════════════════════════
-function ConceptSummary({character,dimension,conceptName,allUnits,getE,getParams,getCompareNote,getUnitSummary,getNarrowDef,getConceptSummary,setConceptSummary,unitsForCurrentConcept,onBack}){
+function ConceptSummary({character,dimension,conceptName,allUnits,getE,getParams,getCompareNote,getUnitSummary,getNarrowDef,getConceptSummary,setConceptSummary,getVerified,unitsForCurrentConcept,onBack}){
   const dimColorMap={"d1":"#818cf8","d2":"#34d399","d3":"#fbbf24","d4":"#f87171"};
   const dimColor=dimColorMap[dimension]||"#c084fc";
   const charName=character==="david"?"דוד":"שלמה";
@@ -2998,17 +2998,26 @@ function ConceptSummary({character,dimension,conceptName,allUnits,getE,getParams
     const positives=(ec.params||[])
       .map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(conceptName,i),_def:params[i]||validParams[i]}:null)
       .filter(Boolean);
-    const approved=positives.filter(x=>x._narrow==="approved");
+    const approvedAuto=positives.filter(x=>x._narrow==="approved");
     const borderline=positives.filter(x=>x._narrow==="borderline");
+    const rejected=positives.filter(x=>x._narrow==="rejected");
+    // אישורים ידניים שהחוקרת סימנה במסך ניתוח היחידה — מצטרפים למאושרים
+    const verif=getVerified?getVerified(character,conceptName,u.id):null;
+    const manualApprovedIdxs=(verif&&verif.userApprovedIdxs)||[];
+    const userApproved=rejected.filter(x=>manualApprovedIdxs.indexOf(x._idx)>=0);
+    const approved=[...approvedAuto,...userApproved]; // כולל אוטומטיים ואישורים ידניים
     const relevantInds=[...approved,...borderline];
     const verses=relevantInds.map(i=>i.verse).filter(Boolean);
-    const indLabels=relevantInds.map(i=>`#${i._idx+1} ${(i._def&&i._def.paramLabel)||""}`);
+    const indLabels=relevantInds.map(i=>{
+      const isManual=userApproved.indexOf(i)>=0;
+      return `#${i._idx+1} ${(i._def&&i._def.paramLabel)||""}${isManual?" ⚐":""}`;
+    });
     const notes=relevantInds.map(i=>i.note).filter(Boolean);
     const compareN=getCompareNote?getCompareNote(u.id,conceptName):"";
     const schol=u.scholarship||"";
     // חילוץ שמות פרשנים ומספרי עמודים — מתבסס על תחביר נפוץ: "פרשן, עמ' X"
     const scholarMatches=(schol+" "+compareN).match(/(קליין|קנופרס|יפת|דירקסון|מיירס|קרטיס|מדיסון|בראון|Blenkinsopp|Sweeney)[^\d]*(עמ'\s*\d+|p\.?\s*\d+)/g)||[];
-    return {u,approved,borderline,verses,indLabels,notes,compareN,schol,scholarMatches};
+    return {u,approved,borderline,userApproved,verses,indLabels,notes,compareN,schol,scholarMatches};
   });
 
   function updateCell(uid,field,value){
@@ -3284,8 +3293,13 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,get
   function toggleItemCheck(idx){
     setItemChecks(prev=>({...prev,[idx]:!prev[idx]}));
   }
+  // ממצאים נדחים שהמשתמשת אישרה ידנית (סימנה ✓ בסקשן "לאישור ידני")
+  const userApprovedFromRejected=rejectedInd.filter(ind=>!!itemChecks[`m_${ind._idx}`]);
+  // רשימת "מאושרים" מורחבת לכל תצרוכת (ספירה, ייצוא, דו"ח ריכוז): אוטומטיים + מאושרים ידנית
+  const effectiveApprovedInd=[...approvedInd,...userApprovedFromRejected];
+
   function saveVerification(){
-    const totalItems=approvedInd.length+borderlineInd.length;
+    const totalItems=approvedInd.length+borderlineInd.length+rejectedInd.length;
     const checkedCount=Object.values(itemChecks).filter(Boolean).length;
     if(setVerified){
       setVerified(character,conceptName,unit.id,{
@@ -3293,10 +3307,12 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,get
         note:note,
         verifiedAt:Date.now(),
         verifiedCount:checkedCount,
-        totalCount:totalItems
+        totalCount:totalItems,
+        userApprovedIdxs:userApprovedFromRejected.map(i=>i._idx)
       });
     }
-    alert(`✓ הניתוח נשמר. ${checkedCount}/${totalItems} ממצאים סומנו כאושרו.`);
+    const manualApprCount=userApprovedFromRejected.length;
+    alert(`✓ הניתוח נשמר. ${checkedCount} פריטים סומנו${manualApprCount?` (מתוכם ${manualApprCount} אושרו ידנית ומצטרפים למאושרים)`:"."}.`);
   }
 
   // עריכת פסוק/הערה של אינדיקטור בודד
@@ -3379,9 +3395,8 @@ ${ndefText?`<h2>ההגדרה הצרה למושג "${conceptName}" (מפרק ב׳
 ${unit.sourceText?`<h2>טקסט המקבילה (${unit.sourceRef||""})</h2><div class='text-box'>${unit.sourceText.replace(/</g,'&lt;')}</div>`:"<p><em>⚠ יחידת סונדרגוט — אין טקסט מקבילה</em></p>"}
 
 <h2>ממצאים מתוך הכלי האנליטי</h2>
-${indsHtml(approvedInd,"#15803d","✓ ממצאים מאושרים")}
+${indsHtml(effectiveApprovedInd,"#15803d","✓ ממצאים מאושרים"+(userApprovedFromRejected.length?` (כולל ${userApprovedFromRejected.length} שאושרו ידנית)`:""))}
 ${indsHtml(borderlineInd,"#a16207","~ ממצאים גבוליים")}
-${rejectedInd.length?`<h3 style='color:#64748b;'>✗ ממצאים נדחים (לא בהגדרה הצרה) · ${rejectedInd.length}</h3><ul>${rejectedInd.map(i=>`<li style='color:#777;'><strong>#${i._idx+1} ${(i._def&&i._def.paramLabel)||""}</strong>: ${(i._def&&i._def.q)||""}${i.verse?` [פסוק ${i.verse}]`:""}${i.note?` — ${i.note.replace(/</g,'&lt;')}`:""}</li>`).join("")}</ul>`:""}
 
 ${scholarship?`<h2>פרשנות ליחידה (scholarship)</h2><div class='schol'>${scholarship.replace(/</g,'&lt;')}</div>`:""}
 
@@ -3556,33 +3571,30 @@ ${note?`<h2>הערת החוקרת לניתוח (לפני מעבר לכתיבה)<
               </div>
             )}
 
-            {/* ממצאים — גבוליים */}
+            {/* ממצאים — גבוליים (מההגדרה הצרה) */}
             {borderlineInd.length>0&&(
               <div style={{marginBottom:"12px",padding:"14px 16px",background:"#78350f22",borderRadius:"8px",border:"1px solid #fbbf2444"}}>
                 <div style={{fontSize:"13px",color:"#fbbf24",fontWeight:"700",marginBottom:"10px"}}>~ ממצאים גבוליים ({borderlineInd.length}) — בדקי בקפידה מול ההגדרה</div>
                 {borderlineInd.map((ind,j)=>renderInd(ind,j,"b","#fbbf24","#78350f22","#fbbf2444","#fcd34d","#94a3b8"))}
               </div>
             )}
+
+            {/* ממצאים לאישור ידני — סומנו "כן" אך אינם ב"מאושרים" של ההגדרה הצרה. סימון = אישור וכלילה ברשימה */}
+            {rejectedInd.length>0&&(
+              <div style={{marginBottom:"12px",padding:"14px 16px",background:"#1e293b",borderRadius:"8px",border:"1px dashed #94a3b8"}}>
+                <div style={{fontSize:"13px",color:"#e2e8f0",fontWeight:"700",marginBottom:"6px"}}>
+                  ⚐ ממצאים לאישור ידני ({rejectedInd.length})
+                </div>
+                <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.5"}}>
+                  אינדיקטורים שסומנו "כן" בשלב ב׳ אבל אינם בהגדרה הצרה המחמירה. סמני ✓ אם לדעתך הטקסט כאן עונה על ההגדרה — אז יצטרפו למאושרים.
+                </div>
+                {rejectedInd.map((ind,j)=>renderInd(ind,j,"m","#a78bfa","#1e293b","#94a3b844","#c4b5fd","#94a3b8"))}
+              </div>
+            )}
           </>
         );
       })()}
 
-      {/* ממצאים — נדחים */}
-      {rejectedInd.length>0&&(
-        <details style={{marginBottom:"12px",padding:"10px 14px",background:"#1e293b",borderRadius:"8px",border:"1px dashed #475569"}}>
-          <summary style={{fontSize:"12px",color:"#94a3b8",fontWeight:"600",cursor:"pointer"}}>
-            ✗ ממצאים נדחים ({rejectedInd.length}) — אינדיקטורים חיוביים שלא עברו את ההגדרה הצרה
-          </summary>
-          <div style={{marginTop:"10px"}}>
-            {rejectedInd.map((ind,j)=>(
-              <div key={j} style={{marginBottom:"5px",padding:"7px 10px",background:"#0f172a",borderRadius:"5px",opacity:0.7,fontSize:"11px",color:"#94a3b8"}}>
-                <div style={{fontWeight:"600",color:"#cbd5e1"}}>#{ind._idx+1} — {(ind._def&&ind._def.paramLabel)||"—"}: {(ind._def&&ind._def.q)||""}</div>
-                {(ind.verse||ind.note)&&<div style={{marginTop:"3px",fontSize:"10px"}}>{ind.verse&&`פסוק: ${ind.verse}`}{ind.verse&&ind.note&&" · "}{ind.note}</div>}
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
 
       {/* פרשנות מהיחידה */}
       {scholarship&&(
@@ -3643,7 +3655,8 @@ ${note?`<h2>הערת החוקרת לניתוח (לפני מעבר לכתיבה)<
 
         <div style={{marginTop:"12px",display:"flex",gap:"10px",justifyContent:"space-between",flexWrap:"wrap",alignItems:"center"}}>
           <div style={{fontSize:"11px",color:"#94a3b8"}}>
-            {`סומנו ${Object.values(itemChecks).filter(Boolean).length} מתוך ${approvedInd.length+borderlineInd.length} ממצאים ככאלה שעברתי עליהם`}
+            {`סומנו ${Object.values(itemChecks).filter(Boolean).length} מתוך ${approvedInd.length+borderlineInd.length+rejectedInd.length}`}
+            {userApprovedFromRejected.length>0&&<span style={{color:"#a78bfa"}}> · ⚐ {userApprovedFromRejected.length} אושרו ידנית ומצטרפים למאושרים</span>}
           </div>
           <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
             <button onClick={downloadAllAsWord}
@@ -4428,6 +4441,7 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
         getNarrowDef={getNarrowDef}
         getConceptSummary={getConceptSummary}
         setConceptSummary={setConceptSummary}
+        getVerified={getVerified}
         unitsForCurrentConcept={unitsForCurrentConcept}
         onBack={backToSelect}
       />
