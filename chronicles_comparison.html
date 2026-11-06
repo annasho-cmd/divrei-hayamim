@@ -451,11 +451,17 @@ ${otherUnitsContext}
 
       const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,
+        body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:1500,
           messages:[{role:'user',content:prompt}]})
       });
       const data=await res.json();
-      setAiResult(data.content?.map(b=>b.text||'').join('')||'שגיאה בתגובה');
+      if(data.content){
+        setAiResult(data.content.map(b=>b.text||'').join('')||'(תגובה ריקה)');
+      }else if(data.error){
+        setAiResult('שגיאת API: '+(data.error.message||JSON.stringify(data.error)));
+      }else{
+        setAiResult('תגובה לא צפויה מהשרת:\n'+JSON.stringify(data).substring(0,500));
+      }
     }catch(e){setAiResult('שגיאת חיבור: '+e.message);}
     setAiLoading(false);
   }
@@ -497,11 +503,17 @@ ${ctx}
 
       const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,
+        body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:1000,
           messages:[{role:'user',content:prompt}]})
       });
       const data=await res.json();
-      setAiResult(data.content?.map(b=>b.text||'').join('')||'שגיאה בתגובה');
+      if(data.content){
+        setAiResult(data.content.map(b=>b.text||'').join('')||'(תגובה ריקה)');
+      }else if(data.error){
+        setAiResult('שגיאת API: '+(data.error.message||JSON.stringify(data.error)));
+      }else{
+        setAiResult('תגובה לא צפויה מהשרת:\n'+JSON.stringify(data).substring(0,500));
+      }
     }catch(e){setAiResult('שגיאת חיבור: '+e.message);}
     setAiLoading(false);
   }
