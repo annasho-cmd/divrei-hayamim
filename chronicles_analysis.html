@@ -1293,6 +1293,80 @@ function Header({msg,tab,setTab,analysisMode,setAnalysisMode}){
 // כל הקוד כאן הוא שכבת תצוגה מעל אותם getE/setE/getParams — אינו נוגע בשמירה.
 // ════════════════════════════════════════════════════════════════════════
 const AI_URL="https://anthropic-proxy.anna-sho-ea8.workers.dev";
+// ─────────────────────────────────────────────────────────────────────────
+// בונה פרומפט אחיד ליצירת הערת השוואה (compareNote) ע"י AI.
+// משמש גם ביחידה בודדת וגם בבאצ' של כל היחידות.
+// decisionsOrMode: "all-accepted" (באצ' — כל הגבוליים קובלו) או אובייקט {idx: 'accepted'|'rejected'}
+// ─────────────────────────────────────────────────────────────────────────
+function buildCompareNotePromptForAI(unit, conceptName, character, getE, getParams, getNarrowDef, decisionsOrMode){
+  const charName=character==="david"?"דוד":"שלמה";
+  const ec=getE(unit.id,conceptName,"chronicles")||{};
+  const params=getParams?getParams(conceptName):[];
+  const validParams=validParamDefs(params);
+  const positives=(ec.params||[])
+    .map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(conceptName,i),_def:params[i]||validParams[i]}:null)
+    .filter(Boolean);
+  const approvedAuto=positives.filter(x=>x._narrow==="approved");
+  const borderline=positives.filter(x=>x._narrow==="borderline");
+  let acceptedBorderlines=[];
+  if(decisionsOrMode==="all-accepted"){ acceptedBorderlines=borderline; }
+  else { const d=decisionsOrMode||{}; acceptedBorderlines=borderline.filter(i=>d[i._idx]==="accepted"); }
+  const effectiveApproved=[...approvedAuto,...acceptedBorderlines];
+  const ndef=getNarrowDef?getNarrowDef(conceptName):"";
+  const chrText=(unit.chroniclesText||"").substring(0,2500);
+  const srcText=(unit.sourceText||"").substring(0,2500);
+  const schol=(unit.scholarship||"").substring(0,2500);
+  const explicitNote=ec.explicit_note||"";
+  // חילוץ מילים מהשדה הסמנטי שהופיעו בטקסט
+  const customSem=(window.__rawData&&window.__rawData.customSemantic)||{};
+  const semData=(typeof SEMANTIC!=='undefined'?SEMANTIC:{})[conceptName]||customSem[conceptName]||null;
+  const posWords=((semData&&semData.pos)||"").split(/[,،;]/).map(s=>s.trim()).filter(w=>w.length>0);
+  const semMatches=chrText?posWords.filter(w=>w&&chrText.indexOf(w)>=0):[];
+  const semFieldLine=semMatches.length
+    ?`מופעים גלויים של השדה הסמנטי בטקסט דה"י: ${semMatches.join(" · ")}`
+    :`אין מופעים גלויים של השדה הסמנטי של "${conceptName}" בטקסט דה"י`;
+  const fmtInd=(ind)=>`- אינדיקטור #${ind._idx+1} (${(ind._def&&ind._def.paramLabel)||""}): ${(ind._def&&ind._def.q)||""}${ind.verse?` [פסוק: ${ind.verse}]`:""}${ind.note?` — ${ind.note}`:""}`;
+  const approvedList=effectiveApproved.length?effectiveApproved.map(fmtInd).join("\n"):"(אין)";
+  const hasParallel=!!srcText;
+
+  return `אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד/שלמה בדברי הימים. אנא כתוב הערת השוואה (compareNote) ליחידה ספרותית בודדת.
+
+הדמות: ${charName}
+המושג: ${conceptName}
+היחידה: ${unit.name} (${unit.chapter||""})
+מקבילה: ${unit.sourceRef||"יחידת סונדרגוט — אין מקבילה"}
+
+ההגדרה הצרה מפרק ב׳ של המושג:
+${ndef||"(לא הוזנה)"}
+
+טקסט דה"י:
+${chrText||"—"}
+
+${hasParallel?`טקסט המקבילה:\n${srcText}`:"אין טקסט מקבילה (יחידת סונדרגוט)"}
+
+השדה הסמנטי הגלוי:
+${semFieldLine}
+${explicitNote?`\nהערת החוקרת על השדה הגלוי: ${explicitNote}`:""}
+
+ממצאים מאושרים (עונים על ההגדרה הצרה):
+${approvedList}
+
+${schol?`פרשנות שאספה החוקרת ליחידה (scholarship):\n${schol}`:""}
+
+הנחיות לכתיבת הערת ההשוואה:
+1. כתוב 2-4 פסקאות בעברית מחקרית, בגוף ראשון של החוקרת.
+2. פתח בקביעה ברורה על נוכחות / היעדר "${conceptName}" ביחידה ועוצמתה לפי ההגדרה הצרה.
+3. **הקדש פסקה לשדה הסמנטי הגלוי**: ציין איזה מילים מהשדה מופיעות או חסרות, איפה, ומה המשמעות.
+4. ${hasParallel
+    ?"**הקדש פסקה לפעולת הכרוניסט מול המקבילה**: מה הוא שינה, הוסיף או השמיט לעומת שמ\"ב/מל\"א ואיך זה משפיע על נוכחות המושג. צטט דוגמה מפורשת."
+    :"**אין מקבילה — התייחס רק לשדה הגלוי ולממצאים.** ציין בפירוש שזו יחידת סונדרגוט."}
+5. התבסס אך ורק על הממצאים המאושרים ועל הטקסטים — אל תמציא ראיות.
+6. צטט פסוקים ספציפיים ואת הפרשנים שאוזכרו בחומר הפרשנות, עם מספרי עמודים אם יש.
+7. אם שום דבר לא עונה על ההגדרה הצרה — ציין זאת בפירוש כממצא.
+
+החזר רק את הטקסט של הערת ההשוואה, ללא כותרת וללא הסברים נוספים.`;
+}
+
 async function aiCall(prompt,maxTokens){
   const res=await fetch(AI_URL,{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:maxTokens,messages:[{role:"user",content:prompt}]})});
@@ -3037,17 +3111,26 @@ function ConceptSummary({character,dimension,conceptName,allUnits,getE,getParams
     const tableRows=rows.map(r=>{
       const cellData=perUnit[r.u.id]||{};
       const versesHtml=r.verses.length?r.verses.join(", "):"—";
-      const indsHtml=r.indLabels.length?r.indLabels.map(x=>`<div>${x.replace(/</g,'&lt;')}</div>`).join(""):"—";
-      const notesHtml=r.notes.length?r.notes.map(n=>`<div style='margin-bottom:4px;'>${n.replace(/</g,'&lt;')}</div>`).join(""):"—";
+      // עמודת אינדיקטור — טקסט מלא (q), לא paramLabel
+      const allInds=[...r.approved,...r.borderline];
+      const indsHtml=allInds.length?allInds.map(x=>{
+        const mark=r.approved.indexOf(x)>=0?"<span style='color:#15803d;font-weight:700;'>✓</span>":"<span style='color:#a16207;font-weight:700;'>~</span>";
+        return `<div style='margin-bottom:4px;'>${mark} <strong>אינדיקטור #${x._idx+1}</strong>: ${((x._def&&x._def.q)||"").replace(/</g,'&lt;')}</div>`;
+      }).join(""):"—";
+      // עמודת ראיה — פסוקים + הערות
+      const evidenceHtml=allInds.length?allInds.map(x=>{
+        let out="";
+        if(x.verse) out+=`<div style='color:#1e40af;font-weight:700;font-size:9pt;'>📍 פסוק ${x.verse.replace(/</g,'&lt;')}</div>`;
+        if(x.note) out+=`<div>${x.note.replace(/</g,'&lt;')}</div>`;
+        return out?`<div style='margin-bottom:6px;'>${out}</div>`:"";
+      }).join(""):"—";
       const scholarHtml=r.scholarMatches.length?r.scholarMatches.map(s=>`<div>${s.replace(/</g,'&lt;')}</div>`).join(""):(r.schol?"— (ראי scholarship ליחידה)":"—");
-      const match=cellData.match||"—";
       const contrib=cellData.contribution||"—";
       return `<tr>
   <td>${(r.u.name||"?").replace(/</g,'&lt;')} <br/><span style='color:#777;font-size:9pt;'>(${r.u.chapter||""})</span><br/><em style='color:#555;font-size:9pt;'>פסוקים: ${versesHtml}</em></td>
-  <td>${indsHtml}</td>
-  <td style='font-size:10pt;'>${notesHtml}</td>
+  <td style='font-size:10pt;'>${indsHtml}</td>
+  <td style='font-size:10pt;'>${evidenceHtml}</td>
   <td style='font-size:10pt;'>${scholarHtml}</td>
-  <td style='text-align:center;font-weight:700;'>${match.replace(/</g,'&lt;')}</td>
   <td style='font-size:10pt;'>${contrib.replace(/</g,'&lt;')}</td>
 </tr>`;
     }).join("");
@@ -3081,9 +3164,8 @@ tr:nth-child(even) td{background:#f8fafc;}
 <thead><tr>
 <th>יחידה ספרותית ופסוקים</th>
 <th>האינדיקטור שעומד בהגדרה הצרה</th>
-<th>הראיה והסברה</th>
+<th>הראיה והסברה (פסוקים + הערות)</th>
 <th>פרשנים ועמ'</th>
-<th>מידת ההתאמה</th>
 <th>התרומה הייחודית לדיון</th>
 </tr></thead>
 <tbody>${tableRows}</tbody>
@@ -3134,17 +3216,17 @@ tr:nth-child(even) td{background:#f8fafc;}
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px",direction:"rtl"}}>
             <thead>
               <tr style={{background:"#0f172a"}}>
-                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"140px"}}>יחידה ספרותית ופסוקים</th>
-                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"160px"}}>האינדיקטור שעומד בהגדרה הצרה</th>
-                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"220px"}}>הראיה והסברה</th>
+                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"150px"}}>יחידה ספרותית ופסוקים</th>
+                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"240px"}}>האינדיקטור שעומד בהגדרה הצרה</th>
+                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"260px"}}>הראיה והסברה (פסוקים + הערות)</th>
                 <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"140px"}}>פרשנים ועמ'</th>
-                <th style={{padding:"10px",textAlign:"center",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"110px"}}>מידת ההתאמה</th>
                 <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"180px"}}>התרומה הייחודית לדיון</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r,i)=>{
                 const cell=perUnit[r.u.id]||{};
+                const allRelevant=[...r.approved,...r.borderline];
                 return(
                   <tr key={r.u.id} style={{background:i%2?"#0f172a":"#1e293b"}}>
                     <td style={{padding:"8px",color:"#f1f5f9",verticalAlign:"top",border:"1px solid #334155"}}>
@@ -3152,32 +3234,34 @@ tr:nth-child(even) td{background:#f8fafc;}
                       <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>({r.u.chapter})</div>
                       {r.verses.length>0&&<div style={{fontSize:"10px",color:"#cbd5e1",marginTop:"4px"}}>פסוקים: {r.verses.join(", ")}</div>}
                     </td>
-                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
-                      {r.approved.length>0&&(
-                        <div style={{marginBottom:"4px"}}>
-                          <span style={{color:"#34d399",fontWeight:"700"}}>✓ מאושר:</span><br/>
-                          {r.approved.map((x,j)=><div key={j} style={{marginRight:"8px"}}>#{x._idx+1} {(x._def&&x._def.paramLabel)||""}</div>)}
+                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px",lineHeight:"1.5"}}>
+                      {r.approved.map((x,j)=>{
+                        const isManual=r.userApproved&&r.userApproved.indexOf(x)>=0;
+                        return(
+                          <div key={"a"+j} style={{marginBottom:"6px",padding:"5px 7px",background:"#06402822",borderRight:"2px solid #34d399",borderRadius:"3px"}}>
+                            <div style={{color:"#86efac",fontWeight:"700",fontSize:"10px",marginBottom:"2px"}}>✓ מאושר{isManual?" ⚐":""}  ·  אינדיקטור #{x._idx+1}</div>
+                            <div style={{color:"#e2e8f0",fontSize:"11px"}}>{(x._def&&x._def.q)||((x._def&&x._def.paramLabel)||"")}</div>
+                          </div>
+                        );
+                      })}
+                      {r.borderline.map((x,j)=>(
+                        <div key={"b"+j} style={{marginBottom:"6px",padding:"5px 7px",background:"#78350f22",borderRight:"2px solid #fbbf24",borderRadius:"3px"}}>
+                          <div style={{color:"#fcd34d",fontWeight:"700",fontSize:"10px",marginBottom:"2px"}}>~ גבולי  ·  אינדיקטור #{x._idx+1}</div>
+                          <div style={{color:"#e2e8f0",fontSize:"11px"}}>{(x._def&&x._def.q)||((x._def&&x._def.paramLabel)||"")}</div>
                         </div>
-                      )}
-                      {r.borderline.length>0&&(
-                        <div>
-                          <span style={{color:"#fbbf24",fontWeight:"700"}}>~ גבולי:</span><br/>
-                          {r.borderline.map((x,j)=><div key={j} style={{marginRight:"8px"}}>#{x._idx+1} {(x._def&&x._def.paramLabel)||""}</div>)}
-                        </div>
-                      )}
+                      ))}
                     </td>
                     <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px",lineHeight:"1.6"}}>
-                      {r.notes.length>0?r.notes.map((n,j)=><div key={j} style={{marginBottom:"4px"}}>• {n.length>160?n.substring(0,160)+"...":n}</div>):<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>}
+                      {allRelevant.length>0?allRelevant.map((x,j)=>(
+                        <div key={j} style={{marginBottom:"7px",paddingBottom:"6px",borderBottom:j<allRelevant.length-1?"1px dashed #334155":"none"}}>
+                          {x.verse&&<div style={{fontSize:"10px",color:"#93c5fd",fontWeight:"700"}}>📍 פסוק {x.verse}</div>}
+                          {x.note&&<div style={{marginTop:"3px",color:"#e2e8f0"}}>{x.note.length>220?x.note.substring(0,220)+"...":x.note}</div>}
+                          {!x.verse&&!x.note&&<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>}
+                        </div>
+                      )):<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>}
                     </td>
                     <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"10px"}}>
                       {r.scholarMatches.length>0?r.scholarMatches.slice(0,5).map((s,j)=><div key={j}>{s}</div>):(r.schol?<span style={{color:"#c084fc"}}>יש scholarship — בדקי ידנית</span>:<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>)}
-                    </td>
-                    <td style={{padding:"6px",border:"1px solid #334155",verticalAlign:"top"}}>
-                      <select value={cell.match||""} onChange={e=>updateCell(r.u.id,"match",e.target.value)}
-                        style={{width:"100%",padding:"5px",background:"#0f172a",border:"1px solid #334155",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px",direction:"rtl"}}>
-                        <option value="">— בחרי —</option>
-                        {MATCH_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
-                      </select>
                     </td>
                     <td style={{padding:"6px",border:"1px solid #334155",verticalAlign:"top"}}>
                       <textarea value={cell.contribution||""} onChange={e=>updateCell(r.u.id,"contribution",e.target.value)}
@@ -3213,6 +3297,10 @@ tr:nth-child(even) td{background:#f8fafc;}
       {/* כפתורי פעולה */}
       <div style={{display:"flex",gap:"10px",justifyContent:"flex-end",flexWrap:"wrap",alignItems:"center"}}>
         {savedFlash&&<span style={{color:"#34d399",fontSize:"12px",fontWeight:"700"}}>✓ נשמר</span>}
+        <button onClick={downloadCompareNotesReportAsWord}
+          style={{padding:"10px 16px",borderRadius:"7px",border:"1px solid #2563eb",cursor:"pointer",background:"transparent",color:"#60a5fa",fontSize:"12px",fontWeight:"700"}}>
+          📋 דו"ח הערות השוואה למושג
+        </button>
         <button onClick={downloadReportAsWord}
           style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#2563eb",color:"white",fontSize:"13px",fontWeight:"700"}}>
           📥 הורד דו"ח כקובץ Word
@@ -3224,6 +3312,45 @@ tr:nth-child(even) td{background:#f8fafc;}
       </div>
     </div>
   );
+
+  function downloadCompareNotesReportAsWord(){
+    const hebDate=new Date().toLocaleDateString("he-IL");
+    const sectionsHtml=rows.map(r=>{
+      const cn=r.compareN||"<em style='color:#777;'>(לא נכתבה הערת השוואה ליחידה זו)</em>";
+      return `<h3>${(r.u.name||"?").replace(/</g,'&lt;')} <span style='color:#64748b;font-size:10pt;'>(${r.u.chapter||""})</span></h3>
+<div class='compare'>${cn.replace(/</g,'&lt;')}</div>`;
+    }).join("\n");
+    const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'/>
+<title>דו"ח הערות השוואה — ${conceptName}</title>
+<style>
+body{font-family:'David','Times New Roman',serif;direction:rtl;text-align:right;font-size:12pt;line-height:1.8;}
+h1{font-size:18pt;color:#1a365d;border-bottom:2px solid #1a365d;padding-bottom:6px;}
+h2{font-size:14pt;color:#2c5282;border-bottom:1px solid #cbd5e1;padding-bottom:4px;margin-top:20px;}
+h3{font-size:12pt;color:#1e40af;margin-top:18px;}
+.meta{background:#f1f5f9;padding:10px;border:1px solid #cbd5e1;margin-bottom:14px;font-size:10pt;}
+.ndef{background:#fef9c3;padding:12px;border-right:4px solid #ca8a04;margin-bottom:14px;font-size:11pt;white-space:pre-wrap;}
+.compare{background:#eef2ff;padding:12px;border-right:4px solid #4f46e5;margin-bottom:12px;font-size:11pt;white-space:pre-wrap;line-height:1.85;}
+</style></head>
+<body>
+<h1>דו"ח הערות השוואה — ${conceptName} ב${charName}</h1>
+<div class='meta'><strong>הדמות:</strong> ${charName} · <strong>הופק:</strong> ${hebDate} · <strong>יחידות:</strong> ${rows.length}</div>
+
+<h2>ההגדרה הצרה למושג "${conceptName}"</h2>
+<div class='ndef'>${(getNarrowDef?getNarrowDef(conceptName):"").replace(/</g,'&lt;')||"—"}</div>
+
+<h2>הערות השוואה ליחידות</h2>
+${sectionsHtml}
+</body></html>`;
+    const blob=new Blob(['﻿'+html],{type:"application/msword"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    const safeConcept=conceptName.replace(/[\/\s]/g,'_');
+    a.download=`הערות_השוואה_${safeConcept}_${charName}_${new Date().toISOString().slice(0,10)}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -3342,65 +3469,10 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,get
   async function generateCompareNoteByAI(){
     setGenerating(true);
     try{
-      const ndef=getNarrowDef?getNarrowDef(conceptName):"";
-      const chrText=(unit.chroniclesText||"").substring(0,2500);
-      const srcText=(unit.sourceText||"").substring(0,2500);
-      const schol=(unit.scholarship||"").substring(0,3000);
-      // בניית רשימת מאושרים סופית = אוטומטיים + גבוליים שקובלו
-      const acceptedBorderlines=borderlineInd.filter(i=>borderlineDecisions[i._idx]==="accepted");
-      const rejectedBorderlines=borderlineInd.filter(i=>borderlineDecisions[i._idx]==="rejected");
-      const pendingBorderlines=borderlineInd.filter(i=>!borderlineDecisions[i._idx]);
-      const finalApproved=[...approvedInd,...acceptedBorderlines];
-
-      const fmtInd=(ind)=>`- אינדיקטור #${ind._idx+1} (${(ind._def&&ind._def.paramLabel)||""}): ${(ind._def&&ind._def.q)||""}${ind.verse?` [פסוק: ${ind.verse}]`:""}${ind.note?` — ${ind.note}`:""}`;
-      const approvedList=finalApproved.length?finalApproved.map(fmtInd).join("\n"):"(אין)";
-      const pendingList=pendingBorderlines.length?pendingBorderlines.map(fmtInd).join("\n"):"(אין)";
-      const rejectedList=rejectedBorderlines.length?rejectedBorderlines.map(fmtInd).join("\n"):"(אין)";
-
-      const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד/שלמה בדברי הימים. אנא כתוב הערת השוואה (compareNote) ליחידה ספרותית בודדת.
-
-הדמות: ${charName}
-המושג: ${conceptName}
-היחידה: ${unit.name} (${unit.chapter||""})
-מקבילה: ${unit.sourceRef||"יחידת סונדרגוט — אין מקבילה"}
-
-ההגדרה הצרה מפרק ב׳ של המושג:
-${ndef||"(לא הוזנה)"}
-
-טקסט דה"י:
-${chrText||"—"}
-
-${srcText?`טקסט המקבילה:\n${srcText}`:"אין טקסט מקבילה"}
-
-ממצאים מאושרים (עונים על ההגדרה הצרה):
-${approvedList}
-
-ממצאים גבוליים שקובלו ומצטרפים למאושרים:
-${acceptedBorderlines.length?acceptedBorderlines.map(fmtInd).join("\n"):"(אין)"}
-
-ממצאים גבוליים שנדחו (לא ייכללו):
-${rejectedList}
-
-ממצאים גבוליים שעוד לא הוכרעו (ציין אותם קצר כפתוחים, אם רלוונטי):
-${pendingList}
-
-${schol?`פרשנות שאספה החוקרת ליחידה (scholarship):\n${schol}`:""}
-
-הנחיות לכתיבת הערת ההשוואה:
-1. כתוב 2-4 פסקאות בעברית מחקרית, בגוף ראשון של החוקרת.
-2. פתח בקביעה ברורה: האם המושג "${conceptName}" נוכח ביחידה או נעדר? אם נוכח — באיזו עוצמה?
-3. התבסס אך ורק על הממצאים המאושרים והגבוליים שקובלו — אל תביא ראיות שנדחו או שלא הוזכרו.
-4. אם יש מקבילה — התייחס במפורש למה הכרוניסט ${srcText?"שינה / הוסיף / השמיט":"יצר (סונדרגוט)"} ביחס לדגם הקודם.
-5. צטט פסוקים ספציפיים ואת הפרשנים שאוזכרו בחומר הפרשנות, עם מספרי עמודים אם יש.
-6. אם שום דבר לא עונה על ההגדרה הצרה — ציין זאת בפירוש כממצא.
-7. סיים בשורה אחת על התרומה הייחודית של היחידה לדיון על המושג.
-
-החזר רק את הטקסט של הערת ההשוואה, ללא כותרת וללא הסברים נוספים.`;
-
+      const prompt=buildCompareNotePromptForAI(unit,conceptName,character,getE,getParams,getNarrowDef,borderlineDecisions);
       const response=await aiCall(prompt,4000);
       const text=(response||"").trim();
       if(!text){throw new Error("תגובה ריקה מ-AI");}
-      // ממלא את compareNote בעריכה — החוקרת יכולה לערוך לפני שמירה
       setEditCompareNoteText(text);
       setEditCompareNoteMode(true);
     }catch(e){
@@ -4020,6 +4092,8 @@ function StageC({allUnits,allConcepts,dim4concept,getE,setE,getParams,getCompare
   const [showPreWriting,setShowPreWriting]=useState(false);
   // מצב לניתוח ברמת הדמות (6 השלבים ה"ישנים") מול ניתוח ברמת יחידה (החדש)
   const [analysisScope,setAnalysisScope]=useState("unit"); // "unit" (ברירת מחדל) | "character"
+  // סטטוס פעולות באצ' (אישור כולל של גבוליים + כתיבת הערות השוואה)
+  const [batchStatus,setBatchStatus]=useState(null); // {mode:'approve'|'compare', total, done, current, log:[]}
 
   // פילטור של params לפי הגדרה צרה (תלוי בשם המושג ובמתג)
   function filterParamsNarrow(ecParams){
@@ -4441,6 +4515,95 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
     });
   }
 
+  // ─────────────────────────────────────────────────────────────────────
+  // פעולות באצ' ברמת הדמות (ללא רוח/ריח)
+  // ─────────────────────────────────────────────────────────────────────
+  const BATCH_EXCLUDE=["רוח/ריח"]; // מושג שלא נוגעים בו
+  function characterUnits(){
+    return (allUnits||[]).filter(u=>{
+      const uChar=u.character||"david";
+      if(uChar!==character) return false;
+      const s=getUnitSummary?getUnitSummary(u.id):null;
+      if(s&&s.notInThesis) return false;
+      return true;
+    });
+  }
+  // (1) אשרי אוטומטית את כל הגבוליים לדמות — חוץ ממושגי BATCH_EXCLUDE
+  async function batchApproveAllBorderlines(){
+    if(!character){ alert("בחרי קודם דמות."); return; }
+    const charName2=character==="david"?"דוד":"שלמה";
+    if(!confirm(`לאשר אוטומטית את כל הגבוליים (בנוסף לאוטומטיים שכבר מאושרים) בכל היחידות של ${charName2}, חוץ ממושג "רוח/ריח"?\n\nזו פעולה שמשקפת החלטה גורפת. תמיד אפשר לשנות ידנית בכל יחידה.`)) return;
+    setBatchStatus({mode:"approve",total:0,done:0,current:"",log:[]});
+    const units=characterUnits();
+    const concepts=(allConcepts||[]).filter(c=>!BATCH_EXCLUDE.includes(c));
+    const tasks=[];
+    units.forEach(u=>{
+      const s=getUnitSummary?getUnitSummary(u.id):null;
+      const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
+      concepts.forEach(cname=>{
+        if(notRel.includes(cname)) return;
+        const ec=getE(u.id,cname,"chronicles")||{};
+        const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(cname,i)}:null).filter(Boolean);
+        const bord=positives.filter(x=>x._narrow==="borderline");
+        if(bord.length>0||positives.filter(x=>x._narrow==="approved").length>0){
+          tasks.push({u,cname,borderlineIdxs:bord.map(b=>b._idx)});
+        }
+      });
+    });
+    setBatchStatus(s=>({...s,total:tasks.length}));
+    for(let i=0;i<tasks.length;i++){
+      const {u,cname,borderlineIdxs}=tasks[i];
+      const existing=getVerified?getVerified(character,cname,u.id):null;
+      const decisions={...((existing&&existing.borderlineDecisions)||{})};
+      borderlineIdxs.forEach(idx=>{ if(!decisions[idx]) decisions[idx]="accepted"; });
+      const accepted=Object.entries(decisions).filter(([_,v])=>v==="accepted").map(([k])=>parseInt(k,10));
+      setVerified(character,cname,u.id,{...(existing||{}),itemChecks:(existing&&existing.itemChecks)||{},note:(existing&&existing.note)||"",borderlineDecisions:decisions,userApprovedIdxs:accepted,verifiedAt:Date.now()});
+      setBatchStatus(s=>s?{...s,done:i+1,current:`${cname} · ${u.name}`}:null);
+    }
+    setBatchStatus(s=>s?{...s,done:tasks.length,current:"✓ הסתיים"}:null);
+    setTimeout(()=>setBatchStatus(null),3000);
+    alert(`✓ אושרו אוטומטית ${tasks.length} צמדי (יחידה×מושג).`);
+  }
+  // (2) כתיבת הערות השוואה בבאצ' לכל הצמדים (יחידה×מושג) של הדמות — חוץ מרוח
+  async function batchGenerateAllCompareNotes(){
+    if(!character){ alert("בחרי קודם דמות."); return; }
+    const charName2=character==="david"?"דוד":"שלמה";
+    if(!confirm(`לכתוב הערת השוואה לכל (יחידה×מושג) של ${charName2}, חוץ ממושג "רוח/ריח"?\n\nזו פעולה שעשויה לקחת מספר דקות ולעלות כסף על קריאות AI. אפשר לעצור באמצע (רענון דף).\n\nהערות השוואה קיימות ידרסו — נרחיב אותן בגרסאות החדשות.`)) return;
+    const units=characterUnits();
+    const concepts=(allConcepts||[]).filter(c=>!BATCH_EXCLUDE.includes(c));
+    const tasks=[];
+    units.forEach(u=>{
+      const s=getUnitSummary?getUnitSummary(u.id):null;
+      const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
+      concepts.forEach(cname=>{
+        if(notRel.includes(cname)) return;
+        const ec=getE(u.id,cname,"chronicles")||{};
+        const anyPositive=(ec.params||[]).some(p=>p&&p.found===true);
+        if(anyPositive) tasks.push({u,cname});
+      });
+    });
+    setBatchStatus({mode:"compare",total:tasks.length,done:0,current:"",log:[]});
+    for(let i=0;i<tasks.length;i++){
+      const {u,cname}=tasks[i];
+      setBatchStatus(s=>s?{...s,done:i,current:`${cname} · ${u.name}`}:null);
+      try{
+        // השתמשי בהחלטות שמורות אם יש; אחרת — קבל את כל הגבוליים
+        const v=getVerified?getVerified(character,cname,u.id):null;
+        const decisions=(v&&v.borderlineDecisions)||"all-accepted";
+        const prompt=buildCompareNotePromptForAI(u,cname,character,getE,getParams,getNarrowDef,decisions);
+        const resp=await aiCall(prompt,4000);
+        const text=(resp||"").trim();
+        if(text&&setCompareNote) setCompareNote(u.id,cname,text);
+      }catch(e){
+        console.error("batch compareNote err:",cname,u.name,e);
+        setBatchStatus(s=>s?{...s,log:[...(s.log||[]),`❌ ${cname} · ${u.name}: ${e.message||e}`]}:null);
+      }
+    }
+    setBatchStatus(s=>s?{...s,done:tasks.length,current:"✓ הסתיים"}:null);
+    alert(`✓ נכתבו הערות השוואה עבור ${tasks.length} צמדים.`);
+    setTimeout(()=>setBatchStatus(null),5000);
+  }
+
   // ══════════════════ מסך בחירה ══════════════════
   if(screen==="select"){
     // בניית רשימת ממדים
@@ -4461,8 +4624,48 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
       <div style={{maxWidth:"900px",margin:"0 auto",padding:"28px 20px"}}>
         <div style={{marginBottom:"24px"}}>
           <div style={{fontSize:"22px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>שלב ג׳ — סינתזה של מושג ברמת דמות</div>
-          <div style={{fontSize:"13px",color:"#94a3b8"}}>ניתוח מושג בודד לרוחב כל היחידות של דמות אחת, ב-6 שלבים מדורגים עם עזרת AI.</div>
+          <div style={{fontSize:"13px",color:"#94a3b8"}}>ניתוח מושג בודד לרוחב כל היחידות של דמות אחת.</div>
         </div>
+
+        {/* פעולות באצ' — זמינות כשדמות נבחרה */}
+        {character&&(
+          <div style={{marginBottom:"18px",padding:"12px 14px",background:"#1e293b",borderRadius:"10px",border:"1px solid #8b5cf644"}}>
+            <div style={{fontSize:"12px",color:"#a78bfa",fontWeight:"700",marginBottom:"8px"}}>⚡ פעולות אוטומציה עבור {character==="david"?"דוד":"שלמה"} (חוץ מרוח/ריח)</div>
+            <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+              <button onClick={batchApproveAllBorderlines} disabled={!!batchStatus}
+                style={{padding:"8px 14px",borderRadius:"6px",border:"none",cursor:batchStatus?"wait":"pointer",background:batchStatus?"#475569":"#8b5cf6",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                ✓ אשרי אוטומטית את כל הגבוליים
+              </button>
+              <button onClick={batchGenerateAllCompareNotes} disabled={!!batchStatus}
+                style={{padding:"8px 14px",borderRadius:"6px",border:"none",cursor:batchStatus?"wait":"pointer",background:batchStatus?"#475569":"#2563eb",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                ✍ כתבי הערות השוואה לכל (יחידה×מושג)
+              </button>
+            </div>
+            <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"6px",lineHeight:"1.5"}}>
+              • "אשרי אוטומטית" — מגדיר את כל הגבוליים כ"קובלו" (מצטרפים למאושרים). מיידי.<br/>
+              • "כתבי הערות השוואה" — קורא ל-AI לכל צמד עם ממצאים חיוביים. מספר דקות, עולה כסף.
+            </div>
+            {batchStatus&&(
+              <div style={{marginTop:"10px",padding:"10px",background:"#0f172a",borderRadius:"6px",border:"1px solid #8b5cf6"}}>
+                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"4px"}}>
+                  {batchStatus.mode==="approve"?"⏳ מאשר גבוליים...":"⏳ כותב הערות השוואה..."}
+                  {batchStatus.total>0&&` (${batchStatus.done}/${batchStatus.total})`}
+                </div>
+                {batchStatus.current&&<div style={{fontSize:"10px",color:"#cbd5e1"}}>נוכחי: {batchStatus.current}</div>}
+                {batchStatus.total>0&&(
+                  <div style={{marginTop:"6px",height:"6px",background:"#334155",borderRadius:"3px",overflow:"hidden"}}>
+                    <div style={{height:"100%",width:`${(batchStatus.done/batchStatus.total)*100}%`,background:"#a78bfa",transition:"width 0.3s"}}></div>
+                  </div>
+                )}
+                {batchStatus.log&&batchStatus.log.length>0&&(
+                  <div style={{marginTop:"6px",fontSize:"10px",color:"#fca5a5",maxHeight:"80px",overflowY:"auto"}}>
+                    {batchStatus.log.map((l,i)=><div key={i}>{l}</div>)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* שלב 1: בחירת דמות */}
         <div style={{marginBottom:"22px"}}>
