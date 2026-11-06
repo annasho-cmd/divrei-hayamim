@@ -1279,7 +1279,7 @@ function Header({msg,tab,setTab,analysisMode,setAnalysisMode}){
           ))}
         </div>
         <span style={{width:"1px",height:"18px",background:"#334155",display:"inline-block"}}/>
-        {[["home","🏠"],["stagea","🔬 שלב א׳"],["stageb","✨ שלב ב׳"],["stagec","📊 שלב ג׳"],["rmatrix","🗂️ מטריצת מחקר"],["indmatrix","📊 ריכוז אינדיקטורים"],["reports","📄 דו״חות"],["byconcept","מאגר מושגים"]].map(([t,l])=>(
+        {[["home","🏠"],["stagea","🔬 שלב א׳"],["stageb","✨ שלב ב׳"],["stagec","📊 שלב ג׳"],["staged","🎯 שלב ד׳"],["rmatrix","🗂️ מטריצת מחקר"],["indmatrix","📊 ריכוז אינדיקטורים"],["reports","📄 דו״חות"],["byconcept","מאגר מושגים"]].map(([t,l])=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:"4px 10px",borderRadius:"14px",border:"none",cursor:"pointer",fontSize:"12px",fontWeight:"600",background:tab===t?"#818cf8":"transparent",color:tab===t?"white":"#64748b"}}>{l}</button>
         ))}
       </div>
@@ -3171,11 +3171,6 @@ tr:nth-child(even) td{background:#f8fafc;}
 <tbody>${tableRows}</tbody>
 </table>
 
-<h2>סיכום מחקרי של המושג כולו</h2>
-<div class='question'><span class='q-label'>1. מה אפשר לטעון על נוכחות המושג בעיצוב דוד?</span>${(q1||"—").replace(/</g,'&lt;')}</div>
-<div class='question'><span class='q-label'>2. אילו יחידות מספקות את הראיות החזקות ביותר?</span>${(q2||"—").replace(/</g,'&lt;')}</div>
-<div class='question'><span class='q-label'>3. האם היחידות משלימות זו את זו, חוזרות על אותה ראיה או מציגות מתח וכשל?</span>${(q3||"—").replace(/</g,'&lt;')}</div>
-<div class='question'><span class='q-label'>4. היכן יש התאמה לדגם הנבואי, והיכן מתגלה פער?</span>${(q4||"—").replace(/</g,'&lt;')}</div>
 </body></html>`;
 
     const blob=new Blob(['﻿'+html],{type:"application/msword"});
@@ -3276,22 +3271,9 @@ tr:nth-child(even) td{background:#f8fafc;}
         </div>
       )}
 
-      {/* ארבע שאלות המחקר */}
-      <div style={{marginBottom:"20px",padding:"16px",background:"#1e293b",borderRadius:"10px",border:`2px solid ${dimColor}44`}}>
-        <div style={{fontSize:"14px",color:"#f1f5f9",fontWeight:"700",marginBottom:"12px"}}>📝 סיכום מחקרי של המושג כולו</div>
-        {[
-          ["1. מה אפשר לטעון על נוכחות המושג בעיצוב דוד?",q1,setQ1],
-          ["2. אילו יחידות מספקות את הראיות החזקות ביותר?",q2,setQ2],
-          ["3. האם היחידות משלימות זו את זו, חוזרות על אותה ראיה או מציגות מתח וכשל?",q3,setQ3],
-          ["4. היכן יש התאמה לדגם הנבואי, והיכן מתגלה פער?",q4,setQ4],
-        ].map(([label,val,setter],i)=>(
-          <div key={i} style={{marginBottom:"12px"}}>
-            <div style={{fontSize:"12px",color:dimColor,fontWeight:"700",marginBottom:"5px"}}>{label}</div>
-            <textarea value={val} onChange={e=>setter(e.target.value)}
-              placeholder="כתבי את תשובתך..."
-              style={{width:"100%",minHeight:"80px",padding:"9px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
-          </div>
-        ))}
+      {/* הערה — סיכום מחקרי הועבר לשלב ד׳ */}
+      <div style={{marginBottom:"18px",padding:"10px 14px",background:"#1e3a5f",borderRadius:"7px",border:"1px solid #3b82f6",fontSize:"12px",color:"#bfdbfe",lineHeight:"1.6"}}>
+        💡 הסיכום המחקרי של כל מושג (4 השאלות: נוכחות, ראיות חזקות, השלמה/מתח, התאמה/פער) עבר ל<strong>שלב ד׳</strong>, שם הוא מוצג לפי מעגלים (ולא לפי מושג) לצד ריכוז הממצאים המאושרים.
       </div>
 
       {/* כפתורי פעולה */}
@@ -5579,6 +5561,290 @@ ${text}
 }
 
 
+// ═════════════════════════════════════════════════════════════════════════
+// שלב ד' — ריכוז הממצאים המאושרים לפי מעגלי הפרשנים
+// ═════════════════════════════════════════════════════════════════════════
+
+// מבנה המעגלים לדוד (7 מעגלים, לפי קליין/קנופרס/יפת)
+const DAVID_CYCLES=[
+  {num:1, title:"התלכדות ישראל וביסוס מלכות דוד", units:["הכתרת דוד","כיבוש ירושלים","ואלה ראשי הגיבורים","שדה השעורים","עמק הרפאים, טו-יט","רשימת הגיבורים, כה-מז","הבאים אל ציקלג","אנשי המלחמה עם דוד","חירם מלך צור"]},
+  {num:2, title:"העלאת הארון וכינון עבודת ה׳ בירושלים", units:["העלאת ארון ה' - ניסיון ראשון","המשך העלאת ארון ה', ו-יד","העברת ארון ה' לירושלים","ארון ה' מגיע לעיר דוד","ארון ה' בעיר דוד, א-ג","הפולחן והשירות בקודש","ארגון הפולחן ע\"י דוד"]},
+  {num:3, title:"הבטחת הבית לדוד ותגובתו", units:["דוד מבקש לבנות בית לה'","הבטחת ה' לדוד","דבריו של דוד לה'","דוד מברך את ה'"]},
+  {num:4, title:"מלחמות דוד וסדרי שלטונו", units:["הפלשתים בעמק הרפאים","מלחמות דוד, א-יב","הפקידים בבית דוד, יג-יז","דוד ובני עמון","המלחמה בבני עמון","המלחמה בארם","המלחמה בבני עמון"]},
+  {num:5, title:"המפקד ובחירת מקום המקדש", units:["מפקד דוד, א-ד","המשך המפקד, ח-יד","המשך המפקד, טו-יט","המשך המפקד, כ-כו","סיום המפקד, כז-ל","המפקד שלא הושלם, כג-כד"]},
+  {num:6, title:"ההכנות לבניין המקדש וארגון בעלי התפקידים", units:["תכנון בית המקדש","דוד מברך את שלמה","המשך התכנון","המלכת שלמה, א-ה","חלוקת הלוויים, ו-יא","תפקיד הלוויים","משמרות הכוהנים, א-יט","חלוקת הלוויים","הכנות למקדש, א-כח","הסדריו האזרחיים והצבאיים של דוד, כט-לב"]},
+  {num:7, title:"העברת האחריות לשלמה וחתימת מלכות דוד", units:["דברי דוד לעם","המשך דברי דוד","המשך דברי דוד","המשך דברי דוד","מותו של דוד"]},
+];
+const SOLOMON_CYCLES=[
+  {num:1, title:"כינון המלוכה וחכמת שלמה", units:[]},
+  {num:2, title:"בניין המקדש", units:[]},
+  {num:3, title:"חנוכת המקדש והברית", units:[]},
+  {num:4, title:"מלכות הפאר וסוף ימיו", units:[]},
+];
+
+// לוח-עזר שמחזיר ממד של מושג
+function conceptToDimensionId(conceptName){
+  for(const d of DIMS){ if(d.concepts.includes(conceptName)) return d.id.toUpperCase().replace("D","ד"); }
+  return "—";
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// StageD — ריכוז הממצאים המאושרים לפי מעגלים
+// ─────────────────────────────────────────────────────────────────────────
+function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote,getVerified,getUnitSummary,raw,getConceptSummary,setConceptSummary}){
+  const [character,setCharacter]=useState("david");
+  const [selectedCycle,setSelectedCycle]=useState(null);
+
+  const cycles=character==="david"?DAVID_CYCLES:SOLOMON_CYCLES;
+
+  // התאמת שם יחידה מהמעגל ליחידה בנתונים
+  function findUnitByName(targetName){
+    const norm=s=>(s||"").replace(/[\s״'"ʼ.,־–—]/g,"").toLowerCase();
+    const t=norm(targetName);
+    const charUnits=(allUnits||[]).filter(u=>(u.character||"david")===character);
+    // התאמה מדויקת
+    let u=charUnits.find(x=>norm(x.name)===t);
+    if(u) return u;
+    // התאמה חלקית — אחד מכיל את השני
+    u=charUnits.find(x=>{const n=norm(x.name); return n.includes(t)||t.includes(n);});
+    return u||null;
+  }
+
+  // אוסף הממצאים המאושרים (אוטומטיים + גבוליים שקובלו) ליחידה×מושג
+  function getApprovedForUnit(unit){
+    if(!unit) return [];
+    const list=[];
+    (allConcepts||[]).forEach(cname=>{
+      const ec=getE(unit.id,cname,"chronicles")||{};
+      const params=getParams?getParams(cname):[];
+      const validParams=validParamDefs(params);
+      const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(cname,i),_def:params[i]||validParams[i]}:null).filter(Boolean);
+      const approvedAuto=positives.filter(x=>x._narrow==="approved");
+      const borderline=positives.filter(x=>x._narrow==="borderline");
+      const v=getVerified?getVerified(character,cname,unit.id):null;
+      const manualApproved=(v&&v.borderlineDecisions)?borderline.filter(x=>v.borderlineDecisions[x._idx]==="accepted"):[];
+      const effectiveApproved=[...approvedAuto,...manualApproved];
+      if(effectiveApproved.length===0) return;
+      list.push({concept:cname,dim:conceptToDimensionId(cname),indicators:effectiveApproved,manualCount:manualApproved.length});
+    });
+    return list;
+  }
+
+  // 4 שאלות המחקר — מאוחסן ב-conceptSummaries תחת מפתח מעגל
+  const cycleKey=sel=>`__cycle__${character}__${sel?sel.num:"none"}`;
+  const [q1,setQ1]=useState("");
+  const [q2,setQ2]=useState("");
+  const [q3,setQ3]=useState("");
+  const [q4,setQ4]=useState("");
+  useEffect(()=>{
+    if(!selectedCycle) return;
+    const s=getConceptSummary?getConceptSummary(character,cycleKey(selectedCycle)):{q1:"",q2:"",q3:"",q4:""};
+    setQ1(s.q1||""); setQ2(s.q2||""); setQ3(s.q3||""); setQ4(s.q4||"");
+  },[selectedCycle,character]);
+  function saveCycleQuestions(){
+    if(!selectedCycle) return;
+    if(setConceptSummary) setConceptSummary(character,cycleKey(selectedCycle),{q1,q2,q3,q4,savedAt:Date.now()});
+    alert("✓ 4 השאלות נשמרו עבור "+selectedCycle.title);
+  }
+
+  // בניית שורות הטבלה למעגל נבחר
+  const cycleRows=selectedCycle?selectedCycle.units.map((uname,idx)=>{
+    const u=findUnitByName(uname);
+    const verses=u?(u.chapter||"").replace(/_/g," "):"";
+    const approvedList=u?getApprovedForUnit(u):[];
+    return {rowIdx:idx,unitName:uname,unit:u,verses,approvedList};
+  }):[];
+
+  // הורדת דו"ח המעגל כ-Word
+  function downloadCycleAsWord(){
+    if(!selectedCycle) return;
+    const charName=character==="david"?"דוד":"שלמה";
+    const hebDate=new Date().toLocaleDateString("he-IL");
+    const rowsHtml=cycleRows.map(r=>{
+      if(r.approvedList.length===0){
+        return `<tr><td>${r.unitName.replace(/</g,'&lt;')}<br/><em style='color:#555;font-size:9pt;'>${r.unit?(r.unit.chapter||"").replace(/_/g," "):"(לא נמצאה ביחידות)"}</em></td><td colspan='3' style='color:#777;text-align:center;'>—</td></tr>`;
+      }
+      const conceptsList=r.approvedList.map(a=>a.concept).join(" · ");
+      const dimsList=r.approvedList.map(a=>`${a.concept} (${a.dim})`).join(" · ");
+      const evidenceHtml=r.approvedList.map(a=>{
+        const indsHtml=a.indicators.map(i=>{
+          const vP=i.verse?`<span style='color:#1e40af;font-weight:700;font-size:9pt;'>פסוק ${i.verse.replace(/</g,'&lt;')}:</span> `:"";
+          return `<div style='margin-bottom:3px;'>${vP}${((i._def&&i._def.q)||((i._def&&i._def.paramLabel)||"")).replace(/</g,'&lt;')}${i.note?` — <em>${i.note.replace(/</g,'&lt;')}</em>`:""}</div>`;
+        }).join("");
+        return `<div style='margin-bottom:8px;padding:6px;background:#f8fafc;border-right:3px solid #4f46e5;'>
+          <div style='font-weight:700;color:#4f46e5;font-size:10pt;'>${a.concept.replace(/</g,'&lt;')} (${a.dim})</div>
+          ${indsHtml}
+        </div>`;
+      }).join("");
+      return `<tr>
+  <td>${r.unitName.replace(/</g,'&lt;')}<br/><em style='color:#555;font-size:9pt;'>${r.unit?(r.unit.chapter||"").replace(/_/g," "):""}</em></td>
+  <td style='font-size:10pt;'>${dimsList.replace(/</g,'&lt;')}</td>
+  <td style='font-size:10pt;'>${conceptsList.replace(/</g,'&lt;')}</td>
+  <td style='font-size:10pt;'>${evidenceHtml}</td>
+</tr>`;
+    }).join("");
+
+    const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'/><title>מעגל ${selectedCycle.num} — ${selectedCycle.title}</title>
+<style>
+body{font-family:'David','Times New Roman',serif;direction:rtl;text-align:right;font-size:12pt;line-height:1.75;}
+h1{font-size:18pt;color:#1a365d;border-bottom:2px solid #1a365d;padding-bottom:6px;}
+h2{font-size:14pt;color:#2c5282;border-bottom:1px solid #cbd5e1;padding-bottom:4px;margin-top:20px;}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:10pt;}
+th,td{border:1px solid #334155;padding:8px;vertical-align:top;text-align:right;}
+th{background:#2c5282;color:white;font-weight:700;}
+.meta{background:#f1f5f9;padding:10px;border:1px solid #cbd5e1;margin-bottom:14px;font-size:10pt;}
+.question{background:#dbeafe;padding:10px;border-right:4px solid #2563eb;margin-bottom:10px;font-size:11pt;white-space:pre-wrap;}
+.q-label{font-weight:700;color:#1e40af;display:block;margin-bottom:4px;}
+</style></head>
+<body>
+<h1>מעגל ${selectedCycle.num}: ${selectedCycle.title}</h1>
+<div class='meta'><strong>הדמות:</strong> ${charName} · <strong>הופק:</strong> ${hebDate} · <strong>יחידות:</strong> ${selectedCycle.units.length}</div>
+
+<h2>ריכוז הממצאים המאושרים משלב ג׳</h2>
+<table>
+<thead><tr><th>היחידה והפסוקים</th><th>הממד של כל מושג</th><th>המושגים שנותרו לאחר הסינון</th><th>הראיה שאושרה לכל מושג</th></tr></thead>
+<tbody>${rowsHtml}</tbody>
+</table>
+
+<h2>סיכום מחקרי של המעגל כולו</h2>
+<div class='question'><span class='q-label'>1. מה אפשר לטעון על נוכחות המושגים במעגל זה בעיצוב ${charName}?</span>${(q1||"—").replace(/</g,'&lt;')}</div>
+<div class='question'><span class='q-label'>2. אילו יחידות מספקות את הראיות החזקות ביותר?</span>${(q2||"—").replace(/</g,'&lt;')}</div>
+<div class='question'><span class='q-label'>3. האם היחידות משלימות זו את זו, חוזרות על אותה ראיה או מציגות מתח וכשל?</span>${(q3||"—").replace(/</g,'&lt;')}</div>
+<div class='question'><span class='q-label'>4. היכן יש התאמה לדגם הנבואי, והיכן מתגלה פער?</span>${(q4||"—").replace(/</g,'&lt;')}</div>
+</body></html>`;
+    const blob=new Blob(['﻿'+html],{type:"application/msword"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`מעגל_${selectedCycle.num}_${selectedCycle.title.replace(/[\s'"]/g,'_').substring(0,30)}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
+  return(
+    <div style={{maxWidth:"1400px",margin:"0 auto",padding:"20px 16px"}} dir="rtl">
+      {/* כותרת ובחירת דמות */}
+      <div style={{marginBottom:"18px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"1px solid #818cf844"}}>
+        <div style={{fontSize:"18px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>🎯 שלב ד׳ — כתיבת הפרקים לפי מעגלים</div>
+        <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"10px"}}>ריכוז הממצאים המאושרים משלב ג׳ עבור כל מעגל + סיכום מחקרי של המעגל</div>
+        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+          {[["david","👑 דוד",DAVID_CYCLES.length],["solomon","👑 שלמה",SOLOMON_CYCLES.length]].map(([id,lbl,cnt])=>(
+            <button key={id} onClick={()=>{setCharacter(id);setSelectedCycle(null);}}
+              style={{padding:"8px 14px",borderRadius:"8px",border:character===id?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:character===id?"#818cf822":"#0f172a",color:character===id?"#c7d2fe":"#cbd5e1",fontSize:"13px",fontWeight:"700"}}>
+              {lbl} <span style={{fontSize:"10px",color:"#64748b",marginRight:"6px"}}>({cnt} מעגלים)</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* בחירת מעגל */}
+      <div style={{marginBottom:"18px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"1px solid #334155"}}>
+        <div style={{fontSize:"13px",color:"#94a3b8",fontWeight:"700",marginBottom:"10px"}}>בחרי מעגל</div>
+        <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+          {cycles.map(c=>{
+            const sel=selectedCycle&&selectedCycle.num===c.num;
+            return(
+              <button key={c.num} onClick={()=>setSelectedCycle(c)}
+                style={{padding:"10px 14px",borderRadius:"7px",border:sel?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:sel?"#818cf822":"#0f172a",color:sel?"#c7d2fe":"#cbd5e1",fontSize:"13px",fontWeight:"600",textAlign:"right",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span>{sel?"● ":""}<strong>מעגל {c.num}:</strong> {c.title}</span>
+                <span style={{fontSize:"10px",color:"#64748b"}}>{c.units.length} יחידות</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* טבלת המעגל הנבחר */}
+      {selectedCycle&&(
+        <>
+          <div style={{marginBottom:"14px",padding:"12px 16px",background:"#1e293b",borderRadius:"8px",border:"1px solid #818cf844"}}>
+            <div style={{fontSize:"15px",color:"#c7d2fe",fontWeight:"700"}}>מעגל {selectedCycle.num}: {selectedCycle.title}</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginTop:"3px"}}>{selectedCycle.units.length} יחידות בסה"כ</div>
+          </div>
+
+          <div style={{overflowX:"auto",marginBottom:"18px",background:"#1e293b",borderRadius:"8px",padding:"10px"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px",direction:"rtl"}}>
+              <thead>
+                <tr style={{background:"#0f172a"}}>
+                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"150px"}}>היחידה והפסוקים</th>
+                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"180px"}}>הממד של כל מושג</th>
+                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"160px"}}>המושגים שנותרו לאחר הסינון</th>
+                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"320px"}}>הראיה שאושרה לכל מושג</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cycleRows.map((r,i)=>(
+                  <tr key={i} style={{background:i%2?"#0f172a":"#1e293b"}}>
+                    <td style={{padding:"8px",color:"#f1f5f9",verticalAlign:"top",border:"1px solid #334155"}}>
+                      <div style={{fontWeight:"700"}}>{r.unitName}</div>
+                      {r.unit&&<div style={{fontSize:"10px",color:"#94a3b8",marginTop:"3px"}}>({(r.unit.chapter||"").replace(/_/g," ")})</div>}
+                      {!r.unit&&<div style={{fontSize:"10px",color:"#ef4444",marginTop:"3px",fontStyle:"italic"}}>לא נמצאה בנתונים</div>}
+                    </td>
+                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
+                      {r.approvedList.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
+                        r.approvedList.map((a,j)=><div key={j} style={{marginBottom:"3px"}}><strong style={{color:"#f1f5f9"}}>{a.concept}</strong> <span style={{color:"#c7d2fe"}}>({a.dim})</span></div>)}
+                    </td>
+                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
+                      {r.approvedList.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
+                        r.approvedList.map((a,j)=><div key={j} style={{marginBottom:"3px",color:"#86efac"}}>✓ {a.concept}{a.manualCount>0?<span style={{color:"#a78bfa",marginRight:"4px"}}>⚐</span>:null}</div>)}
+                    </td>
+                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px",lineHeight:"1.6"}}>
+                      {r.approvedList.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
+                        r.approvedList.map((a,j)=>(
+                          <div key={j} style={{marginBottom:"8px",padding:"6px 8px",background:"#0f172a",borderRight:`2px solid #818cf8`,borderRadius:"3px"}}>
+                            <div style={{color:"#c7d2fe",fontWeight:"700",fontSize:"10px",marginBottom:"3px"}}>{a.concept} ({a.dim})</div>
+                            {a.indicators.map((ind,k)=>(
+                              <div key={k} style={{marginBottom:"4px",fontSize:"10px"}}>
+                                {ind.verse&&<span style={{color:"#93c5fd",fontWeight:"700"}}>📍 {ind.verse}: </span>}
+                                <span style={{color:"#e2e8f0"}}>{(ind._def&&ind._def.q)||((ind._def&&ind._def.paramLabel)||"")}</span>
+                                {ind.note&&<div style={{color:"#94a3b8",marginRight:"8px",marginTop:"2px",fontStyle:"italic"}}>{ind.note.length>180?ind.note.substring(0,180)+"...":ind.note}</div>}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 4 שאלות המחקר של המעגל */}
+          <div style={{marginBottom:"18px",padding:"16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #818cf844"}}>
+            <div style={{fontSize:"14px",color:"#f1f5f9",fontWeight:"700",marginBottom:"12px"}}>📝 סיכום מחקרי של המעגל כולו</div>
+            {[
+              ["1. מה אפשר לטעון על נוכחות המושגים במעגל זה בעיצוב "+(character==="david"?"דוד":"שלמה")+"?",q1,setQ1],
+              ["2. אילו יחידות מספקות את הראיות החזקות ביותר?",q2,setQ2],
+              ["3. האם היחידות משלימות זו את זו, חוזרות על אותה ראיה או מציגות מתח וכשל?",q3,setQ3],
+              ["4. היכן יש התאמה לדגם הנבואי, והיכן מתגלה פער?",q4,setQ4],
+            ].map(([label,val,setter],i)=>(
+              <div key={i} style={{marginBottom:"12px"}}>
+                <div style={{fontSize:"12px",color:"#818cf8",fontWeight:"700",marginBottom:"5px"}}>{label}</div>
+                <textarea value={val} onChange={e=>setter(e.target.value)}
+                  placeholder="כתבי את תשובתך..."
+                  style={{width:"100%",minHeight:"80px",padding:"9px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+              </div>
+            ))}
+          </div>
+
+          {/* כפתורי פעולה */}
+          <div style={{display:"flex",gap:"10px",justifyContent:"flex-end",flexWrap:"wrap"}}>
+            <button onClick={downloadCycleAsWord}
+              style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#2563eb",color:"white",fontSize:"13px",fontWeight:"700"}}>
+              📥 הורד דו"ח המעגל כ-Word
+            </button>
+            <button onClick={saveCycleQuestions}
+              style={{padding:"10px 24px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"13px",fontWeight:"700"}}>
+              💾 שמור 4 השאלות
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App(){
   const [raw,setRaw]=useState({units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[],compareNotes:{},compareFactual:{},unitSummary:{}});
   const [tab,setTab]=useState("home");
@@ -5987,6 +6253,7 @@ function App(){
       {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
       {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} setE={setE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
+      {tab==="staged"&&<StageD allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getNarrowDef={getNarrowDef} getCompareNote={getCompareNote} getVerified={getVerified} getUnitSummary={getUnitSummary} raw={raw} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
       {tab==="indmatrix"&&<IndicatorMatrixReport allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams}/>}
       {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
