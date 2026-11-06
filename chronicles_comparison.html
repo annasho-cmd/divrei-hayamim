@@ -451,7 +451,7 @@ ${otherUnitsContext}
 
       const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:1500,
+        body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:8000,
           messages:[{role:'user',content:prompt}]})
       });
       const data=await res.json();
@@ -505,7 +505,7 @@ ${ctx}
 
       const res=await fetch('https://anthropic-proxy.anna-sho-ea8.workers.dev',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:1000,
+        body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:6000,
           messages:[{role:'user',content:prompt}]})
       });
       const data=await res.json();
