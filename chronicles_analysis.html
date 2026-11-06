@@ -4057,7 +4057,7 @@ ${bodyHtml}
   );
 }
 
-function StageC({allUnits,allConcepts,dim4concept,getE,setE,getParams,getCompareNote,setCompareNote,getUnitSummary,getStage3Result,setStage3Result,raw,getNarrowDef,setNarrowDef,getWritingDraft,setWritingDraft,getVerified,setVerified,getConceptSummary,setConceptSummary}){
+function StageC({allUnits,allConcepts,dim4concept,getE,setE,getParams,getCompareNote,setCompareNote,setCompareNotesBatch,getUnitSummary,getStage3Result,setStage3Result,raw,getNarrowDef,setNarrowDef,getWritingDraft,setWritingDraft,getVerified,setVerified,setVerifiedBatch,getConceptSummary,setConceptSummary}){
   const [screen,setScreen]=useState("select");
   const [character,setCharacter]=useState(null);
   const [dimension,setDimension]=useState(null);
@@ -4511,79 +4511,127 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
     });
   }
   // (1) אשרי אוטומטית את כל הגבוליים לדמות — חוץ ממושגי BATCH_EXCLUDE
+  // ⚠ עכשיו גם מטפל ביחידות עם ממצאים חיוביים שכולם נדחו (יכתוב רשומת אישור ריקה כדי שיופיע ✓ אושרה)
   async function batchApproveAllBorderlines(){
     if(!character){ alert("בחרי קודם דמות."); return; }
     const charName2=character==="david"?"דוד":"שלמה";
-    if(!confirm(`לאשר אוטומטית את כל הגבוליים (בנוסף לאוטומטיים שכבר מאושרים) בכל היחידות של ${charName2}, חוץ ממושג "רוח/ריח"?\n\nזו פעולה שמשקפת החלטה גורפת. תמיד אפשר לשנות ידנית בכל יחידה.`)) return;
-    setBatchStatus({mode:"approve",total:0,done:0,current:"",log:[]});
-    const units=characterUnits();
+    if(!confirm(`לאשר אוטומטית את כל הגבוליים בכל היחידות של ${charName2}, חוץ ממושג "רוח/ריח"?\n\nזו פעולה שמשקפת החלטה גורפת. תמיד אפשר לשנות ידנית בכל יחידה.`)) return;
+    setBatchStatus({mode:"approve",total:0,done:0,current:"מחשב...",log:[]});
+
+    // 1. מחשבים את כל השינויים בלי לקרוא ל-setRaw
     const concepts=(allConcepts||[]).filter(c=>!BATCH_EXCLUDE.includes(c));
-    const tasks=[];
+    // משתמש בטקטיקה רחבה — כל יחידה של הדמות שלא notInThesis
+    const units=(allUnits||[]).filter(u=>{
+      const uChar=(u.character||"").toLowerCase();
+      if(uChar&&uChar!==character) return false; // אם צוין character, חייב להתאים; אם ריק — לא מסננים
+      const s=getUnitSummary?getUnitSummary(u.id):null;
+      if(s&&s.notInThesis) return false;
+      return true;
+    });
+
+    const currentVerifs={...(raw.verifs||{})};
+    const changes={};
+    let processedCount=0,withBorderlinesCount=0,withApprovedCount=0;
+
     units.forEach(u=>{
       const s=getUnitSummary?getUnitSummary(u.id):null;
       const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
       concepts.forEach(cname=>{
         if(notRel.includes(cname)) return;
-        const ec=getE(u.id,cname,"chronicles")||{};
-        const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(cname,i)}:null).filter(Boolean);
+        const ec=raw.analysis_chronicles?.[u.id]?.[cname]||null;
+        if(!ec) return;
+        const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{_idx:i,_narrow:narrowStatus(cname,i)}:null).filter(Boolean);
+        if(positives.length===0) return; // אין מה לכתוב
         const bord=positives.filter(x=>x._narrow==="borderline");
-        if(bord.length>0||positives.filter(x=>x._narrow==="approved").length>0){
-          tasks.push({u,cname,borderlineIdxs:bord.map(b=>b._idx)});
-        }
+        const apprCount=positives.filter(x=>x._narrow==="approved").length;
+        const k=`${character}__${cname}__${u.id}`;
+        const existing=currentVerifs[k]||null;
+        const decisions={...((existing&&existing.borderlineDecisions)||{})};
+        bord.forEach(({_idx})=>{ if(decisions[_idx]!=="rejected") decisions[_idx]="accepted"; });
+        const accepted=Object.entries(decisions).filter(([_,v])=>v==="accepted").map(([kk])=>parseInt(kk,10));
+        changes[k]={
+          ...(existing||{}),
+          itemChecks:(existing&&existing.itemChecks)||{},
+          note:(existing&&existing.note)||"",
+          borderlineDecisions:decisions,
+          userApprovedIdxs:accepted,
+          verifiedAt:Date.now()
+        };
+        processedCount++;
+        if(bord.length>0) withBorderlinesCount++;
+        if(apprCount>0) withApprovedCount++;
       });
     });
-    setBatchStatus(s=>({...s,total:tasks.length}));
-    for(let i=0;i<tasks.length;i++){
-      const {u,cname,borderlineIdxs}=tasks[i];
-      const existing=getVerified?getVerified(character,cname,u.id):null;
-      const decisions={...((existing&&existing.borderlineDecisions)||{})};
-      borderlineIdxs.forEach(idx=>{ if(!decisions[idx]) decisions[idx]="accepted"; });
-      const accepted=Object.entries(decisions).filter(([_,v])=>v==="accepted").map(([k])=>parseInt(k,10));
-      setVerified(character,cname,u.id,{...(existing||{}),itemChecks:(existing&&existing.itemChecks)||{},note:(existing&&existing.note)||"",borderlineDecisions:decisions,userApprovedIdxs:accepted,verifiedAt:Date.now()});
-      setBatchStatus(s=>s?{...s,done:i+1,current:`${cname} · ${u.name}`}:null);
+
+    setBatchStatus(s=>({...s,total:processedCount,done:processedCount,current:"כותב למסד..."}));
+
+    // כתיבה אטומית אחת דרך setVerifiedBatch
+    if(setVerifiedBatch) setVerifiedBatch(changes);
+    else {
+      // fallback — אם setVerifiedBatch לא הועבר כ-prop
+      Object.entries(changes).forEach(([k,v])=>{
+        const parts=k.split("__");
+        if(parts.length>=3) setVerified(parts[0],parts[1],parts.slice(2).join("__"),v);
+      });
     }
-    setBatchStatus(s=>s?{...s,done:tasks.length,current:"✓ הסתיים"}:null);
-    setTimeout(()=>setBatchStatus(null),3000);
-    alert(`✓ אושרו אוטומטית ${tasks.length} צמדי (יחידה×מושג).`);
+
+    setBatchStatus(s=>s?{...s,current:`✓ הסתיים — ${processedCount} צמדים`}:null);
+    setTimeout(()=>setBatchStatus(null),4000);
+    alert(`✓ הושלם!\n\nעובד על ${processedCount} צמדי (יחידה×מושג) עם ממצאים חיוביים.\n• ${withApprovedCount} עם מאושרים אוטומטיים\n• ${withBorderlinesCount} עם גבוליים שקובלו עכשיו\n\nחזרי למסך הבחירה ובדקי את הסימון "✓ אושרה" ליד כל יחידה.`);
   }
   // (2) כתיבת הערות השוואה בבאצ' לכל הצמדים (יחידה×מושג) של הדמות — חוץ מרוח
   async function batchGenerateAllCompareNotes(){
     if(!character){ alert("בחרי קודם דמות."); return; }
     const charName2=character==="david"?"דוד":"שלמה";
-    if(!confirm(`לכתוב הערת השוואה לכל (יחידה×מושג) של ${charName2}, חוץ ממושג "רוח/ריח"?\n\nזו פעולה שעשויה לקחת מספר דקות ולעלות כסף על קריאות AI. אפשר לעצור באמצע (רענון דף).\n\nהערות השוואה קיימות ידרסו — נרחיב אותן בגרסאות החדשות.`)) return;
-    const units=characterUnits();
+    if(!confirm(`לכתוב הערת השוואה לכל (יחידה×מושג) של ${charName2}, חוץ ממושג "רוח/ריח"?\n\nפעולה זו יכולה לקחת מספר דקות ולעלות כסף על קריאות AI. הערות השוואה קיימות ידרסו.`)) return;
+
     const concepts=(allConcepts||[]).filter(c=>!BATCH_EXCLUDE.includes(c));
+    const units=(allUnits||[]).filter(u=>{
+      const uChar=(u.character||"").toLowerCase();
+      if(uChar&&uChar!==character) return false;
+      const s=getUnitSummary?getUnitSummary(u.id):null;
+      if(s&&s.notInThesis) return false;
+      return true;
+    });
     const tasks=[];
     units.forEach(u=>{
       const s=getUnitSummary?getUnitSummary(u.id):null;
       const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
       concepts.forEach(cname=>{
         if(notRel.includes(cname)) return;
-        const ec=getE(u.id,cname,"chronicles")||{};
+        const ec=raw.analysis_chronicles?.[u.id]?.[cname]||null;
+        if(!ec) return;
         const anyPositive=(ec.params||[]).some(p=>p&&p.found===true);
         if(anyPositive) tasks.push({u,cname});
       });
     });
     setBatchStatus({mode:"compare",total:tasks.length,done:0,current:"",log:[]});
+    const batchResults={}; // {`${uid}__${cname}`: text}
+    let saveEvery=5; // שמירה כל 5 תגובות כדי לא לאבד התקדמות
     for(let i=0;i<tasks.length;i++){
       const {u,cname}=tasks[i];
       setBatchStatus(s=>s?{...s,done:i,current:`${cname} · ${u.name}`}:null);
       try{
-        // השתמשי בהחלטות שמורות אם יש; אחרת — קבל את כל הגבוליים
-        const v=getVerified?getVerified(character,cname,u.id):null;
+        const v=(raw.verifs||{})[`${character}__${cname}__${u.id}`];
         const decisions=(v&&v.borderlineDecisions)||"all-accepted";
         const prompt=buildCompareNotePromptForAI(u,cname,character,getE,getParams,getNarrowDef,decisions);
         const resp=await aiCall(prompt,4000);
         const text=(resp||"").trim();
-        if(text&&setCompareNote) setCompareNote(u.id,cname,text);
+        if(text) batchResults[`${u.id}__${cname}`]=text;
       }catch(e){
         console.error("batch compareNote err:",cname,u.name,e);
-        setBatchStatus(s=>s?{...s,log:[...(s.log||[]),`❌ ${cname} · ${u.name}: ${e.message||e}`]}:null);
+        setBatchStatus(s=>s?{...s,log:[...(s.log||[]),`❌ ${cname} · ${u.name}: ${(e.message||e).toString().substring(0,80)}`]}:null);
+      }
+      // שמירה חלקית כל saveEvery
+      if((i+1)%saveEvery===0||i===tasks.length-1){
+        if(Object.keys(batchResults).length&&setCompareNotesBatch){
+          setCompareNotesBatch(batchResults);
+        }
       }
     }
-    setBatchStatus(s=>s?{...s,done:tasks.length,current:"✓ הסתיים"}:null);
-    alert(`✓ נכתבו הערות השוואה עבור ${tasks.length} צמדים.`);
-    setTimeout(()=>setBatchStatus(null),5000);
+    setBatchStatus(s=>s?{...s,done:tasks.length,current:`✓ הסתיים — ${Object.keys(batchResults).length}/${tasks.length}`}:null);
+    alert(`✓ נכתבו ${Object.keys(batchResults).length} הערות השוואה מתוך ${tasks.length}.\n\nאם חלק נכשלו — ראי את הלוג על המסך.`);
+    setTimeout(()=>setBatchStatus(null),6000);
   }
 
   // ══════════════════ מסך בחירה ══════════════════
@@ -6097,6 +6145,29 @@ function App(){
     });
     queuePatch(d=>({...d,verifs:{...(d.verifs||{}),[k]:data}}));
   }
+  // ── עדכון באצ' של verifs — מפעיל setRaw אחד בלבד + סנכרון LS + patch אחד ל-Firebase ──
+  function setVerifiedBatch(changesObject){
+    if(!changesObject||!Object.keys(changesObject).length) return;
+    setRaw(prev=>{
+      const merged={...(prev.verifs||{}),...changesObject};
+      const updated={...prev,verifs:merged};
+      VERIFS.save(updated.verifs);
+      window.__rawData=updated; LS.save(updated);
+      return updated;
+    });
+    queuePatch(d=>({...d,verifs:{...(d.verifs||{}),...changesObject}}));
+  }
+  // ── עדכון באצ' של compareNotes ──
+  function setCompareNotesBatch(changesObject){
+    if(!changesObject||!Object.keys(changesObject).length) return;
+    setRaw(prev=>{
+      const merged={...(prev.compareNotes||{}),...changesObject};
+      const updated={...prev,compareNotes:merged};
+      window.__rawData=updated; LS.save(updated);
+      return updated;
+    });
+    queuePatch(d=>({...d,compareNotes:{...(d.compareNotes||{}),...changesObject}}));
+  }
   // ── דו"ח ריכוז של מושג לפי (דמות, מושג) ──
   function conceptSummaryKey(character,conceptName){return `${character}__${conceptName}`;}
   function getConceptSummary(character,conceptName){
@@ -6252,7 +6323,7 @@ function App(){
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} backupData={backupData} resetNirmaz={resetNirmaz}/>}
       {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
-      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} setE={setE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
+      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} setE={setE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} setCompareNotesBatch={setCompareNotesBatch} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified} setVerifiedBatch={setVerifiedBatch} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
       {tab==="staged"&&<StageD allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getNarrowDef={getNarrowDef} getCompareNote={getCompareNote} getVerified={getVerified} getUnitSummary={getUnitSummary} raw={raw} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
       {tab==="indmatrix"&&<IndicatorMatrixReport allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams}/>}
