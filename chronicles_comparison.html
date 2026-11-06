@@ -455,12 +455,14 @@ ${otherUnitsContext}
           messages:[{role:'user',content:prompt}]})
       });
       const data=await res.json();
-      if(data.content){
-        setAiResult(data.content.map(b=>b.text||'').join('')||'(תגובה ריקה)');
+      if(data.content&&data.content.length){
+        const txt=data.content.map(b=>b.text||'').join('');
+        if(txt){setAiResult(txt);}
+        else{setAiResult('תגובה עם content ריק. stop_reason='+(data.stop_reason||'?')+'\nסוגי בלוקים: '+data.content.map(b=>b.type).join(',')+'\nגולמי: '+JSON.stringify(data).substring(0,600));}
       }else if(data.error){
         setAiResult('שגיאת API: '+(data.error.message||JSON.stringify(data.error)));
       }else{
-        setAiResult('תגובה לא צפויה מהשרת:\n'+JSON.stringify(data).substring(0,500));
+        setAiResult('תגובה לא צפויה מהשרת:\n'+JSON.stringify(data).substring(0,600));
       }
     }catch(e){setAiResult('שגיאת חיבור: '+e.message);}
     setAiLoading(false);
@@ -507,12 +509,14 @@ ${ctx}
           messages:[{role:'user',content:prompt}]})
       });
       const data=await res.json();
-      if(data.content){
-        setAiResult(data.content.map(b=>b.text||'').join('')||'(תגובה ריקה)');
+      if(data.content&&data.content.length){
+        const txt=data.content.map(b=>b.text||'').join('');
+        if(txt){setAiResult(txt);}
+        else{setAiResult('תגובה עם content ריק. stop_reason='+(data.stop_reason||'?')+'\nסוגי בלוקים: '+data.content.map(b=>b.type).join(',')+'\nגולמי: '+JSON.stringify(data).substring(0,600));}
       }else if(data.error){
         setAiResult('שגיאת API: '+(data.error.message||JSON.stringify(data.error)));
       }else{
-        setAiResult('תגובה לא צפויה מהשרת:\n'+JSON.stringify(data).substring(0,500));
+        setAiResult('תגובה לא צפויה מהשרת:\n'+JSON.stringify(data).substring(0,600));
       }
     }catch(e){setAiResult('שגיאת חיבור: '+e.message);}
     setAiLoading(false);
