@@ -4519,7 +4519,8 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
     setBatchStatus({mode:"approve",total:0,done:0,current:"מחשב...",log:[]});
 
     // 1. מחשבים את כל השינויים בלי לקרוא ל-setRaw
-    const concepts=(allConcepts||[]).filter(c=>!BATCH_EXCLUDE.includes(c));
+    // ⚠ allConcepts הם אובייקטים {name, dimId} — חייבים לחלץ .name
+    const conceptNames=(allConcepts||[]).map(c=>c.name||c).filter(n=>n&&!BATCH_EXCLUDE.includes(n));
     // משתמש בטקטיקה רחבה — כל יחידה של הדמות שלא notInThesis
     const units=(allUnits||[]).filter(u=>{
       const uChar=(u.character||"").toLowerCase();
@@ -4536,7 +4537,7 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
     units.forEach(u=>{
       const s=getUnitSummary?getUnitSummary(u.id):null;
       const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
-      concepts.forEach(cname=>{
+      conceptNames.forEach(cname=>{
         if(notRel.includes(cname)) return;
         const ec=raw.analysis_chronicles?.[u.id]?.[cname]||null;
         if(!ec) return;
@@ -4585,7 +4586,8 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
     const charName2=character==="david"?"דוד":"שלמה";
     if(!confirm(`לכתוב הערת השוואה לכל (יחידה×מושג) של ${charName2}, חוץ ממושג "רוח/ריח"?\n\nפעולה זו יכולה לקחת מספר דקות ולעלות כסף על קריאות AI. הערות השוואה קיימות ידרסו.`)) return;
 
-    const concepts=(allConcepts||[]).filter(c=>!BATCH_EXCLUDE.includes(c));
+    // ⚠ allConcepts הם אובייקטים — חייבים .name
+    const conceptNames=(allConcepts||[]).map(c=>c.name||c).filter(n=>n&&!BATCH_EXCLUDE.includes(n));
     const units=(allUnits||[]).filter(u=>{
       const uChar=(u.character||"").toLowerCase();
       if(uChar&&uChar!==character) return false;
@@ -4597,7 +4599,7 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
     units.forEach(u=>{
       const s=getUnitSummary?getUnitSummary(u.id):null;
       const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
-      concepts.forEach(cname=>{
+      conceptNames.forEach(cname=>{
         if(notRel.includes(cname)) return;
         const ec=raw.analysis_chronicles?.[u.id]?.[cname]||null;
         if(!ec) return;
