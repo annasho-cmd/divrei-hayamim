@@ -728,6 +728,12 @@ const VERIFS={
   load(){ try{const r=localStorage.getItem(VERIFS_KEY);return r?JSON.parse(r):{};}catch{return{};} },
   save(d){ try{localStorage.setItem(VERIFS_KEY,JSON.stringify(d));}catch{} }
 };
+// דו"ח ריכוז לפי (דמות, מושג) — עריכות של תאי הטבלה + 4 שאלות מחקר
+const CSUMS_KEY="chronicles_concept_summaries_v1";
+const CSUMS={
+  load(){ try{const r=localStorage.getItem(CSUMS_KEY);return r?JSON.parse(r):{};}catch{return{};} },
+  save(d){ try{localStorage.setItem(CSUMS_KEY,JSON.stringify(d));}catch{} }
+};
 
 // ── Shared styles ─────────────────────────────────────────────────────
 const S={
@@ -2954,6 +2960,264 @@ function PreWritingSummary({conceptName,character,dimension,allUnits,getE,getPar
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// ConceptSummary — דו"ח ריכוז של מושג בודד ברמת הדמות
+// ────────────────────────────────────────────────────────────────────────
+// טבלה עם שורה ליחידה (עם מאושרים/גבוליים) ו-6 עמודות:
+// יחידה ופסוקים | אינדיקטור בהגדרה הצרה | ראיה והסברה | פרשנים ועמ' | מידת ההתאמה | תרומה ייחודית
+// ו-4 שאלות מחקר בסוף להשלמה טקסטואלית.
+// ════════════════════════════════════════════════════════════════════════
+function ConceptSummary({character,dimension,conceptName,allUnits,getE,getParams,getCompareNote,getUnitSummary,getNarrowDef,getConceptSummary,setConceptSummary,unitsForCurrentConcept,onBack}){
+  const dimColorMap={"d1":"#818cf8","d2":"#34d399","d3":"#fbbf24","d4":"#f87171"};
+  const dimColor=dimColorMap[dimension]||"#c084fc";
+  const charName=character==="david"?"דוד":"שלמה";
+  const params=getParams?getParams(conceptName):[];
+  const validParams=validParamDefs(params);
+  const narrowDef=NARROW_CRITERION[conceptName]||{approved:[],borderline:[]};
+
+  // טעינת הדו"ח השמור
+  const saved=getConceptSummary?getConceptSummary(character,conceptName):{perUnit:{},q1:"",q2:"",q3:"",q4:""};
+  const [perUnit,setPerUnit]=useState(saved.perUnit||{});
+  const [q1,setQ1]=useState(saved.q1||"");
+  const [q2,setQ2]=useState(saved.q2||"");
+  const [q3,setQ3]=useState(saved.q3||"");
+  const [q4,setQ4]=useState(saved.q4||"");
+  const [savedFlash,setSavedFlash]=useState(false);
+
+  useEffect(()=>{
+    const s=getConceptSummary?getConceptSummary(character,conceptName):{perUnit:{},q1:"",q2:"",q3:"",q4:""};
+    setPerUnit(s.perUnit||{});
+    setQ1(s.q1||""); setQ2(s.q2||""); setQ3(s.q3||""); setQ4(s.q4||"");
+  },[character,conceptName]);
+
+  // איסוף היחידות
+  const units=unitsForCurrentConcept?unitsForCurrentConcept():[];
+
+  // בניית נתוני הטבלה
+  const rows=units.map(u=>{
+    const ec=getE(u.id,conceptName,"chronicles")||{};
+    const positives=(ec.params||[])
+      .map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(conceptName,i),_def:params[i]||validParams[i]}:null)
+      .filter(Boolean);
+    const approved=positives.filter(x=>x._narrow==="approved");
+    const borderline=positives.filter(x=>x._narrow==="borderline");
+    const relevantInds=[...approved,...borderline];
+    const verses=relevantInds.map(i=>i.verse).filter(Boolean);
+    const indLabels=relevantInds.map(i=>`#${i._idx+1} ${(i._def&&i._def.paramLabel)||""}`);
+    const notes=relevantInds.map(i=>i.note).filter(Boolean);
+    const compareN=getCompareNote?getCompareNote(u.id,conceptName):"";
+    const schol=u.scholarship||"";
+    // חילוץ שמות פרשנים ומספרי עמודים — מתבסס על תחביר נפוץ: "פרשן, עמ' X"
+    const scholarMatches=(schol+" "+compareN).match(/(קליין|קנופרס|יפת|דירקסון|מיירס|קרטיס|מדיסון|בראון|Blenkinsopp|Sweeney)[^\d]*(עמ'\s*\d+|p\.?\s*\d+)/g)||[];
+    return {u,approved,borderline,verses,indLabels,notes,compareN,schol,scholarMatches};
+  });
+
+  function updateCell(uid,field,value){
+    const next={...perUnit,[uid]:{...(perUnit[uid]||{}),[field]:value}};
+    setPerUnit(next);
+  }
+  function saveAll(){
+    if(setConceptSummary){
+      setConceptSummary(character,conceptName,{perUnit,q1,q2,q3,q4,savedAt:Date.now()});
+    }
+    setSavedFlash(true);
+    setTimeout(()=>setSavedFlash(false),2000);
+  }
+
+  function downloadReportAsWord(){
+    const hebDate=new Date().toLocaleDateString("he-IL");
+    const tableRows=rows.map(r=>{
+      const cellData=perUnit[r.u.id]||{};
+      const versesHtml=r.verses.length?r.verses.join(", "):"—";
+      const indsHtml=r.indLabels.length?r.indLabels.map(x=>`<div>${x.replace(/</g,'&lt;')}</div>`).join(""):"—";
+      const notesHtml=r.notes.length?r.notes.map(n=>`<div style='margin-bottom:4px;'>${n.replace(/</g,'&lt;')}</div>`).join(""):"—";
+      const scholarHtml=r.scholarMatches.length?r.scholarMatches.map(s=>`<div>${s.replace(/</g,'&lt;')}</div>`).join(""):(r.schol?"— (ראי scholarship ליחידה)":"—");
+      const match=cellData.match||"—";
+      const contrib=cellData.contribution||"—";
+      return `<tr>
+  <td>${(r.u.name||"?").replace(/</g,'&lt;')} <br/><span style='color:#777;font-size:9pt;'>(${r.u.chapter||""})</span><br/><em style='color:#555;font-size:9pt;'>פסוקים: ${versesHtml}</em></td>
+  <td>${indsHtml}</td>
+  <td style='font-size:10pt;'>${notesHtml}</td>
+  <td style='font-size:10pt;'>${scholarHtml}</td>
+  <td style='text-align:center;font-weight:700;'>${match.replace(/</g,'&lt;')}</td>
+  <td style='font-size:10pt;'>${contrib.replace(/</g,'&lt;')}</td>
+</tr>`;
+    }).join("");
+
+    const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'/>
+<title>דו"ח ריכוז — ${conceptName}</title>
+<style>
+body{font-family:'David','Times New Roman',serif;direction:rtl;text-align:right;font-size:12pt;line-height:1.7;}
+h1{font-size:18pt;color:#1a365d;border-bottom:2px solid #1a365d;padding-bottom:6px;}
+h2{font-size:14pt;color:#2c5282;border-bottom:1px solid #cbd5e1;padding-bottom:4px;margin-top:20px;}
+h3{font-size:12pt;margin-top:14px;color:#334155;}
+.meta{background:#f1f5f9;padding:10px;border:1px solid #cbd5e1;margin-bottom:14px;font-size:10pt;}
+table{border-collapse:collapse;width:100%;margin:10px 0;direction:rtl;font-size:10pt;}
+th,td{border:1px solid #334155;padding:8px;vertical-align:top;text-align:right;}
+th{background:#2c5282;color:white;font-weight:700;}
+tr:nth-child(even) td{background:#f8fafc;}
+.question{background:#dbeafe;padding:10px;border-right:4px solid #2563eb;margin-bottom:10px;font-size:11pt;white-space:pre-wrap;}
+.q-label{font-weight:700;color:#1e40af;display:block;margin-bottom:4px;}
+.ndef{background:#fef9c3;padding:12px;border-right:4px solid #ca8a04;margin-bottom:14px;font-size:11pt;white-space:pre-wrap;}
+</style></head>
+<body>
+<h1>דו"ח ריכוז — ${conceptName} ב${charName}</h1>
+<div class='meta'><strong>הדמות:</strong> ${charName} · <strong>הופק:</strong> ${hebDate} · <strong>יחידות בדו"ח:</strong> ${rows.length}</div>
+
+<h2>ההגדרה הצרה למושג "${conceptName}"</h2>
+<div class='ndef'>${(getNarrowDef?getNarrowDef(conceptName):"").replace(/</g,'&lt;')||"—"}</div>
+
+<h2>טבלת הריכוז</h2>
+<table>
+<thead><tr>
+<th>יחידה ספרותית ופסוקים</th>
+<th>האינדיקטור שעומד בהגדרה הצרה</th>
+<th>הראיה והסברה</th>
+<th>פרשנים ועמ'</th>
+<th>מידת ההתאמה</th>
+<th>התרומה הייחודית לדיון</th>
+</tr></thead>
+<tbody>${tableRows}</tbody>
+</table>
+
+<h2>סיכום מחקרי של המושג כולו</h2>
+<div class='question'><span class='q-label'>1. מה אפשר לטעון על נוכחות המושג בעיצוב דוד?</span>${(q1||"—").replace(/</g,'&lt;')}</div>
+<div class='question'><span class='q-label'>2. אילו יחידות מספקות את הראיות החזקות ביותר?</span>${(q2||"—").replace(/</g,'&lt;')}</div>
+<div class='question'><span class='q-label'>3. האם היחידות משלימות זו את זו, חוזרות על אותה ראיה או מציגות מתח וכשל?</span>${(q3||"—").replace(/</g,'&lt;')}</div>
+<div class='question'><span class='q-label'>4. היכן יש התאמה לדגם הנבואי, והיכן מתגלה פער?</span>${(q4||"—").replace(/</g,'&lt;')}</div>
+</body></html>`;
+
+    const blob=new Blob(['﻿'+html],{type:"application/msword"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    const safeConcept=conceptName.replace(/[\/\s]/g,'_');
+    a.download=`דוח_ריכוז_${safeConcept}_${charName}_${new Date().toISOString().slice(0,10)}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
+  const MATCH_OPTIONS=["מובהקת","חלקית","גבולית"];
+
+  return(
+    <div style={{maxWidth:"1400px",margin:"0 auto",padding:"20px 16px"}} dir="rtl">
+      {/* כותרת */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"14px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:`1px solid ${dimColor}44`,flexWrap:"wrap",gap:"8px"}}>
+        <div>
+          <div style={{fontSize:"18px",fontWeight:"bold",color:"#f1f5f9"}}>📊 דו"ח ריכוז — {conceptName} <span style={{fontSize:"14px",color:dimColor,fontWeight:"600"}}>· ב{charName}</span></div>
+          <div style={{fontSize:"11px",color:"#94a3b8",marginTop:"3px"}}>סיכום כולל של המושג ברמת הדמות — {rows.length} יחידות עם ראיות מאושרות/גבוליות</div>
+        </div>
+        <button onClick={onBack} style={{padding:"6px 14px",borderRadius:"7px",border:"1px solid #334155",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ חזור לבחירה</button>
+      </div>
+
+      {/* הסבר שימוש */}
+      <div style={{marginBottom:"14px",padding:"10px 14px",background:"#1e3a5f",borderRadius:"7px",border:"1px solid #3b82f6",fontSize:"11px",color:"#bfdbfe",lineHeight:"1.6"}}>
+        <strong>כיצד להשתמש:</strong> עמודות "יחידה", "אינדיקטור", "ראיה" ו"פרשנים" מתמלאות אוטומטית מהנתונים. עלייך למלא: "מידת ההתאמה" (מובהקת/חלקית/גבולית) ו"תרומה ייחודית" לכל יחידה, ואת 4 שאלות המחקר למטה.
+      </div>
+
+      {/* הטבלה */}
+      {rows.length===0?(
+        <div style={{padding:"30px",textAlign:"center",color:"#94a3b8",background:"#1e293b",borderRadius:"8px"}}>
+          אין יחידות עם ראיות מאושרות/גבוליות למושג "{conceptName}".
+        </div>
+      ):(
+        <div style={{overflowX:"auto",marginBottom:"20px",background:"#1e293b",borderRadius:"8px",padding:"10px"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px",direction:"rtl"}}>
+            <thead>
+              <tr style={{background:"#0f172a"}}>
+                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"140px"}}>יחידה ספרותית ופסוקים</th>
+                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"160px"}}>האינדיקטור שעומד בהגדרה הצרה</th>
+                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"220px"}}>הראיה והסברה</th>
+                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"140px"}}>פרשנים ועמ'</th>
+                <th style={{padding:"10px",textAlign:"center",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"110px"}}>מידת ההתאמה</th>
+                <th style={{padding:"10px",textAlign:"right",color:dimColor,fontWeight:"700",border:`1px solid ${dimColor}33`,minWidth:"180px"}}>התרומה הייחודית לדיון</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r,i)=>{
+                const cell=perUnit[r.u.id]||{};
+                return(
+                  <tr key={r.u.id} style={{background:i%2?"#0f172a":"#1e293b"}}>
+                    <td style={{padding:"8px",color:"#f1f5f9",verticalAlign:"top",border:"1px solid #334155"}}>
+                      <div style={{fontWeight:"700"}}>{r.u.name}</div>
+                      <div style={{fontSize:"10px",color:"#94a3b8",marginTop:"2px"}}>({r.u.chapter})</div>
+                      {r.verses.length>0&&<div style={{fontSize:"10px",color:"#cbd5e1",marginTop:"4px"}}>פסוקים: {r.verses.join(", ")}</div>}
+                    </td>
+                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
+                      {r.approved.length>0&&(
+                        <div style={{marginBottom:"4px"}}>
+                          <span style={{color:"#34d399",fontWeight:"700"}}>✓ מאושר:</span><br/>
+                          {r.approved.map((x,j)=><div key={j} style={{marginRight:"8px"}}>#{x._idx+1} {(x._def&&x._def.paramLabel)||""}</div>)}
+                        </div>
+                      )}
+                      {r.borderline.length>0&&(
+                        <div>
+                          <span style={{color:"#fbbf24",fontWeight:"700"}}>~ גבולי:</span><br/>
+                          {r.borderline.map((x,j)=><div key={j} style={{marginRight:"8px"}}>#{x._idx+1} {(x._def&&x._def.paramLabel)||""}</div>)}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px",lineHeight:"1.6"}}>
+                      {r.notes.length>0?r.notes.map((n,j)=><div key={j} style={{marginBottom:"4px"}}>• {n.length>160?n.substring(0,160)+"...":n}</div>):<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>}
+                    </td>
+                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"10px"}}>
+                      {r.scholarMatches.length>0?r.scholarMatches.slice(0,5).map((s,j)=><div key={j}>{s}</div>):(r.schol?<span style={{color:"#c084fc"}}>יש scholarship — בדקי ידנית</span>:<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>)}
+                    </td>
+                    <td style={{padding:"6px",border:"1px solid #334155",verticalAlign:"top"}}>
+                      <select value={cell.match||""} onChange={e=>updateCell(r.u.id,"match",e.target.value)}
+                        style={{width:"100%",padding:"5px",background:"#0f172a",border:"1px solid #334155",borderRadius:"4px",color:"#f1f5f9",fontSize:"12px",direction:"rtl"}}>
+                        <option value="">— בחרי —</option>
+                        {MATCH_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </td>
+                    <td style={{padding:"6px",border:"1px solid #334155",verticalAlign:"top"}}>
+                      <textarea value={cell.contribution||""} onChange={e=>updateCell(r.u.id,"contribution",e.target.value)}
+                        placeholder="מה לומדים כאן שלא עולה מיחידות אחרות?"
+                        style={{width:"100%",minHeight:"70px",padding:"5px",background:"#0f172a",border:"1px solid #334155",borderRadius:"4px",color:"#f1f5f9",fontSize:"11px",direction:"rtl",resize:"vertical",fontFamily:"inherit",lineHeight:"1.5"}}/>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ארבע שאלות המחקר */}
+      <div style={{marginBottom:"20px",padding:"16px",background:"#1e293b",borderRadius:"10px",border:`2px solid ${dimColor}44`}}>
+        <div style={{fontSize:"14px",color:"#f1f5f9",fontWeight:"700",marginBottom:"12px"}}>📝 סיכום מחקרי של המושג כולו</div>
+        {[
+          ["1. מה אפשר לטעון על נוכחות המושג בעיצוב דוד?",q1,setQ1],
+          ["2. אילו יחידות מספקות את הראיות החזקות ביותר?",q2,setQ2],
+          ["3. האם היחידות משלימות זו את זו, חוזרות על אותה ראיה או מציגות מתח וכשל?",q3,setQ3],
+          ["4. היכן יש התאמה לדגם הנבואי, והיכן מתגלה פער?",q4,setQ4],
+        ].map(([label,val,setter],i)=>(
+          <div key={i} style={{marginBottom:"12px"}}>
+            <div style={{fontSize:"12px",color:dimColor,fontWeight:"700",marginBottom:"5px"}}>{label}</div>
+            <textarea value={val} onChange={e=>setter(e.target.value)}
+              placeholder="כתבי את תשובתך..."
+              style={{width:"100%",minHeight:"80px",padding:"9px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+          </div>
+        ))}
+      </div>
+
+      {/* כפתורי פעולה */}
+      <div style={{display:"flex",gap:"10px",justifyContent:"flex-end",flexWrap:"wrap",alignItems:"center"}}>
+        {savedFlash&&<span style={{color:"#34d399",fontSize:"12px",fontWeight:"700"}}>✓ נשמר</span>}
+        <button onClick={downloadReportAsWord}
+          style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#2563eb",color:"white",fontSize:"13px",fontWeight:"700"}}>
+          📥 הורד דו"ח כקובץ Word
+        </button>
+        <button onClick={saveAll}
+          style={{padding:"10px 24px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"13px",fontWeight:"700"}}>
+          💾 שמור את הדו"ח
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // UnitConceptAnalysis — מסך ניתוח יחידה בודדת עבור מושג יחיד
 // ────────────────────────────────────────────────────────────────────────
 // זהו המסך המרכזי בתהליך החדש של שלב ג׳:
@@ -3566,7 +3830,7 @@ ${bodyHtml}
   );
 }
 
-function StageC({allUnits,allConcepts,dim4concept,getE,setE,getParams,getCompareNote,setCompareNote,getUnitSummary,getStage3Result,setStage3Result,raw,getNarrowDef,setNarrowDef,getWritingDraft,setWritingDraft,getVerified,setVerified}){
+function StageC({allUnits,allConcepts,dim4concept,getE,setE,getParams,getCompareNote,setCompareNote,getUnitSummary,getStage3Result,setStage3Result,raw,getNarrowDef,setNarrowDef,getWritingDraft,setWritingDraft,getVerified,setVerified,getConceptSummary,setConceptSummary}){
   const [screen,setScreen]=useState("select");
   const [character,setCharacter]=useState(null);
   const [dimension,setDimension]=useState(null);
@@ -4139,13 +4403,34 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
                 📋 ניתוח היחידה הנבחרת ←
               </button>
             )}
-            <button onClick={()=>setScreen("run")}
-              style={{padding:"12px 20px",borderRadius:"10px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"12px",fontWeight:"600"}}>
-              🧪 ניתוח ברמת הדמות (6 שלבים)
+            <button onClick={()=>setScreen("concept-summary")}
+              style={{padding:"12px 24px",borderRadius:"10px",border:"none",cursor:"pointer",background:"#c084fc",color:"white",fontSize:"13px",fontWeight:"700"}}>
+              📊 דו"ח ריכוז של המושג "{conceptName}" ←
             </button>
           </div>
         )}
       </div>
+    );
+  }
+
+  // ══════════════════ מסך דו"ח ריכוז של מושג ══════════════════
+  if(screen==="concept-summary"){
+    return(
+      <ConceptSummary
+        character={character}
+        dimension={dimension}
+        conceptName={conceptName}
+        allUnits={allUnits}
+        getE={getE}
+        getParams={getParams}
+        getCompareNote={getCompareNote}
+        getUnitSummary={getUnitSummary}
+        getNarrowDef={getNarrowDef}
+        getConceptSummary={getConceptSummary}
+        setConceptSummary={setConceptSummary}
+        unitsForCurrentConcept={unitsForCurrentConcept}
+        onBack={backToSelect}
+      />
     );
   }
 
@@ -4947,20 +5232,22 @@ function App(){
   useEffect(()=>{ window.__rawData = raw; },[raw]);
 
   useEffect(()=>{
-    let base={units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[],compareNotes:{},compareFactual:{},unitSummary:{},narrowDefs:{},writingDrafts:{},verifs:{}};
+    let base={units:[],overrides:{},concepts:{},analysis:{},analysis_chronicles:{},analysis_source:{},customConcepts:[],compareNotes:{},compareFactual:{},unitSummary:{},narrowDefs:{},writingDrafts:{},verifs:{},conceptSummaries:{}};
     Object.keys(DEFAULT_CONCEPTS).forEach(name=>{
       base.concepts[name]={params: DEFAULT_CONCEPTS[name].params};
     });
-    // טען מ-localStorage את ההגדרות הצרות, הטיוטות והאישורים (תמיד, גם אם Firebase ריק)
+    // טען מ-localStorage את ההגדרות הצרות, הטיוטות, האישורים והדו"חות (תמיד, גם אם Firebase ריק)
     const localNarrow=NDEFS.load();
     const localDrafts=WDRAFTS.load();
     const localVerifs=VERIFS.load();
+    const localCSums=CSUMS.load();
     fbLoad(fbData=>{
       if(fbData&&fbData.units&&fbData.units.length>0){
         const merged={...base,...fbData,concepts:{...base.concepts,...(fbData.concepts||{})},
           narrowDefs:{...localNarrow,...(fbData.narrowDefs||{})},
           writingDrafts:{...localDrafts,...(fbData.writingDrafts||{})},
-          verifs:{...localVerifs,...(fbData.verifs||{})}};
+          verifs:{...localVerifs,...(fbData.verifs||{})},
+          conceptSummaries:{...localCSums,...(fbData.conceptSummaries||{})}};
         if(fbData.analysis&&Object.keys(fbData.analysis).length>0&&(!fbData.analysis_chronicles||Object.keys(fbData.analysis_chronicles).length===0)){
           merged.analysis_chronicles=fbData.analysis;
         }
@@ -4973,9 +5260,10 @@ function App(){
           setRaw({...base,...d,concepts:{...base.concepts,...(d.concepts||{})},
             narrowDefs:{...localNarrow,...(d.narrowDefs||{})},
             writingDrafts:{...localDrafts,...(d.writingDrafts||{})},
-            verifs:{...localVerifs,...(d.verifs||{})}});
+            verifs:{...localVerifs,...(d.verifs||{})},
+            conceptSummaries:{...localCSums,...(d.conceptSummaries||{})}});
         } else {
-          setRaw({...base,narrowDefs:localNarrow||{},writingDrafts:localDrafts||{},verifs:localVerifs||{}});
+          setRaw({...base,narrowDefs:localNarrow||{},writingDrafts:localDrafts||{},verifs:localVerifs||{},conceptSummaries:localCSums||{}});
         }
       }
     });
@@ -5166,6 +5454,21 @@ function App(){
     });
     queuePatch(d=>({...d,verifs:{...(d.verifs||{}),[k]:data}}));
   }
+  // ── דו"ח ריכוז של מושג לפי (דמות, מושג) ──
+  function conceptSummaryKey(character,conceptName){return `${character}__${conceptName}`;}
+  function getConceptSummary(character,conceptName){
+    return (raw.conceptSummaries||{})[conceptSummaryKey(character,conceptName)]||{perUnit:{},q1:"",q2:"",q3:"",q4:""};
+  }
+  function setConceptSummary(character,conceptName,data){
+    const k=conceptSummaryKey(character,conceptName);
+    setRaw(prev=>{
+      const updated={...prev,conceptSummaries:{...(prev.conceptSummaries||{}),[k]:data}};
+      CSUMS.save(updated.conceptSummaries);
+      window.__rawData=updated; LS.save(updated);
+      return updated;
+    });
+    queuePatch(d=>({...d,conceptSummaries:{...(d.conceptSummaries||{}),[k]:data}}));
+  }
 
   // ── גיבוי ואיפוס נרמז ──
   function backupData(){
@@ -5306,7 +5609,7 @@ function App(){
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} backupData={backupData} resetNirmaz={resetNirmaz}/>}
       {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
-      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} setE={setE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified}/>}
+      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} setE={setE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
       {tab==="indmatrix"&&<IndicatorMatrixReport allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams}/>}
       {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
