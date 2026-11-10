@@ -4580,11 +4580,10 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
     setTimeout(()=>setBatchStatus(null),4000);
     alert(`✓ הושלם!\n\nעובד על ${processedCount} צמדי (יחידה×מושג) עם ממצאים חיוביים.\n• ${withApprovedCount} עם מאושרים אוטומטיים\n• ${withBorderlinesCount} עם גבוליים שקובלו עכשיו\n\nחזרי למסך הבחירה ובדקי את הסימון "✓ אושרה" ליד כל יחידה.`);
   }
-  // (2) כתיבת הערות השוואה בבאצ' לכל הצמדים (יחידה×מושג) של הדמות — חוץ מרוח
+  // (2) כתיבת הערות השוואה בבאצ' — מחזור אחד לכל מושג, עם שמירה ובקשת אישור בין מושגים
   async function batchGenerateAllCompareNotes(){
     if(!character){ alert("בחרי קודם דמות."); return; }
     const charName2=character==="david"?"דוד":"שלמה";
-    if(!confirm(`לכתוב הערת השוואה לכל (יחידה×מושג) של ${charName2}, חוץ ממושג "רוח/ריח"?\n\nפעולה זו יכולה לקחת מספר דקות ולעלות כסף על קריאות AI. הערות השוואה קיימות ידרסו.`)) return;
 
     // ⚠ allConcepts הם אובייקטים — חייבים .name
     const conceptNames=(allConcepts||[]).map(c=>c.name||c).filter(n=>n&&!BATCH_EXCLUDE.includes(n));
@@ -4595,45 +4594,110 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
       if(s&&s.notInThesis) return false;
       return true;
     });
-    const tasks=[];
-    units.forEach(u=>{
-      const s=getUnitSummary?getUnitSummary(u.id):null;
-      const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
-      conceptNames.forEach(cname=>{
+
+    // קיבוץ היחידות לפי מושג — כל מושג יקבל את רשימת היחידות שלו
+    const unitsByConcept={}; // {cname: [units with positives]}
+    conceptNames.forEach(cname=>{
+      unitsByConcept[cname]=[];
+      units.forEach(u=>{
+        const s=getUnitSummary?getUnitSummary(u.id):null;
+        const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
         if(notRel.includes(cname)) return;
         const ec=raw.analysis_chronicles?.[u.id]?.[cname]||null;
         if(!ec) return;
         const anyPositive=(ec.params||[]).some(p=>p&&p.found===true);
-        if(anyPositive) tasks.push({u,cname});
+        if(anyPositive) unitsByConcept[cname].push(u);
       });
     });
-    setBatchStatus({mode:"compare",total:tasks.length,done:0,current:"",log:[]});
-    const batchResults={}; // {`${uid}__${cname}`: text}
-    let saveEvery=5; // שמירה כל 5 תגובות כדי לא לאבד התקדמות
-    for(let i=0;i<tasks.length;i++){
-      const {u,cname}=tasks[i];
-      setBatchStatus(s=>s?{...s,done:i,current:`${cname} · ${u.name}`}:null);
-      try{
-        const v=(raw.verifs||{})[`${character}__${cname}__${u.id}`];
-        const decisions=(v&&v.borderlineDecisions)||"all-accepted";
-        const prompt=buildCompareNotePromptForAI(u,cname,character,getE,getParams,getNarrowDef,decisions);
-        const resp=await aiCall(prompt,4000);
-        const text=(resp||"").trim();
-        if(text) batchResults[`${u.id}__${cname}`]=text;
-      }catch(e){
-        console.error("batch compareNote err:",cname,u.name,e);
-        setBatchStatus(s=>s?{...s,log:[...(s.log||[]),`❌ ${cname} · ${u.name}: ${(e.message||e).toString().substring(0,80)}`]}:null);
-      }
-      // שמירה חלקית כל saveEvery
-      if((i+1)%saveEvery===0||i===tasks.length-1){
-        if(Object.keys(batchResults).length&&setCompareNotesBatch){
-          setCompareNotesBatch(batchResults);
+
+    // סיכום ראשוני לפי מושג: סה"כ, כבר נכתבו, נותרו
+    const existingCN=raw.compareNotes||{};
+    const conceptSummary=conceptNames.map(cname=>{
+      const unitsList=unitsByConcept[cname];
+      const done=unitsList.filter(u=>((existingCN[u.id]||{})[cname]||"").trim()).length;
+      return {cname,total:unitsList.length,done,pending:unitsList.length-done};
+    }).filter(s=>s.total>0);
+
+    const totalUnits=conceptSummary.reduce((a,s)=>a+s.total,0);
+    const totalDone=conceptSummary.reduce((a,s)=>a+s.done,0);
+    const totalPending=conceptSummary.reduce((a,s)=>a+s.pending,0);
+
+    const summaryLines=conceptSummary.map(s=>`• ${s.cname}: ${s.pending} לכתוב${s.done?` (${s.done} כבר קיימים)`:""}`).join("\n");
+    if(!confirm(`כתיבת הערות השוואה עבור ${charName2} (חוץ מרוח/ריח):\n\n${summaryLines}\n\n━━━━━━━━━━━━━━━━━━━━\nסה"כ: ${totalPending} לכתוב ${totalDone?`(${totalDone} כבר קיימים — ידלגו)`:""}\n\nהפעולה תעבוד מושג-מושג, תשמור אחרי כל מושג ותבקש אישור להמשך.\n\nלהתחיל?`)) return;
+
+    if(totalPending===0){ alert("✓ כל הצמדים כבר נכתבו. אין מה לעשות."); return; }
+
+    // חישוב גלובלי להצגת סטטוס
+    let globalDone=totalDone, grandTotal=totalUnits;
+    setBatchStatus({mode:"compare",total:grandTotal,done:globalDone,current:"",log:[]});
+
+    for(let ci=0;ci<conceptSummary.length;ci++){
+      const {cname,pending,done:alreadyDone,total:conceptTotal}=conceptSummary[ci];
+      if(pending===0){ continue; } // כל היחידות של המושג כבר נכתבו
+
+      // המושג הנוכחי: בניית רשימת היחידות שעוד לא נכתבו
+      const unitsToProcess=unitsByConcept[cname].filter(u=>!((existingCN[u.id]||{})[cname]||"").trim());
+
+      // בצע לכל יחידה — אוסף את התוצאות לכתיבה אחת בסוף המושג
+      const conceptResults={}; // {uid: {cname: text}}
+      let conceptSuccess=0, conceptFail=0;
+      const failedLog=[];
+
+      for(let i=0;i<unitsToProcess.length;i++){
+        const u=unitsToProcess[i];
+        setBatchStatus(s=>s?{...s,done:globalDone+conceptSuccess,current:`[${ci+1}/${conceptSummary.length}] ${cname} · ${u.name} (${i+1}/${unitsToProcess.length})`}:null);
+        try{
+          const v=(raw.verifs||{})[`${character}__${cname}__${u.id}`];
+          const decisions=(v&&v.borderlineDecisions)||"all-accepted";
+          const prompt=buildCompareNotePromptForAI(u,cname,character,getE,getParams,getNarrowDef,decisions);
+          const resp=await aiCall(prompt,4000);
+          const text=(resp||"").trim();
+          if(text){
+            if(!conceptResults[u.id]) conceptResults[u.id]={};
+            conceptResults[u.id][cname]=text;
+            conceptSuccess++;
+          } else {
+            conceptFail++;
+            failedLog.push(`${u.name}: תגובה ריקה`);
+          }
+        }catch(e){
+          conceptFail++;
+          const msg=(e.message||e).toString().substring(0,80);
+          failedLog.push(`${u.name}: ${msg}`);
+          console.error("batch err:",cname,u.name,e);
+          setBatchStatus(s=>s?{...s,log:[...(s.log||[]),`❌ ${cname} · ${u.name}: ${msg}`]}:null);
         }
       }
+
+      // שמירה של המושג כולו — אטומית
+      if(Object.keys(conceptResults).length>0&&setCompareNotesBatch){
+        setCompareNotesBatch(conceptResults);
+        globalDone+=conceptSuccess;
+      }
+
+      // אם זה היה המושג האחרון — יוצא ללא שאלה
+      const isLast=(ci===conceptSummary.length-1);
+      const nextSummary=isLast?null:conceptSummary.slice(ci+1).find(s=>s.pending>0);
+
+      // סיכום ושאלה על המשך
+      const summaryMsg=`✓ המושג "${cname}" הושלם ונשמר.\n` +
+        `• ${conceptSuccess} נכתבו בהצלחה${alreadyDone?` (+ ${alreadyDone} היו קיימים)`:""}\n`+
+        (conceptFail>0?`• ❌ ${conceptFail} נכשלו:\n${failedLog.slice(0,5).map(l=>"  - "+l).join("\n")}${failedLog.length>5?"\n  ...":""}\n`:"")+
+        `\n━━━━━━━━━━━━━━━━━━━━\nמה הלאה?`;
+
+      if(isLast||!nextSummary){
+        alert(summaryMsg+"\n\n🎉 זה היה המושג האחרון!");
+        break;
+      }
+      if(!confirm(summaryMsg+`\n\nלהמשיך עם המושג הבא: "${nextSummary.cname}" (${nextSummary.pending} יחידות)?\n\nLחצי Cancel כדי לעצור כאן — כל מה שנכתב עד כה שמור.`)){
+        setBatchStatus(s=>s?{...s,current:"⏸ נעצר"}:null);
+        setTimeout(()=>setBatchStatus(null),3000);
+        return;
+      }
     }
-    setBatchStatus(s=>s?{...s,done:tasks.length,current:`✓ הסתיים — ${Object.keys(batchResults).length}/${tasks.length}`}:null);
-    alert(`✓ נכתבו ${Object.keys(batchResults).length} הערות השוואה מתוך ${tasks.length}.\n\nאם חלק נכשלו — ראי את הלוג על המסך.`);
-    setTimeout(()=>setBatchStatus(null),6000);
+
+    setBatchStatus(s=>s?{...s,done:grandTotal,current:"✓ הסתיים"}:null);
+    setTimeout(()=>setBatchStatus(null),5000);
   }
 
   // ══════════════════ מסך בחירה ══════════════════
@@ -6160,15 +6224,28 @@ function App(){
     queuePatch(d=>({...d,verifs:{...(d.verifs||{}),...changesObject}}));
   }
   // ── עדכון באצ' של compareNotes ──
+  // ⚠ compareNotes זה מבנה מקונן {uid: {cname: text}} — חייב לשמור את הקינון
+  // changesObject מקובל במבנה {uid: {cname: text, ...}, ...}
   function setCompareNotesBatch(changesObject){
     if(!changesObject||!Object.keys(changesObject).length) return;
     setRaw(prev=>{
-      const merged={...(prev.compareNotes||{}),...changesObject};
+      const prevNotes=prev.compareNotes||{};
+      const merged={...prevNotes};
+      Object.entries(changesObject).forEach(([uid,cnameMap])=>{
+        merged[uid]={...(prevNotes[uid]||{}),...(cnameMap||{})};
+      });
       const updated={...prev,compareNotes:merged};
       window.__rawData=updated; LS.save(updated);
       return updated;
     });
-    queuePatch(d=>({...d,compareNotes:{...(d.compareNotes||{}),...changesObject}}));
+    queuePatch(d=>{
+      const prevNotes=d.compareNotes||{};
+      const merged={...prevNotes};
+      Object.entries(changesObject).forEach(([uid,cnameMap])=>{
+        merged[uid]={...(prevNotes[uid]||{}),...(cnameMap||{})};
+      });
+      return {...d,compareNotes:merged};
+    });
   }
   // ── דו"ח ריכוז של מושג לפי (דמות, מושג) ──
   function conceptSummaryKey(character,conceptName){return `${character}__${conceptName}`;}
