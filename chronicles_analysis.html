@@ -5708,8 +5708,16 @@ function conceptToDimensionId(conceptName){
 function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote,getVerified,getUnitSummary,raw,getConceptSummary,setConceptSummary}){
   const [character,setCharacter]=useState("david");
   const [selectedCycle,setSelectedCycle]=useState(null);
+  const [generating,setGenerating]=useState(null); // 'decision' | 'derivatives' | null
+  const [decisionTable,setDecisionTable]=useState([]);
+  const [interpretiveQuestion,setInterpretiveQuestion]=useState("");
+  const [paragraphOrder,setParagraphOrder]=useState("");
+  const [proposedConclusion,setProposedConclusion]=useState("");
+  const [showRawData,setShowRawData]=useState(false); // כברירת מחדל מוסתר — אחרי ניתוח
 
   const cycles=character==="david"?DAVID_CYCLES:SOLOMON_CYCLES;
+  // ⚠ allConcepts הם אובייקטים — חייבים .name
+  const conceptNameList=(allConcepts||[]).map(c=>c.name||c).filter(Boolean);
 
   // התאמת שם יחידה מהמעגל ליחידה בנתונים
   function findUnitByName(targetName){
@@ -5728,7 +5736,7 @@ function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote
   function getApprovedForUnit(unit){
     if(!unit) return [];
     const list=[];
-    (allConcepts||[]).forEach(cname=>{
+    conceptNameList.forEach(cname=>{ // ⚠ תיקון: שמות מושגים כ-strings
       const ec=getE(unit.id,cname,"chronicles")||{};
       const params=getParams?getParams(cname):[];
       const validParams=validParamDefs(params);
@@ -5744,21 +5752,196 @@ function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote
     return list;
   }
 
-  // 4 שאלות המחקר — מאוחסן ב-conceptSummaries תחת מפתח מעגל
-  const cycleKey=sel=>`__cycle__${character}__${sel?sel.num:"none"}`;
-  const [q1,setQ1]=useState("");
-  const [q2,setQ2]=useState("");
-  const [q3,setQ3]=useState("");
-  const [q4,setQ4]=useState("");
+  // אוסף מקיף של הממצאים ליחידה: מאושרים + גבוליים פתוחים + compareNote
+  function collectFullFindingsForUnit(unit){
+    if(!unit) return null;
+    const perConcept=[];
+    conceptNameList.forEach(cname=>{
+      const ec=getE(unit.id,cname,"chronicles")||{};
+      const params=getParams?getParams(cname):[];
+      const validParams=validParamDefs(params);
+      const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(cname,i),_def:params[i]||validParams[i]}:null).filter(Boolean);
+      const approvedAuto=positives.filter(x=>x._narrow==="approved");
+      const borderlineRaw=positives.filter(x=>x._narrow==="borderline");
+      const v=getVerified?getVerified(character,cname,unit.id):null;
+      const bdec=(v&&v.borderlineDecisions)||{};
+      const borderlineAccepted=borderlineRaw.filter(x=>bdec[x._idx]==="accepted");
+      const borderlinePending=borderlineRaw.filter(x=>!bdec[x._idx]);
+      const effectiveApproved=[...approvedAuto,...borderlineAccepted];
+      const compareNote=getCompareNote?getCompareNote(unit.id,cname):"";
+      if(effectiveApproved.length===0&&borderlinePending.length===0&&!compareNote) return;
+      perConcept.push({
+        concept:cname,
+        dim:conceptToDimensionId(cname),
+        approved:effectiveApproved,
+        borderlinePending:borderlinePending,
+        manualCount:borderlineAccepted.length,
+        compareNote:compareNote,
+      });
+    });
+    return perConcept;
+  }
+
+  // מפתח אחסון למעגל
+  const cycleStorageKey=sel=>`__d4__${character}__${sel?sel.num:"none"}`;
+
+  // טעינת מצב השמור של המעגל
   useEffect(()=>{
-    if(!selectedCycle) return;
-    const s=getConceptSummary?getConceptSummary(character,cycleKey(selectedCycle)):{q1:"",q2:"",q3:"",q4:""};
-    setQ1(s.q1||""); setQ2(s.q2||""); setQ3(s.q3||""); setQ4(s.q4||"");
+    if(!selectedCycle){setDecisionTable([]);setInterpretiveQuestion("");setParagraphOrder("");setProposedConclusion("");return;}
+    const s=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle)):null;
+    setDecisionTable((s&&s.decisionTable)||[]);
+    setInterpretiveQuestion((s&&s.interpretiveQuestion)||"");
+    setParagraphOrder((s&&s.paragraphOrder)||"");
+    setProposedConclusion((s&&s.proposedConclusion)||"");
+    setShowRawData(!(s&&s.decisionTable&&s.decisionTable.length>0));
   },[selectedCycle,character]);
-  function saveCycleQuestions(){
-    if(!selectedCycle) return;
-    if(setConceptSummary) setConceptSummary(character,cycleKey(selectedCycle),{q1,q2,q3,q4,savedAt:Date.now()});
-    alert("✓ 4 השאלות נשמרו עבור "+selectedCycle.title);
+
+  function saveCycleState(partial){
+    if(!selectedCycle||!setConceptSummary) return;
+    const full={decisionTable,interpretiveQuestion,paragraphOrder,proposedConclusion,...partial,savedAt:Date.now()};
+    setConceptSummary(character,cycleStorageKey(selectedCycle),full);
+  }
+
+  function updateDecisionRow(idx,field,value){
+    const next=decisionTable.map((r,i)=>i===idx?{...r,[field]:value}:r);
+    setDecisionTable(next);
+  }
+
+  // ─── AI: יצירת טבלת הכרעות למעגל ───
+  async function generateDecisionTable(){
+    if(!selectedCycle){ alert("בחרי מעגל"); return; }
+    setGenerating('decision');
+    try{
+      const findings=selectedCycle.units.map(uname=>{
+        const u=findUnitByName(uname);
+        if(!u) return {unitName:uname,missing:true};
+        return {unitName:uname,unit:u,chapter:(u.chapter||"").replace(/_/g," "),perConcept:collectFullFindingsForUnit(u)};
+      });
+      const charName2=character==="david"?"דוד":"שלמה";
+      const findingsText=findings.map(f=>{
+        if(f.missing) return `### ${f.unitName}\n(⚠ היחידה לא נמצאה במאגר)`;
+        const cpBlocks=(f.perConcept||[]).map(pc=>{
+          const indLines=pc.approved.map(ind=>`  • #${ind._idx+1} "${((ind._def&&ind._def.paramLabel)||"").substring(0,40)}": ${((ind._def&&ind._def.q)||"").substring(0,100)}${ind.verse?` [פסוק ${ind.verse}]`:""}${ind.note?` — ${ind.note.substring(0,200)}`:""}`).join("\n");
+          const pendLine=pc.borderlinePending.length?`  ⚪ ${pc.borderlinePending.length} ממצאים גבוליים שעוד לא הוכרעו`:"";
+          const cmpBlock=pc.compareNote?`  📝 הערת השוואה: ${pc.compareNote.substring(0,500)}`:"";
+          return `- מושג "${pc.concept}" (${pc.dim})  · מאושרים: ${pc.approved.length}${pc.manualCount?` (מתוכם ${pc.manualCount} קובלו ידנית)`:""}\n${indLines}${pendLine?"\n"+pendLine:""}${cmpBlock?"\n"+cmpBlock:""}`;
+        }).join("\n");
+        return `### ${f.unitName} (${f.chapter})\n${cpBlocks||"  (אין ממצאים לאחר סינון ההגדרה הצרה)"}`;
+      }).join("\n\n");
+
+      const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד/שלמה בדברי הימים לעומת שמואל-מלכים. אנא בנה טבלת הכרעות למעגל הפרשני.
+
+הדמות: ${charName2}
+המעגל: מעגל ${selectedCycle.num} — ${selectedCycle.title}
+${selectedCycle.units.length} יחידות במעגל.
+
+---
+
+הממצאים ליחידות (לאחר סינון ההגדרה הצרה):
+
+${findingsText}
+
+---
+
+המטרה: לבנות טבלת הכרעות למעגל, כאשר לכל יחידה אני רוצה את השדות הבאים:
+
+1. **decisiveVerses** - הפסוקים המכריעים ביחידה שתורמים לדיון של המעגל
+2. **leadingConcept** - המושג המוביל של היחידה (אחד). בחר מתוך המושגים עם ממצאים מאושרים.
+3. **complementaryConcepts** - מערך של עד 3 מושגים משלימים (array של strings)
+4. **uniqueContribution** - 1-3 משפטים על התרומה הייחודית של היחידה למעגל: מה היא מוסיפה שאין ביחידה אחרת?
+5. **recommendation** - "analysis" (יחידת ניתוח מרכזית) / "context" (יחידת הקשר) / "transition" (יחידת מעבר) / "mapping" (תישאר רק במיפוי)
+6. **recommendationReason** - משפט אחד שמנמק את ההמלצה
+7. **gapFlag** - אם יש פער בין הסימונים לנימוקים / ראיה חסרה / סתירה — ציין אותו. אחרת: ריק.
+
+שקול:
+- האם הממצא עומד בפני עצמו או מקבל משקל מיחידה קודמת?
+- האם מושג נוסף מסביר היבט שונה של אותה ראיה?
+- חוזר האינדיקטור במספר יחידות ומשמעות הדבר למעגל.
+
+החזר **רק JSON תקין**, ללא הסברים או הקדמות, במבנה:
+{
+  "rows": [
+    {
+      "unitName": "...",
+      "decisiveVerses": "...",
+      "leadingConcept": "...",
+      "complementaryConcepts": ["..."],
+      "uniqueContribution": "...",
+      "recommendation": "analysis",
+      "recommendationReason": "...",
+      "gapFlag": ""
+    }
+  ]
+}`;
+      const resp=await aiCall(prompt,8000);
+      let text=(resp||"").trim();
+      // ניסיון לחלץ JSON מתוך תגובה
+      const jsonMatch=text.match(/\{[\s\S]*\}/);
+      if(!jsonMatch) throw new Error("ה-AI לא החזיר JSON תקין");
+      const parsed=JSON.parse(jsonMatch[0]);
+      if(!parsed.rows||!Array.isArray(parsed.rows)) throw new Error("JSON לא כולל שדה rows תקין");
+      const newTable=parsed.rows.map(r=>({
+        unitName:r.unitName||"",
+        decisiveVerses:r.decisiveVerses||"",
+        leadingConcept:r.leadingConcept||"",
+        complementaryConcepts:Array.isArray(r.complementaryConcepts)?r.complementaryConcepts:[],
+        uniqueContribution:r.uniqueContribution||"",
+        recommendation:r.recommendation||"analysis",
+        recommendationReason:r.recommendationReason||"",
+        gapFlag:r.gapFlag||"",
+      }));
+      setDecisionTable(newTable);
+      saveCycleState({decisionTable:newTable});
+      setShowRawData(false); // סוגר את התצוגה הראשונית, מציג את הטבלה
+      alert(`✓ טבלת ההכרעות נוצרה: ${newTable.length} שורות. עברי עליה וערכי מה שצריך.`);
+    }catch(e){
+      alert("שגיאה ביצירת טבלת ההכרעות: "+(e.message||e));
+    }finally{
+      setGenerating(null);
+    }
+  }
+
+  // ─── AI: שאלה פרשנית + סדר פסקאות + מסקנה ───
+  async function generateDerivatives(){
+    if(!decisionTable||decisionTable.length===0){ alert("קודם ערוכי את טבלת ההכרעות."); return; }
+    setGenerating('derivatives');
+    try{
+      const charName2=character==="david"?"דוד":"שלמה";
+      const tableText=decisionTable.map((r,i)=>`${i+1}. ${r.unitName}\n   פסוקים מכריעים: ${r.decisiveVerses}\n   מושג מוביל: ${r.leadingConcept}\n   מושגים משלימים: ${r.complementaryConcepts.join(", ")}\n   תרומה: ${r.uniqueContribution}\n   המלצה: ${r.recommendation} — ${r.recommendationReason}${r.gapFlag?`\n   פער: ${r.gapFlag}`:""}`).join("\n\n");
+      const prompt=`אתה עוזר מחקר לתזה. הנה טבלת ההכרעות שאישרה החוקרת עבור מעגל ${selectedCycle.num} (${selectedCycle.title}) ב${charName2}:
+
+${tableText}
+
+גזור מטבלה זו שלושה דברים:
+
+1. **interpretiveQuestion** - שאלה פרשנית למעגל (משפט שאלה אחד): מה השאלה המרכזית שהמעגל מעורר ושמנחה את הכתיבה?
+2. **paragraphOrder** - סדר כתיבה: רשימה ממוספרת של 3-7 פסקאות. לכל פסקה: היחידה או המושג שבמרכז, הטענה, והקשר לפסקה הבאה.
+3. **proposedConclusion** - פסקת מסקנה מוצעת (3-5 משפטים): מה המעגל כולו מלמד על עיצוב ${charName2} בדברי הימים?
+
+החזר **רק JSON תקין**:
+{
+  "interpretiveQuestion": "...",
+  "paragraphOrder": "1. ...\\n2. ...",
+  "proposedConclusion": "..."
+}`;
+      const resp=await aiCall(prompt,6000);
+      let text=(resp||"").trim();
+      const m=text.match(/\{[\s\S]*\}/);
+      if(!m) throw new Error("ה-AI לא החזיר JSON תקין");
+      const parsed=JSON.parse(m[0]);
+      const q=parsed.interpretiveQuestion||"";
+      const o=parsed.paragraphOrder||"";
+      const c=parsed.proposedConclusion||"";
+      setInterpretiveQuestion(q);
+      setParagraphOrder(o);
+      setProposedConclusion(c);
+      saveCycleState({interpretiveQuestion:q,paragraphOrder:o,proposedConclusion:c});
+      alert("✓ נגזרו: שאלה פרשנית, סדר פסקאות ומסקנה מוצעת.");
+    }catch(e){
+      alert("שגיאה: "+(e.message||e));
+    }finally{
+      setGenerating(null);
+    }
   }
 
   // בניית שורות הטבלה למעגל נבחר
@@ -5821,11 +6004,30 @@ th{background:#2c5282;color:white;font-weight:700;}
 <tbody>${rowsHtml}</tbody>
 </table>
 
-<h2>סיכום מחקרי של המעגל כולו</h2>
-<div class='question'><span class='q-label'>1. מה אפשר לטעון על נוכחות המושגים במעגל זה בעיצוב ${charName}?</span>${(q1||"—").replace(/</g,'&lt;')}</div>
-<div class='question'><span class='q-label'>2. אילו יחידות מספקות את הראיות החזקות ביותר?</span>${(q2||"—").replace(/</g,'&lt;')}</div>
-<div class='question'><span class='q-label'>3. האם היחידות משלימות זו את זו, חוזרות על אותה ראיה או מציגות מתח וכשל?</span>${(q3||"—").replace(/</g,'&lt;')}</div>
-<div class='question'><span class='q-label'>4. היכן יש התאמה לדגם הנבואי, והיכן מתגלה פער?</span>${(q4||"—").replace(/</g,'&lt;')}</div>
+${decisionTable&&decisionTable.length>0?`
+<h2>טבלת הכרעות למעגל</h2>
+<table>
+<thead><tr><th>#</th><th>היחידה</th><th>פסוקים מכריעים</th><th>מושג מוביל</th><th>מושגים משלימים</th><th>תרומה ייחודית</th><th>המלצה</th><th>פער</th></tr></thead>
+<tbody>
+${decisionTable.map((r,i)=>`<tr>
+  <td style='text-align:center;'>${i+1}</td>
+  <td><strong>${(r.unitName||"").replace(/</g,'&lt;')}</strong></td>
+  <td>${(r.decisiveVerses||"—").replace(/</g,'&lt;')}</td>
+  <td><strong style='color:#4f46e5;'>${(r.leadingConcept||"—").replace(/</g,'&lt;')}</strong></td>
+  <td>${(r.complementaryConcepts||[]).join(" · ").replace(/</g,'&lt;')||"—"}</td>
+  <td style='font-size:10pt;'>${(r.uniqueContribution||"—").replace(/</g,'&lt;')}${r.recommendationReason?`<br/><em style='color:#555;'>המלצה: ${r.recommendation} — ${r.recommendationReason.replace(/</g,'&lt;')}</em>`:""}</td>
+  <td style='text-align:center;font-weight:700;'>${({analysis:'ניתוח',context:'הקשר',transition:'מעבר',mapping:'מיפוי'}[r.recommendation]||r.recommendation||"—").replace(/</g,'&lt;')}</td>
+  <td style='color:#b91c1c;font-size:9pt;'>${(r.gapFlag||"—").replace(/</g,'&lt;')}</td>
+</tr>`).join("")}
+</tbody>
+</table>`:""}
+
+${interpretiveQuestion||paragraphOrder||proposedConclusion?`
+<h2>נגזרות המעגל</h2>
+${interpretiveQuestion?`<h3>שאלה פרשנית</h3><div class='question'>${interpretiveQuestion.replace(/</g,'&lt;')}</div>`:""}
+${paragraphOrder?`<h3>סדר פסקאות מוצע</h3><div class='compare'>${paragraphOrder.replace(/</g,'&lt;')}</div>`:""}
+${proposedConclusion?`<h3>מסקנה מוצעת</h3><div class='compare'>${proposedConclusion.replace(/</g,'&lt;')}</div>`:""}
+`:""}
 </body></html>`;
     const blob=new Blob(['﻿'+html],{type:"application/msword"});
     const url=URL.createObjectURL(blob);
@@ -5877,7 +6079,9 @@ th{background:#2c5282;color:white;font-weight:700;}
             <div style={{fontSize:"11px",color:"#94a3b8",marginTop:"3px"}}>{selectedCycle.units.length} יחידות בסה"כ</div>
           </div>
 
+          {showRawData&&(
           <div style={{overflowX:"auto",marginBottom:"18px",background:"#1e293b",borderRadius:"8px",padding:"10px"}}>
+            <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"8px",fontWeight:"600"}}>▼ ריכוז ממצאים גולמי (מסונן לפי ההגדרה הצרה)</div>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px",direction:"rtl"}}>
               <thead>
                 <tr style={{background:"#0f172a"}}>
@@ -5923,34 +6127,132 @@ th{background:#2c5282;color:white;font-weight:700;}
               </tbody>
             </table>
           </div>
+          )}
 
-          {/* 4 שאלות המחקר של המעגל */}
-          <div style={{marginBottom:"18px",padding:"16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #818cf844"}}>
-            <div style={{fontSize:"14px",color:"#f1f5f9",fontWeight:"700",marginBottom:"12px"}}>📝 סיכום מחקרי של המעגל כולו</div>
-            {[
-              ["1. מה אפשר לטעון על נוכחות המושגים במעגל זה בעיצוב "+(character==="david"?"דוד":"שלמה")+"?",q1,setQ1],
-              ["2. אילו יחידות מספקות את הראיות החזקות ביותר?",q2,setQ2],
-              ["3. האם היחידות משלימות זו את זו, חוזרות על אותה ראיה או מציגות מתח וכשל?",q3,setQ3],
-              ["4. היכן יש התאמה לדגם הנבואי, והיכן מתגלה פער?",q4,setQ4],
-            ].map(([label,val,setter],i)=>(
-              <div key={i} style={{marginBottom:"12px"}}>
-                <div style={{fontSize:"12px",color:"#818cf8",fontWeight:"700",marginBottom:"5px"}}>{label}</div>
-                <textarea value={val} onChange={e=>setter(e.target.value)}
-                  placeholder="כתבי את תשובתך..."
-                  style={{width:"100%",minHeight:"80px",padding:"9px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+          {/* הצעד הראשון: ניתוח AI → טבלת הכרעות */}
+          <div style={{marginBottom:"18px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #8b5cf644"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+              <div>
+                <div style={{fontSize:"14px",color:"#f1f5f9",fontWeight:"700"}}>🧠 ניתוח AI של המעגל → טבלת הכרעות</div>
+                <div style={{fontSize:"11px",color:"#94a3b8",marginTop:"3px"}}>מבוסס על הממצאים המאושרים משלב ג׳, הגדרה צרה, והערות השוואה</div>
               </div>
-            ))}
+              <button onClick={generateDecisionTable} disabled={!!generating}
+                style={{padding:"9px 18px",borderRadius:"6px",border:"none",cursor:generating?"wait":"pointer",background:generating==='decision'?"#475569":"#8b5cf6",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                {generating==='decision'?"⏳ מנתח...":decisionTable.length?"🔄 נתח מחדש":"🧠 הפעל ניתוח AI"}
+              </button>
+            </div>
           </div>
+
+          {/* טבלת ההכרעות — עריכה */}
+          {decisionTable.length>0&&(
+            <div style={{marginBottom:"18px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"1px solid #818cf844"}}>
+              <div style={{fontSize:"14px",color:"#c7d2fe",fontWeight:"700",marginBottom:"10px"}}>📋 טבלת הכרעות למעגל ({decisionTable.length} שורות)</div>
+              <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.5"}}>הטבלה נוצרה ע"י AI. עברי עליה, ערכי תאים כרצונך ולחצי "💾 שמור" לפני המעבר לנגזרות.</div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:"11px",direction:"rtl"}}>
+                  <thead>
+                    <tr style={{background:"#0f172a"}}>
+                      <th style={{padding:"8px",border:"1px solid #334155",color:"#818cf8",minWidth:"130px"}}>היחידה</th>
+                      <th style={{padding:"8px",border:"1px solid #334155",color:"#818cf8",minWidth:"120px"}}>פסוקים מכריעים</th>
+                      <th style={{padding:"8px",border:"1px solid #334155",color:"#818cf8",minWidth:"110px"}}>מושג מוביל</th>
+                      <th style={{padding:"8px",border:"1px solid #334155",color:"#818cf8",minWidth:"160px"}}>מושגים משלימים</th>
+                      <th style={{padding:"8px",border:"1px solid #334155",color:"#818cf8",minWidth:"220px"}}>תרומה ייחודית</th>
+                      <th style={{padding:"8px",border:"1px solid #334155",color:"#818cf8",minWidth:"100px"}}>המלצה</th>
+                      <th style={{padding:"8px",border:"1px solid #334155",color:"#818cf8",minWidth:"120px"}}>פער שסומן</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {decisionTable.map((r,i)=>(
+                      <tr key={i} style={{background:i%2?"#0f172a":"#1e293b"}}>
+                        <td style={{padding:"6px",border:"1px solid #334155",color:"#f1f5f9",fontWeight:"600",verticalAlign:"top"}}>{r.unitName}</td>
+                        <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
+                          <input type="text" value={r.decisiveVerses} onChange={e=>updateDecisionRow(i,"decisiveVerses",e.target.value)}
+                            style={{width:"100%",padding:"4px",background:"#0f172a",border:"1px solid #334155",borderRadius:"3px",color:"#e2e8f0",fontSize:"11px",direction:"rtl"}}/>
+                        </td>
+                        <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
+                          <select value={r.leadingConcept} onChange={e=>updateDecisionRow(i,"leadingConcept",e.target.value)}
+                            style={{width:"100%",padding:"4px",background:"#0f172a",border:"1px solid #334155",borderRadius:"3px",color:"#e2e8f0",fontSize:"11px"}}>
+                            <option value="">— בחרי —</option>
+                            {conceptNameList.map(n=><option key={n} value={n}>{n}</option>)}
+                          </select>
+                        </td>
+                        <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
+                          <input type="text" value={(r.complementaryConcepts||[]).join(", ")}
+                            onChange={e=>updateDecisionRow(i,"complementaryConcepts",e.target.value.split(/\s*,\s*/).filter(Boolean))}
+                            placeholder="מופרדים בפסיקים"
+                            style={{width:"100%",padding:"4px",background:"#0f172a",border:"1px solid #334155",borderRadius:"3px",color:"#e2e8f0",fontSize:"11px",direction:"rtl"}}/>
+                        </td>
+                        <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
+                          <textarea value={r.uniqueContribution} onChange={e=>updateDecisionRow(i,"uniqueContribution",e.target.value)}
+                            style={{width:"100%",minHeight:"60px",padding:"4px",background:"#0f172a",border:"1px solid #334155",borderRadius:"3px",color:"#e2e8f0",fontSize:"11px",direction:"rtl",resize:"vertical",fontFamily:"inherit",lineHeight:"1.5"}}/>
+                          {r.recommendationReason&&<div style={{marginTop:"3px",fontSize:"9px",color:"#64748b",fontStyle:"italic"}}>סיבה: {r.recommendationReason}</div>}
+                        </td>
+                        <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
+                          <select value={r.recommendation} onChange={e=>updateDecisionRow(i,"recommendation",e.target.value)}
+                            style={{width:"100%",padding:"4px",background:"#0f172a",border:"1px solid #334155",borderRadius:"3px",color:"#e2e8f0",fontSize:"11px"}}>
+                            <option value="analysis">ניתוח</option>
+                            <option value="context">הקשר</option>
+                            <option value="transition">מעבר</option>
+                            <option value="mapping">מיפוי</option>
+                          </select>
+                        </td>
+                        <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
+                          <input type="text" value={r.gapFlag} onChange={e=>updateDecisionRow(i,"gapFlag",e.target.value)}
+                            style={{width:"100%",padding:"4px",background:"#0f172a",border:"1px solid #7f1d1d",borderRadius:"3px",color:"#fca5a5",fontSize:"11px",direction:"rtl"}}/>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{marginTop:"10px",display:"flex",gap:"8px",justifyContent:"flex-end",flexWrap:"wrap"}}>
+                <button onClick={()=>saveCycleState({decisionTable})}
+                  style={{padding:"8px 16px",borderRadius:"6px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                  💾 שמור את טבלת ההכרעות
+                </button>
+                <button onClick={generateDerivatives} disabled={!!generating}
+                  style={{padding:"8px 16px",borderRadius:"6px",border:"none",cursor:generating?"wait":"pointer",background:generating==='derivatives'?"#475569":"#2563eb",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                  {generating==='derivatives'?"⏳ גוזר...":"🎯 גזרי שאלה פרשנית + סדר פסקאות + מסקנה"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* נגזרות: שאלה פרשנית + סדר פסקאות + מסקנה מוצעת */}
+          {(interpretiveQuestion||paragraphOrder||proposedConclusion)&&(
+            <div style={{marginBottom:"18px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #2563eb44"}}>
+              <div style={{fontSize:"14px",color:"#93c5fd",fontWeight:"700",marginBottom:"12px"}}>🎯 נגזרות המעגל</div>
+              <div style={{marginBottom:"12px"}}>
+                <div style={{fontSize:"12px",color:"#60a5fa",fontWeight:"700",marginBottom:"5px"}}>שאלה פרשנית</div>
+                <textarea value={interpretiveQuestion} onChange={e=>{setInterpretiveQuestion(e.target.value);}} onBlur={()=>saveCycleState({interpretiveQuestion})}
+                  style={{width:"100%",minHeight:"60px",padding:"9px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+              </div>
+              <div style={{marginBottom:"12px"}}>
+                <div style={{fontSize:"12px",color:"#60a5fa",fontWeight:"700",marginBottom:"5px"}}>סדר פסקאות מוצע</div>
+                <textarea value={paragraphOrder} onChange={e=>{setParagraphOrder(e.target.value);}} onBlur={()=>saveCycleState({paragraphOrder})}
+                  style={{width:"100%",minHeight:"140px",padding:"9px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:"12px",color:"#60a5fa",fontWeight:"700",marginBottom:"5px"}}>מסקנה מוצעת</div>
+                <textarea value={proposedConclusion} onChange={e=>{setProposedConclusion(e.target.value);}} onBlur={()=>saveCycleState({proposedConclusion})}
+                  style={{width:"100%",minHeight:"120px",padding:"9px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+              </div>
+            </div>
+          )}
 
           {/* כפתורי פעולה */}
           <div style={{display:"flex",gap:"10px",justifyContent:"flex-end",flexWrap:"wrap"}}>
+            <button onClick={()=>setShowRawData(!showRawData)}
+              style={{padding:"9px 14px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px",fontWeight:"600"}}>
+              {showRawData?"◀ הסתר ריכוז ממצאים גולמי":"▼ הצג ריכוז ממצאים גולמי"}
+            </button>
             <button onClick={downloadCycleAsWord}
               style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#2563eb",color:"white",fontSize:"13px",fontWeight:"700"}}>
               📥 הורד דו"ח המעגל כ-Word
             </button>
-            <button onClick={saveCycleQuestions}
+            <button onClick={()=>saveCycleState({})}
               style={{padding:"10px 24px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"13px",fontWeight:"700"}}>
-              💾 שמור 4 השאלות
+              💾 שמור הכל
             </button>
           </div>
         </>
