@@ -5708,6 +5708,7 @@ function conceptToDimensionId(conceptName){
 function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote,getVerified,getUnitSummary,raw,getConceptSummary,setConceptSummary}){
   const [character,setCharacter]=useState("david");
   const [selectedCycle,setSelectedCycle]=useState(null);
+  const [selectedDimension,setSelectedDimension]=useState("d1"); // בורר ממד — מכפיף את ההכרעות
   const [generating,setGenerating]=useState(null); // 'decision' | 'derivatives' | null
   const [decisionTable,setDecisionTable]=useState([]);
   const [interpretiveQuestion,setInterpretiveQuestion]=useState("");
@@ -5718,6 +5719,9 @@ function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote
   const cycles=character==="david"?DAVID_CYCLES:SOLOMON_CYCLES;
   // ⚠ allConcepts הם אובייקטים — חייבים .name
   const conceptNameList=(allConcepts||[]).map(c=>c.name||c).filter(Boolean);
+  // המושגים של הממד הנבחר (לפי selectedDimension)
+  const dimensionConcepts=(DIMS.find(d=>d.id===selectedDimension)?.concepts)||[];
+  const dimensionLabel=(DIMS.find(d=>d.id===selectedDimension)?.label)||selectedDimension;
 
   // התאמת שם יחידה מהמעגל ליחידה בנתונים
   function findUnitByName(targetName){
@@ -5752,6 +5756,35 @@ function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote
     return list;
   }
 
+  // אוסף סטטוס ✓/X/לא-נמצא לכל מושג בממד הנבחר — כולל יחידות ללא ✓ (נשארות כמועמדות להקשר/מעבר/מיפוי)
+  function collectDimensionStatusForUnit(unit){
+    if(!unit) return [];
+    return dimensionConcepts.map(cname=>{
+      const ec=getE(unit.id,cname,"chronicles");
+      const s=getUnitSummary?getUnitSummary(unit.id):null;
+      const notRel=(s&&Array.isArray(s.notRelevantConcepts))?s.notRelevantConcepts:[];
+      if(!ec||notRel.includes(cname)){
+        return {concept:cname,status:"not-found",approved:[],borderlinePending:[],compareNote:""};
+      }
+      const params=getParams?getParams(cname):[];
+      const validParams=validParamDefs(params);
+      const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(cname,i),_def:params[i]||validParams[i]}:null).filter(Boolean);
+      const approvedAuto=positives.filter(x=>x._narrow==="approved");
+      const borderlineRaw=positives.filter(x=>x._narrow==="borderline");
+      const v=getVerified?getVerified(character,cname,unit.id):null;
+      const bdec=(v&&v.borderlineDecisions)||{};
+      const borderlineAccepted=borderlineRaw.filter(x=>bdec[x._idx]==="accepted");
+      const borderlinePending=borderlineRaw.filter(x=>!bdec[x._idx]);
+      const effectiveApproved=[...approvedAuto,...borderlineAccepted];
+      const compareNote=getCompareNote?getCompareNote(unit.id,cname):"";
+      let status;
+      if(effectiveApproved.length>0) status="approved";          // ✓
+      else if(positives.length>0||borderlinePending.length>0) status="rejected"; // X
+      else status="not-found";                                   // לא נמצא
+      return {concept:cname,status,approved:effectiveApproved,borderlinePending,compareNote};
+    });
+  }
+
   // אוסף מקיף של הממצאים ליחידה: מאושרים + גבוליים פתוחים + compareNote
   function collectFullFindingsForUnit(unit){
     if(!unit) return null;
@@ -5782,24 +5815,24 @@ function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote
     return perConcept;
   }
 
-  // מפתח אחסון למעגל
-  const cycleStorageKey=sel=>`__d4__${character}__${sel?sel.num:"none"}`;
+  // מפתח אחסון לשילוב (מעגל × ממד)
+  const cycleStorageKey=(sel,dim)=>`__d4__${character}__${sel?sel.num:"none"}__${dim||selectedDimension}`;
 
-  // טעינת מצב השמור של המעגל
+  // טעינת מצב השמור של (מעגל × ממד)
   useEffect(()=>{
     if(!selectedCycle){setDecisionTable([]);setInterpretiveQuestion("");setParagraphOrder("");setProposedConclusion("");return;}
-    const s=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle)):null;
+    const s=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension)):null;
     setDecisionTable((s&&s.decisionTable)||[]);
     setInterpretiveQuestion((s&&s.interpretiveQuestion)||"");
     setParagraphOrder((s&&s.paragraphOrder)||"");
     setProposedConclusion((s&&s.proposedConclusion)||"");
     setShowRawData(!(s&&s.decisionTable&&s.decisionTable.length>0));
-  },[selectedCycle,character]);
+  },[selectedCycle,character,selectedDimension]);
 
   function saveCycleState(partial){
     if(!selectedCycle||!setConceptSummary) return;
-    const full={decisionTable,interpretiveQuestion,paragraphOrder,proposedConclusion,...partial,savedAt:Date.now()};
-    setConceptSummary(character,cycleStorageKey(selectedCycle),full);
+    const full={decisionTable,interpretiveQuestion,paragraphOrder,proposedConclusion,...partial,dimension:selectedDimension,savedAt:Date.now()};
+    setConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension),full);
   }
 
   function updateDecisionRow(idx,field,value){
@@ -5807,58 +5840,79 @@ function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote
     setDecisionTable(next);
   }
 
-  // ─── AI: יצירת טבלת הכרעות למעגל ───
+  // ─── AI: יצירת טבלת הכרעות למעגל × ממד ───
   async function generateDecisionTable(){
     if(!selectedCycle){ alert("בחרי מעגל"); return; }
+    if(!selectedDimension){ alert("בחרי ממד נבואי"); return; }
     setGenerating('decision');
     try{
       const findings=selectedCycle.units.map(uname=>{
         const u=findUnitByName(uname);
         if(!u) return {unitName:uname,missing:true};
-        return {unitName:uname,unit:u,chapter:(u.chapter||"").replace(/_/g," "),perConcept:collectFullFindingsForUnit(u)};
+        return {unitName:uname,unit:u,chapter:(u.chapter||"").replace(/_/g," "),statusList:collectDimensionStatusForUnit(u)};
       });
       const charName2=character==="david"?"דוד":"שלמה";
+      const dimLabel=dimensionLabel;
+      // הכנת טקסט מפורט עם סטטוס לכל מושג בממד + הגדרות צרות
+      const narrowDefsBlock=dimensionConcepts.map(cname=>`• "${cname}": ${(getNarrowDef?getNarrowDef(cname):"").substring(0,400)}`).join("\n");
       const findingsText=findings.map(f=>{
         if(f.missing) return `### ${f.unitName}\n(⚠ היחידה לא נמצאה במאגר)`;
-        const cpBlocks=(f.perConcept||[]).map(pc=>{
-          const indLines=pc.approved.map(ind=>`  • #${ind._idx+1} "${((ind._def&&ind._def.paramLabel)||"").substring(0,40)}": ${((ind._def&&ind._def.q)||"").substring(0,100)}${ind.verse?` [פסוק ${ind.verse}]`:""}${ind.note?` — ${ind.note.substring(0,200)}`:""}`).join("\n");
-          const pendLine=pc.borderlinePending.length?`  ⚪ ${pc.borderlinePending.length} ממצאים גבוליים שעוד לא הוכרעו`:"";
-          const cmpBlock=pc.compareNote?`  📝 הערת השוואה: ${pc.compareNote.substring(0,500)}`:"";
-          return `- מושג "${pc.concept}" (${pc.dim})  · מאושרים: ${pc.approved.length}${pc.manualCount?` (מתוכם ${pc.manualCount} קובלו ידנית)`:""}\n${indLines}${pendLine?"\n"+pendLine:""}${cmpBlock?"\n"+cmpBlock:""}`;
+        const statusBlocks=f.statusList.map(s=>{
+          const symbol=s.status==="approved"?"✓":(s.status==="rejected"?"X":"—");
+          const label=s.status==="approved"?"אושר":(s.status==="rejected"?"נדחה אחרי סינון ההגדרה הצרה":"לא נמצא בניתוח");
+          let detail="";
+          if(s.status==="approved"){
+            const indLines=s.approved.map(ind=>`     • #${ind._idx+1} "${((ind._def&&ind._def.paramLabel)||"").substring(0,40)}": ${((ind._def&&ind._def.q)||"").substring(0,100)}${ind.verse?` [פסוק ${ind.verse}]`:""}${ind.note?` — ${ind.note.substring(0,180)}`:""}`).join("\n");
+            detail="\n"+indLines;
+            if(s.compareNote) detail+=`\n     📝 הערת השוואה: ${s.compareNote.substring(0,300)}`;
+          } else if(s.status==="rejected"){
+            if(s.borderlinePending.length>0) detail=`\n     ⚪ ${s.borderlinePending.length} גבוליים לא-מוכרעים`;
+            if(s.compareNote) detail+=`\n     📝 הערת השוואה (למרות הדחייה): ${s.compareNote.substring(0,300)}`;
+          }
+          return `  ${symbol} ${s.concept} — ${label}${detail}`;
         }).join("\n");
-        return `### ${f.unitName} (${f.chapter})\n${cpBlocks||"  (אין ממצאים לאחר סינון ההגדרה הצרה)"}`;
+        return `### ${f.unitName} (${f.chapter})\n${statusBlocks}`;
       }).join("\n\n");
 
-      const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד/שלמה בדברי הימים לעומת שמואל-מלכים. אנא בנה טבלת הכרעות למעגל הפרשני.
+      const prompt=`אתה עוזר מחקר לתזה בתנ"ך על עיצוב דוד/שלמה בדברי הימים לעומת שמואל-מלכים.
 
 הדמות: ${charName2}
 המעגל: מעגל ${selectedCycle.num} — ${selectedCycle.title}
-${selectedCycle.units.length} יחידות במעגל.
+**הממד הנבואי שבדיון: ${dimLabel}** (סדרת המושגים: ${dimensionConcepts.join(", ")})
 
 ---
 
-הממצאים ליחידות (לאחר סינון ההגדרה הצרה):
+**ההגדרות הצרות של המושגים בממד הזה:**
+${narrowDefsBlock}
+
+---
+
+**הממצאים ליחידות המעגל — רק בממד הנבחר:**
+(✓ = סומן ואושר בהגדרה הצרה ; X = היה חיובי אבל נדחה בסינון ; — = לא נמצא בניתוח)
 
 ${findingsText}
 
 ---
 
-המטרה: לבנות טבלת הכרעות למעגל, כאשר לכל יחידה אני רוצה את השדות הבאים:
+**המטרה**: לבנות טבלת הכרעות למעגל בהקשר של **${dimLabel}** בלבד.
 
-1. **decisiveVerses** - הפסוקים המכריעים ביחידה שתורמים לדיון של המעגל
-2. **leadingConcept** - המושג המוביל של היחידה (אחד). בחר מתוך המושגים עם ממצאים מאושרים.
-3. **complementaryConcepts** - מערך של עד 3 מושגים משלימים (array של strings)
-4. **uniqueContribution** - 1-3 משפטים על התרומה הייחודית של היחידה למעגל: מה היא מוסיפה שאין ביחידה אחרת?
-5. **recommendation** - "analysis" (יחידת ניתוח מרכזית) / "context" (יחידת הקשר) / "transition" (יחידת מעבר) / "mapping" (תישאר רק במיפוי)
-6. **recommendationReason** - משפט אחד שמנמק את ההמלצה
-7. **gapFlag** - אם יש פער בין הסימונים לנימוקים / ראיה חסרה / סתירה — ציין אותו. אחרת: ריק.
+**חשוב מאוד**:
+- בחר מושג מוביל ומושגים משלימים **רק מבין המושגים של הממד הנבחר** (${dimensionConcepts.join(", ")}).
+- **מועמדים להובלה או השלמה**: רק מושגים עם סטטוס ✓ ביחידה.
+- **אם ליחידה אין שום ✓ בממד**: עדיין אפשר (ולפעמים רצוי) לבחור בה כהקשר / מעבר / מיפוי, לפי תרומתה הספרותית. במקרה זה שדות leadingConcept ו-complementaryConcepts יישארו ריקים.
+- **אל תמציא מושגים מממדים אחרים** — גם אם לדעתך הם מתאימים, לא זה הדיון הנוכחי.
+- **sתירה** (gapFlag): אם ה-compareNote סותר את הסטטוס (למשל: סומן X אבל ההערה מצביעה על נוכחות משמעותית), ציין את הסתירה.
 
-שקול:
-- האם הממצא עומד בפני עצמו או מקבל משקל מיחידה קודמת?
-- האם מושג נוסף מסביר היבט שונה של אותה ראיה?
-- חוזר האינדיקטור במספר יחידות ומשמעות הדבר למעגל.
+**שדות לכל יחידה** (JSON):
+1. **decisiveVerses** - פסוקים מכריעים ביחידה בהקשר של ${dimLabel}
+2. **leadingConcept** - מושג מוביל מהממד (מתוך ✓ ביחידה); ריק אם אין
+3. **complementaryConcepts** - עד 3 מושגים משלימים מהממד; מערך
+4. **uniqueContribution** - 1-3 משפטים: מה היחידה מוסיפה שאין ביחידות אחרות בהקשר של ${dimLabel}?
+5. **recommendation** - "analysis" (ניתוח מרכזי) / "context" (הקשר ספרותי) / "transition" (מעבר) / "mapping" (תישאר רק במיפוי)
+6. **recommendationReason** - משפט אחד מנמק
+7. **gapFlag** - סתירה בין סטטוס לנימוק, או ראיה חסרה. אחרת: ריק.
 
-החזר **רק JSON תקין**, ללא הסברים או הקדמות, במבנה:
+החזר **רק JSON תקין**:
 {
   "rows": [
     {
@@ -5908,15 +5962,15 @@ ${findingsText}
     try{
       const charName2=character==="david"?"דוד":"שלמה";
       const tableText=decisionTable.map((r,i)=>`${i+1}. ${r.unitName}\n   פסוקים מכריעים: ${r.decisiveVerses}\n   מושג מוביל: ${r.leadingConcept}\n   מושגים משלימים: ${r.complementaryConcepts.join(", ")}\n   תרומה: ${r.uniqueContribution}\n   המלצה: ${r.recommendation} — ${r.recommendationReason}${r.gapFlag?`\n   פער: ${r.gapFlag}`:""}`).join("\n\n");
-      const prompt=`אתה עוזר מחקר לתזה. הנה טבלת ההכרעות שאישרה החוקרת עבור מעגל ${selectedCycle.num} (${selectedCycle.title}) ב${charName2}:
+      const prompt=`אתה עוזר מחקר לתזה. הנה טבלת ההכרעות שאישרה החוקרת עבור **מעגל ${selectedCycle.num} (${selectedCycle.title}) ב${charName2}** בהקשר של **${dimensionLabel}**:
 
 ${tableText}
 
-גזור מטבלה זו שלושה דברים:
+גזור מטבלה זו שלושה דברים, כולם ממוקדים ב${dimensionLabel}:
 
-1. **interpretiveQuestion** - שאלה פרשנית למעגל (משפט שאלה אחד): מה השאלה המרכזית שהמעגל מעורר ושמנחה את הכתיבה?
+1. **interpretiveQuestion** - שאלה פרשנית למעגל (משפט שאלה אחד) בהקשר של ${dimensionLabel}: מה השאלה המרכזית שהמעגל מעורר ושמנחה את הכתיבה?
 2. **paragraphOrder** - סדר כתיבה: רשימה ממוספרת של 3-7 פסקאות. לכל פסקה: היחידה או המושג שבמרכז, הטענה, והקשר לפסקה הבאה.
-3. **proposedConclusion** - פסקת מסקנה מוצעת (3-5 משפטים): מה המעגל כולו מלמד על עיצוב ${charName2} בדברי הימים?
+3. **proposedConclusion** - פסקת מסקנה מוצעת (3-5 משפטים): מה המעגל כולו מלמד על עיצוב ${charName2} בדברי הימים ב-${dimensionLabel}?
 
 החזר **רק JSON תקין**:
 {
@@ -5944,12 +5998,12 @@ ${tableText}
     }
   }
 
-  // בניית שורות הטבלה למעגל נבחר
+  // בניית שורות הטבלה למעגל נבחר — ממוקד בממד הנבחר
   const cycleRows=selectedCycle?selectedCycle.units.map((uname,idx)=>{
     const u=findUnitByName(uname);
     const verses=u?(u.chapter||"").replace(/_/g," "):"";
-    const approvedList=u?getApprovedForUnit(u):[];
-    return {rowIdx:idx,unitName:uname,unit:u,verses,approvedList};
+    const statusList=u?collectDimensionStatusForUnit(u):[];
+    return {rowIdx:idx,unitName:uname,unit:u,verses,statusList};
   }):[];
 
   // הורדת דו"ח המעגל כ-Word
@@ -6079,51 +6133,81 @@ ${proposedConclusion?`<h3>מסקנה מוצעת</h3><div class='compare'>${propo
             <div style={{fontSize:"11px",color:"#94a3b8",marginTop:"3px"}}>{selectedCycle.units.length} יחידות בסה"כ</div>
           </div>
 
+          {/* בחירת ממד נבואי — ההכרעה נכתבת ממוקדת בממד הזה */}
+          <div style={{marginBottom:"14px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"1px solid #334155"}}>
+            <div style={{fontSize:"13px",color:"#f1f5f9",fontWeight:"700",marginBottom:"8px"}}>🎯 בחרי ממד נבואי לכתיבת ההכרעה</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.5"}}>כל שילוב (מעגל × ממד) נשמר בנפרד. אפשר לעבור בין הממדים ולכתוב הכרעה נפרדת לכל אחד.</div>
+            <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+              {DIMS.map(d=>{
+                const sel=selectedDimension===d.id;
+                const saved=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle,d.id)):null;
+                const hasData=saved&&saved.decisionTable&&saved.decisionTable.length>0;
+                return(
+                  <button key={d.id} onClick={()=>setSelectedDimension(d.id)}
+                    style={{padding:"10px 14px",borderRadius:"8px",border:sel?`2px solid ${d.color}`:"1px solid #334155",cursor:"pointer",background:sel?`${d.color}22`:"#0f172a",color:sel?d.color:"#cbd5e1",fontSize:"12px",fontWeight:"700",display:"flex",alignItems:"center",gap:"8px"}}>
+                    {sel?"● ":""}{d.label.replace("ממד ","ד")}
+                    {hasData&&<span style={{fontSize:"10px",color:"#34d399",background:"#06402844",padding:"1px 6px",borderRadius:"8px",fontWeight:"700"}}>✓ נכתב</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {showRawData&&(
           <div style={{overflowX:"auto",marginBottom:"18px",background:"#1e293b",borderRadius:"8px",padding:"10px"}}>
-            <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"8px",fontWeight:"600"}}>▼ ריכוז ממצאים גולמי (מסונן לפי ההגדרה הצרה)</div>
+            <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"8px",fontWeight:"600"}}>▼ ריכוז ממצאים — {dimensionLabel}</div>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:"12px",direction:"rtl"}}>
               <thead>
                 <tr style={{background:"#0f172a"}}>
-                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"150px"}}>היחידה והפסוקים</th>
-                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"180px"}}>הממד של כל מושג</th>
-                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"160px"}}>המושגים שנותרו לאחר הסינון</th>
-                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"320px"}}>הראיה שאושרה לכל מושג</th>
+                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"150px"}}>היחידה</th>
+                  <th style={{padding:"10px",textAlign:"right",color:"#34d399",fontWeight:"700",border:"1px solid #334155",minWidth:"130px"}}>✓ אושר</th>
+                  <th style={{padding:"10px",textAlign:"right",color:"#f87171",fontWeight:"700",border:"1px solid #334155",minWidth:"130px"}}>✗ נדחה</th>
+                  <th style={{padding:"10px",textAlign:"right",color:"#94a3b8",fontWeight:"700",border:"1px solid #334155",minWidth:"130px"}}>— לא נמצא</th>
+                  <th style={{padding:"10px",textAlign:"right",color:"#818cf8",fontWeight:"700",border:"1px solid #334155",minWidth:"340px"}}>הראיה והאינדיקטור (למושגים שאושרו)</th>
                 </tr>
               </thead>
               <tbody>
-                {cycleRows.map((r,i)=>(
-                  <tr key={i} style={{background:i%2?"#0f172a":"#1e293b"}}>
-                    <td style={{padding:"8px",color:"#f1f5f9",verticalAlign:"top",border:"1px solid #334155"}}>
-                      <div style={{fontWeight:"700"}}>{r.unitName}</div>
-                      {r.unit&&<div style={{fontSize:"10px",color:"#94a3b8",marginTop:"3px"}}>({(r.unit.chapter||"").replace(/_/g," ")})</div>}
-                      {!r.unit&&<div style={{fontSize:"10px",color:"#ef4444",marginTop:"3px",fontStyle:"italic"}}>לא נמצאה בנתונים</div>}
-                    </td>
-                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
-                      {r.approvedList.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
-                        r.approvedList.map((a,j)=><div key={j} style={{marginBottom:"3px"}}><strong style={{color:"#f1f5f9"}}>{a.concept}</strong> <span style={{color:"#c7d2fe"}}>({a.dim})</span></div>)}
-                    </td>
-                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
-                      {r.approvedList.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
-                        r.approvedList.map((a,j)=><div key={j} style={{marginBottom:"3px",color:"#86efac"}}>✓ {a.concept}{a.manualCount>0?<span style={{color:"#a78bfa",marginRight:"4px"}}>⚐</span>:null}</div>)}
-                    </td>
-                    <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px",lineHeight:"1.6"}}>
-                      {r.approvedList.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
-                        r.approvedList.map((a,j)=>(
-                          <div key={j} style={{marginBottom:"8px",padding:"6px 8px",background:"#0f172a",borderRight:`2px solid #818cf8`,borderRadius:"3px"}}>
-                            <div style={{color:"#c7d2fe",fontWeight:"700",fontSize:"10px",marginBottom:"3px"}}>{a.concept} ({a.dim})</div>
-                            {a.indicators.map((ind,k)=>(
-                              <div key={k} style={{marginBottom:"4px",fontSize:"10px"}}>
-                                {ind.verse&&<span style={{color:"#93c5fd",fontWeight:"700"}}>📍 {ind.verse}: </span>}
-                                <span style={{color:"#e2e8f0"}}>{(ind._def&&ind._def.q)||((ind._def&&ind._def.paramLabel)||"")}</span>
-                                {ind.note&&<div style={{color:"#94a3b8",marginRight:"8px",marginTop:"2px",fontStyle:"italic"}}>{ind.note.length>180?ind.note.substring(0,180)+"...":ind.note}</div>}
-                              </div>
-                            ))}
-                          </div>
-                        ))}
-                    </td>
-                  </tr>
-                ))}
+                {cycleRows.map((r,i)=>{
+                  const approved=(r.statusList||[]).filter(s=>s.status==="approved");
+                  const rejected=(r.statusList||[]).filter(s=>s.status==="rejected");
+                  const notFound=(r.statusList||[]).filter(s=>s.status==="not-found");
+                  return(
+                    <tr key={i} style={{background:i%2?"#0f172a":"#1e293b"}}>
+                      <td style={{padding:"8px",color:"#f1f5f9",verticalAlign:"top",border:"1px solid #334155"}}>
+                        <div style={{fontWeight:"700"}}>{r.unitName}</div>
+                        {r.unit&&<div style={{fontSize:"10px",color:"#94a3b8",marginTop:"3px"}}>({(r.unit.chapter||"").replace(/_/g," ")})</div>}
+                        {!r.unit&&<div style={{fontSize:"10px",color:"#ef4444",marginTop:"3px",fontStyle:"italic"}}>לא נמצאה בנתונים</div>}
+                      </td>
+                      <td style={{padding:"8px",color:"#86efac",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
+                        {approved.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
+                          approved.map((s,j)=><div key={j} style={{marginBottom:"2px"}}>✓ {s.concept}</div>)}
+                      </td>
+                      <td style={{padding:"8px",color:"#fca5a5",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
+                        {rejected.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
+                          rejected.map((s,j)=><div key={j} style={{marginBottom:"2px"}}>✗ {s.concept}</div>)}
+                      </td>
+                      <td style={{padding:"8px",color:"#64748b",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px"}}>
+                        {notFound.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>—</span>:
+                          notFound.map((s,j)=><div key={j} style={{marginBottom:"2px"}}>— {s.concept}</div>)}
+                      </td>
+                      <td style={{padding:"8px",color:"#cbd5e1",verticalAlign:"top",border:"1px solid #334155",fontSize:"11px",lineHeight:"1.6"}}>
+                        {approved.length===0?<span style={{color:"#64748b",fontStyle:"italic"}}>— אין ראיות מאושרות ב{dimensionLabel}</span>:
+                          approved.map((s,j)=>(
+                            <div key={j} style={{marginBottom:"8px",padding:"6px 8px",background:"#0f172a",borderRight:"2px solid #34d399",borderRadius:"3px"}}>
+                              <div style={{color:"#86efac",fontWeight:"700",fontSize:"10px",marginBottom:"3px"}}>{s.concept}</div>
+                              {s.approved.map((ind,k)=>(
+                                <div key={k} style={{marginBottom:"4px",fontSize:"10px"}}>
+                                  {ind.verse&&<span style={{color:"#93c5fd",fontWeight:"700"}}>📍 {ind.verse}: </span>}
+                                  <span style={{color:"#e2e8f0"}}>{(ind._def&&ind._def.q)||((ind._def&&ind._def.paramLabel)||"")}</span>
+                                  {ind.note&&<div style={{color:"#94a3b8",marginRight:"8px",marginTop:"2px",fontStyle:"italic"}}>{ind.note.length>180?ind.note.substring(0,180)+"...":ind.note}</div>}
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -6172,14 +6256,14 @@ ${proposedConclusion?`<h3>מסקנה מוצעת</h3><div class='compare'>${propo
                         <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
                           <select value={r.leadingConcept} onChange={e=>updateDecisionRow(i,"leadingConcept",e.target.value)}
                             style={{width:"100%",padding:"4px",background:"#0f172a",border:"1px solid #334155",borderRadius:"3px",color:"#e2e8f0",fontSize:"11px"}}>
-                            <option value="">— בחרי —</option>
-                            {conceptNameList.map(n=><option key={n} value={n}>{n}</option>)}
+                            <option value="">— ריק (הקשר/מעבר/מיפוי) —</option>
+                            {dimensionConcepts.map(n=><option key={n} value={n}>{n}</option>)}
                           </select>
                         </td>
                         <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
                           <input type="text" value={(r.complementaryConcepts||[]).join(", ")}
                             onChange={e=>updateDecisionRow(i,"complementaryConcepts",e.target.value.split(/\s*,\s*/).filter(Boolean))}
-                            placeholder="מופרדים בפסיקים"
+                            placeholder={`מהממד הנבחר בלבד: ${dimensionConcepts.slice(0,3).join(", ")}...`}
                             style={{width:"100%",padding:"4px",background:"#0f172a",border:"1px solid #334155",borderRadius:"3px",color:"#e2e8f0",fontSize:"11px",direction:"rtl"}}/>
                         </td>
                         <td style={{padding:"4px",border:"1px solid #334155",verticalAlign:"top"}}>
