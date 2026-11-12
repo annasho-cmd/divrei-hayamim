@@ -291,7 +291,7 @@ const BRIT_AUX_CONCEPTS = ["נצח","עולם"];
 // ─────────────────────────────────────────────────────────────────────────
 const DEFAULT_NARROW_DEFS = {
   "רוח/ריח": "ראיה תיחשב מתאימה למושג רק כאשר הטקסט מציג את המלך כבעל יכולת, החלטה או מעשה המועצמים מהשראת רוח ה' או בביטוי מקביל (כגון: \"רוח לבשה\", \"ברוח עמו\"), ז\"א יכולת שהטקסט עצמו מציג כעולה על יכולתו הטבעית של המלך, ומייחסה לפעולה אלוהית בזמן ההתרחשות. אין להסיק רוח מכל סיוע אלוהי, מהבחירה השושלתית או מהצלחה בכללותה. סימני הזיהוי הטקסטואליים הם: הצהרה מפורשת של הטקסט כי היכולת ניתנה ע\"י ה'; או יכולת שהטקסט קובע כחורגת מכוח רגיל של מלך.",
-  "חכמה": "ראיה תיחשב ל\"חכמה\" כאשר הטקסט מציג את הנהגת המלך באמצעות תכנון מקדים של פעולה, ביצוע מיומן המעיד על ידיעה, וארגון מסודר של מהלך, תוך הפעלת שיקול דעת הבוחן את הדרך הראויה. הקריטריון מחייב לא רק פעולה מסודרת אלא ראיה לכך כי ההחלטה מבטאת כושר הבחנה בבחירת דרך הפעולה.",
+  "חכמה": "ראיה תיחשב ל\"חכמה\" כאשר הטקסט מציג שיקול דעת המנחה את המלך בבחירת דרך פעולה בהכרעה שלטונית, בייחוד כאשר ההכרעה כרוכה בשאלה של צדק. תכנון, ארגון או ביצוע מיומן ישמשו ראיה ל\"חכמה\" כאשר הכתוב מראה כיצד הם מבטאים את שיקול דעתו של המלך בבחירת דרך הפעולה.",
   "בינה": "ראיה תיחשב ל\"בינה\" כאשר הטקסט מציג את המלך מבחין בין נסיבות, בוחר דרך פעולה המותאמת למצב ספציפי, או משנה את אופן פעולתו בעקבות אירוע או מידע חדש. הקריטריון מחייב רכיב של זיהוי ושינוי.",
   "עצה": "ראיה תיחשב ל\"עצה\" כאשר הטקסט מציג את המלך מגבש תוכנית פעולה או אסטרטגיה מסוימת לפני מהלך כלשהו בדגש על הקשרים של התייעצות אקטיבית עם אחרים, גיבוש אסטרטגיה למקרה מוגדר, או הצגת תוכנית לפני ביצועה.",
   "גבורה": "ראיה תיחשב ל\"גבורה\" כאשר הטקסט מציג את המלך מפעיל כוח, סמכות או יכולת ביצוע במצב הדורש הפעלת כוח ייחודי מול איום, קרב, התמודדות עם התנגדות או הכרעה קריטית. הקריטריון מחייב רכיב של מימוש בפועל במסגרת של מצב קריטי, ולא כפעולה שלטונית רגילה.",
@@ -3345,7 +3345,7 @@ ${sectionsHtml}
 //   4. מציג פסוקים, הערות ופרשנות (scholarship) ליחידה
 //   5. מאפשר אישור של החוקרת ("שמור") ומעבר לחלון הכתיבה
 // ════════════════════════════════════════════════════════════════════════
-function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,getParams,getCompareNote,setCompareNote,getNarrowDef,setNarrowDef,getVerified,setVerified,onBack,onContinueToWriting}){
+function UnitConceptAnalysis({unit,character,dimension,conceptName,allConcepts,getE,setE,getParams,getCompareNote,setCompareNote,getNarrowDef,setNarrowDef,getVerified,setVerified,getUnitSummary,setUnitSummary,onBack,onContinueToWriting}){
   const [editNDef,setEditNDef]=useState(false);
   const [ndefText,setNdefText]=useState(getNarrowDef?getNarrowDef(conceptName):"");
   const [itemChecks,setItemChecks]=useState(()=>{
@@ -3370,6 +3370,13 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,get
   });
   // מצב ייצור של AI
   const [generating,setGenerating]=useState(false);
+  // 📚 מרכז כובד ספרותי של היחידה — פר יחידה (לא פר מושג)
+  const [literaryFocus,setLiteraryFocus]=useState(()=>{
+    const s=getUnitSummary?getUnitSummary(unit?.id):null;
+    return (s&&s.literaryFocus)||"";
+  });
+  const [generatingLF,setGeneratingLF]=useState(false);
+  const [lfMsg,setLfMsg]=useState("");
 
   useEffect(()=>{
     setNdefText(getNarrowDef?getNarrowDef(conceptName):"");
@@ -3379,7 +3386,94 @@ function UnitConceptAnalysis({unit,character,dimension,conceptName,getE,setE,get
     setBorderlineDecisions((v&&v.borderlineDecisions)||{});
     setEditingIdx(null);
     setEditCompareNoteMode(false);
+    // טעינת מרכז כובד ספרותי של היחידה הנוכחית
+    const s=getUnitSummary?getUnitSummary(unit?.id):null;
+    setLiteraryFocus((s&&s.literaryFocus)||"");
+    setLfMsg("");
   },[unit?.id,conceptName,character]);
+
+  // שמירת מרכז כובד ספרותי
+  function saveLiteraryFocus(){
+    if(!setUnitSummary||!unit?.id) return;
+    const cur=getUnitSummary(unit.id)||{};
+    setUnitSummary(unit.id,{...cur,literaryFocus:literaryFocus});
+    setLfMsg("✓ נשמר");
+    setTimeout(()=>setLfMsg(""),2000);
+  }
+
+  // ייצור טיוטה אוטומטית מהפרשנים (כל המושגים ביחידה)
+  async function generateLiteraryFocusFromScholars(){
+    if(!unit?.id) return;
+    setGeneratingLF(true);
+    setLfMsg("אוסף ציטוטי פרשנים מכל המושגים ביחידה...");
+    try{
+      // איסוף ציטוטי פרשנים מכל המושגים ביחידה
+      const conceptNames=(allConcepts||[]).map(c=>c.name||c).filter(Boolean);
+      const scholarByConcept={};
+      const compareNoteByConcept={};
+      conceptNames.forEach(cn=>{
+        const ec=getE?getE(unit.id,cn,"chronicles"):null;
+        const scholars=(ec&&ec.scholarship)||(ec&&ec.scholars)||"";
+        if(scholars&&typeof scholars==="string"&&scholars.trim().length>0){
+          scholarByConcept[cn]=scholars.substring(0,1500);
+        }
+        const cn2=getCompareNote?getCompareNote(unit.id,cn):"";
+        if(cn2&&cn2.trim().length>0){
+          compareNoteByConcept[cn]=cn2.substring(0,800);
+        }
+      });
+      const scholarsBlock=Object.entries(scholarByConcept)
+        .map(([c,s])=>`[${c}]: ${s}`).join("\n\n");
+      const compareBlock=Object.entries(compareNoteByConcept)
+        .map(([c,s])=>`[${c}]: ${s}`).join("\n\n");
+      const prompt=`על בסיס דיוני הפרשנים על יחידה זו בדברי הימים + השוואה לשמואל-מלכים, נסח ב-1-2 משפטים את מרכז הכובד הספרותי של היחידה לפי הקונצנזוס המחקרי.
+
+כללים:
+- אל תמנה מושגים (אל תזכיר רוח/חכמה/משפט וכו')
+- כתוב רק מה היחידה בעיקרה אומרת לפי הפרשנים
+- התייחס לשינויים שהכרוניסט הכניס ביחס לשמואל-מלכים
+- עברית אקדמית, קצרה, ללא מילים כמו "הזיקה למושג" או "תרומת הכרוניסט מתבררת"
+
+יחידה: ${unit.name}
+פסוקים: ${unit.verses||""}
+
+ציטוטי פרשנים לפי מושגים:
+${scholarsBlock}
+
+הערות השוואה לשמואל-מלכים:
+${compareBlock}
+
+החזר רק את הטקסט בעברית, ללא כותרת וללא הסברים.`;
+
+      setLfMsg("שולח ל-AI...");
+      const res=await fetch(AI_URL,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-6",
+          max_tokens:500,
+          messages:[{role:"user",content:prompt}]
+        })
+      });
+      if(!res.ok){
+        setLfMsg("⚠ שגיאה מה-API — נסי שוב");
+        setGeneratingLF(false);
+        return;
+      }
+      const data=await res.json();
+      const text=((data?.content||[]).map(b=>b.text||"").join("")||"").trim();
+      if(!text){
+        setLfMsg("⚠ ה-AI החזיר תשובה ריקה");
+        setGeneratingLF(false);
+        return;
+      }
+      setLiteraryFocus(text);
+      setLfMsg("✓ טיוטה הוכנה — ערכי בעצמך ושמרי!");
+    }catch(e){
+      setLfMsg("⚠ שגיאה: "+e.message);
+    }
+    setGeneratingLF(false);
+  }
 
   if(!unit){
     return(<div style={{maxWidth:"800px",margin:"40px auto",padding:"28px",textAlign:"center",color:"#f87171"}}>יחידה לא נמצאה. <button onClick={onBack} style={{marginRight:"10px",padding:"6px 14px",background:"#818cf8",color:"white",border:"none",borderRadius:"6px",cursor:"pointer"}}>חזור</button></div>);
@@ -3586,6 +3680,31 @@ ${note?`<h2>הערת החוקרת לניתוח (לפני מעבר לכתיבה)<
           {verified&&<div style={{fontSize:"11px",color:"#34d399",marginTop:"3px"}}>✓ אושרה ({verified.verifiedCount||0}/{verified.totalCount||0} ממצאים · {new Date(verified.verifiedAt||0).toLocaleString("he-IL")})</div>}
         </div>
         <button onClick={onBack} style={{padding:"6px 14px",borderRadius:"7px",border:"1px solid #334155",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"12px",fontWeight:"600"}}>↩ חזור לבחירה</button>
+      </div>
+
+      {/* 📚 מרכז כובד ספרותי של היחידה (פר יחידה — לא פר מושג) */}
+      <div style={{marginBottom:"14px",padding:"14px 16px",background:"#1e293b",borderRadius:"8px",border:"1px solid #a78bfa44"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
+          <div style={{fontSize:"13px",color:"#a78bfa",fontWeight:"700"}}>📚 מרכז כובד ספרותי של היחידה (על מה הסיפור בעיקרו)</div>
+          <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+            {lfMsg&&<span style={{fontSize:"11px",color:lfMsg.startsWith("⚠")?"#f87171":"#34d399"}}>{lfMsg}</span>}
+            <button onClick={generateLiteraryFocusFromScholars} disabled={generatingLF}
+              style={{padding:"5px 12px",borderRadius:"5px",border:"none",cursor:generatingLF?"wait":"pointer",background:generatingLF?"#475569":"#8b5cf6",color:"white",fontSize:"11px",fontWeight:"700",opacity:generatingLF?0.6:1}}
+              title="אוסף את כל ציטוטי הפרשנים ו-compareNotes ביחידה ומייצר טיוטה">
+              {generatingLF?"⏳ מייצר...":"🤖 צור טיוטה מהפרשנים"}
+            </button>
+            <button onClick={saveLiteraryFocus}
+              style={{padding:"5px 12px",borderRadius:"5px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"11px",fontWeight:"700"}}>
+              💾 שמור
+            </button>
+          </div>
+        </div>
+        <textarea value={literaryFocus} onChange={e=>setLiteraryFocus(e.target.value)}
+          placeholder="כתבי כאן ב-1-2 משפטים על מה הסיפור בעיקרו, לפי הקונצנזוס המחקרי. למשל: 'היחידה מתמקדת בכפיפות המלוכה לנורמות הפולחניות — תיקון דוד בנשיאת הארון מבטא את ההכפפה לתורה ולבחירת הלויים לתפקיד זה.' *אל תמנה מושגים*, תאר את הסיפור עצמו ואת שינויי הכרוניסט ביחס לשמואל-מלכים."
+          style={{width:"100%",minHeight:"80px",padding:"10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"6px",color:"#e2e8f0",fontSize:"13px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+        <div style={{fontSize:"10px",color:"#64748b",marginTop:"6px"}}>
+          💡 שדה זה משותף לכל המושגים של היחידה — הוא מתאר את הסיפור בעיקרו, לא את ביטויו דרך מושג מסוים. ד"ר עמר הדגיש: "לפתוח בשאלה הפרשנית, לא בהגדרת מושג."
+        </div>
       </div>
 
       {/* הגדרה צרה — טקסט מהמשתמשת */}
@@ -4057,7 +4176,7 @@ ${bodyHtml}
   );
 }
 
-function StageC({allUnits,allConcepts,dim4concept,getE,setE,getParams,getCompareNote,setCompareNote,setCompareNotesBatch,getUnitSummary,getStage3Result,setStage3Result,raw,getNarrowDef,setNarrowDef,getWritingDraft,setWritingDraft,getVerified,setVerified,setVerifiedBatch,getConceptSummary,setConceptSummary}){
+function StageC({allUnits,allConcepts,dim4concept,getE,setE,getParams,getCompareNote,setCompareNote,setCompareNotesBatch,getUnitSummary,setUnitSummary,getStage3Result,setStage3Result,raw,getNarrowDef,setNarrowDef,getWritingDraft,setWritingDraft,getVerified,setVerified,setVerifiedBatch,getConceptSummary,setConceptSummary}){
   const [screen,setScreen]=useState("select");
   const [character,setCharacter]=useState(null);
   const [dimension,setDimension]=useState(null);
@@ -4916,6 +5035,7 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
         character={character}
         dimension={dimension}
         conceptName={conceptName}
+        allConcepts={allConcepts}
         getE={getE}
         setE={setE}
         getParams={getParams}
@@ -4925,6 +5045,8 @@ ${extraInstructions?`\nהנחיות נוספות: ${extraInstructions}\n`:""}
         setNarrowDef={setNarrowDef}
         getVerified={getVerified}
         setVerified={setVerified}
+        getUnitSummary={getUnitSummary}
+        setUnitSummary={setUnitSummary}
         onBack={backToSelect}
         onContinueToWriting={()=>setScreen("writing")}
       />
@@ -6092,6 +6214,129 @@ ${proposedConclusion?`<h3>מסקנה מוצעת</h3><div class='compare'>${propo
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
 
+  // 📄 יצוא טבלת סיכום מתודולוגית לפרק ג' — כל המעגלים × כל היחידות × כל הממדים
+  function downloadMethodologicalSummaryAsWord(){
+    const charName=character==="david"?"דוד":"שלמה";
+    const hebDate=new Date().toLocaleDateString("he-IL");
+    const allCycles=character==="david"?DAVID_CYCLES:SOLOMON_CYCLES;
+    const assessLabel=v=>v==="full"?"✓ התאמה":v==="partial"?"~ חלקית":v==="gap"?"✗ פער":"— לא דווחה";
+    const assessColor=v=>v==="full"?"#059669":v==="partial"?"#d97706":v==="gap"?"#dc2626":"#64748b";
+
+    let cyclesHtml="";
+    allCycles.forEach(cyc=>{
+      // כותרת המעגל
+      cyclesHtml+=`<h2>מעגל ${cyc.num}: ${cyc.title.replace(/</g,'&lt;')}</h2>`;
+      // הערכות הממדים של המעגל
+      let dimAssessHtml=`<table style='width:100%;margin-bottom:12px;font-size:10pt;'><thead><tr>`;
+      DIMS.forEach(d=>{ dimAssessHtml+=`<th style='background:${d.color};color:white;'>${d.label}</th>`; });
+      dimAssessHtml+="</tr></thead><tbody><tr>";
+      DIMS.forEach(d=>{
+        const s=getConceptSummary?getConceptSummary(character,cycleStorageKey(cyc,d.id)):null;
+        const a=(s&&s.dimAssessment)||"";
+        dimAssessHtml+=`<td style='text-align:center;color:${assessColor(a)};font-weight:700;'>${assessLabel(a)}</td>`;
+      });
+      dimAssessHtml+="</tr></tbody></table>";
+      cyclesHtml+=dimAssessHtml;
+
+      // טבלת היחידות במעגל — לכל יחידה: מרכז כובד + מושגים שולטים/משניים/נעדרים
+      let unitsRows="";
+      (cyc.units||[]).forEach(uname=>{
+        const u=findUnitByName(uname);
+        if(!u){
+          unitsRows+=`<tr><td colspan='5' style='color:#777;font-style:italic;'>${uname.replace(/</g,'&lt;')} — לא נמצאה בנתונים</td></tr>`;
+          return;
+        }
+        const us=getUnitSummary?getUnitSummary(u.id):null;
+        const litFocus=(us&&us.literaryFocus)||"<em style='color:#999;'>— טרם מולא —</em>";
+        // איסוף מושגים מכל הממדים
+        const conceptNameList=(allConcepts||[]).map(c=>c.name||c).filter(Boolean);
+        const dimApproved={d1:[],d2:[],d3:[],d4:[]};
+        const dimBorderline={d1:[],d2:[],d3:[],d4:[]};
+        const dimAbsent={d1:[],d2:[],d3:[],d4:[]};
+        conceptNameList.forEach(cname=>{
+          const dim=conceptToDimensionId(cname);
+          if(!dim) return;
+          const ec=getE(u.id,cname,"chronicles")||{};
+          const params=getParams?getParams(cname):[];
+          const validParams=validParamDefs(params);
+          const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(cname,i)}:null).filter(Boolean);
+          const approvedAuto=positives.filter(x=>x._narrow==="approved");
+          const borderline=positives.filter(x=>x._narrow==="borderline");
+          const v=getVerified?getVerified(character,cname,u.id):null;
+          const bdec=(v&&v.borderlineDecisions)||{};
+          const borderlineAccepted=borderline.filter(x=>bdec[x._idx]==="accepted");
+          const effectiveApproved=[...approvedAuto,...borderlineAccepted];
+          const borderlinePending=borderline.filter(x=>!bdec[x._idx]);
+          if(effectiveApproved.length>0){ dimApproved[dim].push(cname); }
+          else if(borderlinePending.length>0){ dimBorderline[dim].push(cname); }
+          else { dimAbsent[dim].push(cname); }
+        });
+        // compareNotes מכל המושגים (לעמודה "שינויי הכרוניסט")
+        const compareNotesHtml=conceptNameList.map(cname=>{
+          const cn=getCompareNote?getCompareNote(u.id,cname):"";
+          if(!cn||!cn.trim()) return null;
+          return `<div style='margin-bottom:6px;font-size:9pt;'><strong style='color:#4f46e5;'>[${cname.replace(/</g,'&lt;')}]</strong> ${cn.substring(0,250).replace(/</g,'&lt;')}${cn.length>250?"...":""}</div>`;
+        }).filter(Boolean).join("")||"<em style='color:#999;font-size:9pt;'>— אין —</em>";
+
+        const conceptsCell=DIMS.map(d=>{
+          const parts=[];
+          if(dimApproved[d.id].length>0) parts.push(`<div style='color:#059669;'><strong>שולטים:</strong> ${dimApproved[d.id].join(", ")}</div>`);
+          if(dimBorderline[d.id].length>0) parts.push(`<div style='color:#d97706;'><strong>משניים:</strong> ${dimBorderline[d.id].join(", ")}</div>`);
+          if(dimAbsent[d.id].length>0) parts.push(`<div style='color:#999;font-size:9pt;'><strong>נעדרים:</strong> ${dimAbsent[d.id].join(", ")}</div>`);
+          if(parts.length===0) return "";
+          return `<div style='margin-bottom:5px;'><strong style='color:${d.color};'>${d.label.replace("ממד ","ד")}</strong>${parts.join("")}</div>`;
+        }).filter(Boolean).join("");
+
+        unitsRows+=`<tr>
+          <td style='vertical-align:top;width:160px;'><strong>${u.name.replace(/</g,'&lt;')}</strong><br/><em style='color:#555;font-size:9pt;'>${(u.chapter||"").replace(/_/g," ")}</em></td>
+          <td style='vertical-align:top;width:280px;font-size:10pt;'>${litFocus}</td>
+          <td style='vertical-align:top;width:300px;'>${compareNotesHtml}</td>
+          <td style='vertical-align:top;'>${conceptsCell||"<em style='color:#999;'>אין מושגים ניתוחים</em>"}</td>
+        </tr>`;
+      });
+      cyclesHtml+=`<table style='font-size:10pt;'><thead><tr>
+        <th style='width:160px;'>היחידה</th>
+        <th style='width:280px;'>מרכז כובד ספרותי</th>
+        <th style='width:300px;'>שינויי הכרוניסט (compareNotes)</th>
+        <th>מושגים לפי ממד (שולטים / משניים / נעדרים)</th>
+      </tr></thead><tbody>${unitsRows}</tbody></table>`;
+    });
+
+    const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'/><title>סיכום מתודולוגי — ${charName}</title>
+<style>
+body{font-family:'David','Times New Roman',serif;direction:rtl;text-align:right;font-size:12pt;line-height:1.5;}
+h1{font-size:18pt;color:#1a365d;border-bottom:2px solid #1a365d;padding-bottom:6px;}
+h2{font-size:13pt;color:#2c5282;background:#eff6ff;padding:8px 10px;border-right:4px solid #2c5282;margin-top:22px;}
+table{border-collapse:collapse;width:100%;margin:8px 0;}
+th,td{border:1px solid #334155;padding:6px;vertical-align:top;text-align:right;}
+th{background:#2c5282;color:white;font-weight:700;font-size:10pt;}
+.meta{background:#f1f5f9;padding:10px;border:1px solid #cbd5e1;margin-bottom:14px;font-size:10pt;}
+.legend{background:#fef9c3;padding:8px 12px;border:1px solid #eab308;margin-bottom:14px;font-size:10pt;border-radius:4px;}
+</style></head>
+<body>
+<h1>סיכום מתודולוגי לפרק ג׳ — ${charName}</h1>
+<div class='meta'><strong>הדמות:</strong> ${charName} · <strong>הופק:</strong> ${hebDate} · <strong>מבנה:</strong> ${allCycles.length} מעגלים × 4 ממדים נבואיים</div>
+<div class='legend'><strong>מקרא הצבעים:</strong>
+<span style='color:#059669;'>●</span> שולטים (אינדיקטור מאושר) ·
+<span style='color:#d97706;'>●</span> משניים (אינדיקטור גבולי) ·
+<span style='color:#999;'>●</span> נעדרים (אין אינדיקטור) ·
+<br/><strong>הערכת הממדים:</strong>
+<span style='color:#059669;'>✓ התאמה</span> ·
+<span style='color:#d97706;'>~ חלקית</span> ·
+<span style='color:#dc2626;'>✗ פער</span>
+</div>
+${cyclesHtml}
+</body></html>`;
+    const blob=new Blob(['﻿'+html],{type:"application/msword"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`סיכום_מתודולוגי_${charName}_${hebDate.replace(/\//g,"_")}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
   return(
     <div style={{maxWidth:"1400px",margin:"0 auto",padding:"20px 16px"}} dir="rtl">
       {/* כותרת ובחירת דמות */}
@@ -6142,15 +6387,44 @@ ${proposedConclusion?`<h3>מסקנה מוצעת</h3><div class='compare'>${propo
                 const sel=selectedDimension===d.id;
                 const saved=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle,d.id)):null;
                 const hasData=saved&&saved.decisionTable&&saved.decisionTable.length>0;
+                const assess=saved&&saved.dimAssessment;
+                const assessColor=assess==="full"?"#34d399":assess==="partial"?"#fbbf24":assess==="gap"?"#f87171":null;
                 return(
                   <button key={d.id} onClick={()=>setSelectedDimension(d.id)}
                     style={{padding:"10px 14px",borderRadius:"8px",border:sel?`2px solid ${d.color}`:"1px solid #334155",cursor:"pointer",background:sel?`${d.color}22`:"#0f172a",color:sel?d.color:"#cbd5e1",fontSize:"12px",fontWeight:"700",display:"flex",alignItems:"center",gap:"8px"}}>
                     {sel?"● ":""}{d.label.replace("ממד ","ד")}
                     {hasData&&<span style={{fontSize:"10px",color:"#34d399",background:"#06402844",padding:"1px 6px",borderRadius:"8px",fontWeight:"700"}}>✓ נכתב</span>}
+                    {assessColor&&<span style={{fontSize:"10px",color:assessColor,background:`${assessColor}22`,padding:"1px 6px",borderRadius:"8px",fontWeight:"700"}}>{assess==="full"?"התאמה":assess==="partial"?"חלקית":"פער"}</span>}
                   </button>
                 );
               })}
             </div>
+
+            {/* 🎯 הערכת הממד הנבחר (התאמה/חלקית/פער) */}
+            {selectedDimension&&(()=>{
+              const saved=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension)):null;
+              const assess=(saved&&saved.dimAssessment)||"";
+              return(
+                <div style={{marginTop:"12px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px dashed #475569",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
+                  <div style={{fontSize:"12px",color:"#f1f5f9",fontWeight:"700"}}>📊 הערכת ההתאמה למודל הנבואי בממד זה:</div>
+                  <select value={assess} onChange={e=>{
+                    const newVal=e.target.value;
+                    const s=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension)):null;
+                    const base=s||{decisionTable:[],interpretiveQuestion:"",paragraphOrder:"",proposedConclusion:""};
+                    if(setConceptSummary){
+                      setConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension),{...base,dimAssessment:newVal,savedAt:Date.now()});
+                    }
+                  }}
+                    style={{padding:"6px 10px",background:"#1e293b",border:"1px solid #475569",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",cursor:"pointer"}}>
+                    <option value="">— עדיין לא הוחלט —</option>
+                    <option value="full">✓ התאמה מלאה למודל הנבואי</option>
+                    <option value="partial">~ התאמה חלקית (יש מרכיבים, חסרים אחרים)</option>
+                    <option value="gap">✗ פער (הכרוניסט מעצב דגם שונה)</option>
+                  </select>
+                  <div style={{fontSize:"10px",color:"#64748b",flexBasis:"100%"}}>לפי בקשת ד"ר עמר: להראות היכן התאמה, היכן חלקית, היכן הכרוניסט מעצב דגם שונה.</div>
+                </div>
+              );
+            })()}
           </div>
 
           {showRawData&&(
@@ -6333,6 +6607,11 @@ ${proposedConclusion?`<h3>מסקנה מוצעת</h3><div class='compare'>${propo
             <button onClick={downloadCycleAsWord}
               style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#2563eb",color:"white",fontSize:"13px",fontWeight:"700"}}>
               📥 הורד דו"ח המעגל כ-Word
+            </button>
+            <button onClick={downloadMethodologicalSummaryAsWord}
+              style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#8b5cf6",color:"white",fontSize:"13px",fontWeight:"700"}}
+              title="טבלת סיכום מתודולוגית לכל המעגלים: מרכז כובד, שינויי הכרוניסט, מושגים לפי ממד, והערכה (התאמה/חלקית/פער)">
+              📄 יצוא טבלת סיכום מתודולוגית לפרק ג'
             </button>
             <button onClick={()=>saveCycleState({})}
               style={{padding:"10px 24px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"13px",fontWeight:"700"}}>
@@ -6788,8 +7067,8 @@ function App(){
       {tab==="home"&&<HomeTab allUnits={allUnits} allConcepts={allConcepts} prog={prog} raw={raw} setTab={setTab} setEditConcept={setEditConcept} setShowAdd={setShowAdd} getE={getE} dim4concept={dim4concept} getParams={getParams} setInitConcept={setInitConcept} backupData={backupData} resetNirmaz={resetNirmaz}/>}
       {tab==="stagea"&&<StageA allUnits={allUnits} allConcepts={allConcepts} getE={getE} setE={setE} getParams={getParams} dim4concept={dim4concept} raw={raw} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary}/>}
       {tab==="stageb"&&<StageB allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} getFactual={getFactual} setFactual={setFactual} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw}/>}
-      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} setE={setE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} setCompareNotesBatch={setCompareNotesBatch} getUnitSummary={getUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified} setVerifiedBatch={setVerifiedBatch} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
-      {tab==="staged"&&<StageD allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getNarrowDef={getNarrowDef} getCompareNote={getCompareNote} getVerified={getVerified} getUnitSummary={getUnitSummary} raw={raw} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
+      {tab==="stagec"&&<StageC allUnits={allUnits} allConcepts={allConcepts} dim4concept={dim4concept} getE={getE} setE={setE} getParams={getParams} getCompareNote={getCompareNote} setCompareNote={setCompareNote} setCompareNotesBatch={setCompareNotesBatch} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} getStage3Result={getStage3Result} setStage3Result={setStage3Result} raw={raw} getNarrowDef={getNarrowDef} setNarrowDef={setNarrowDef} getWritingDraft={getWritingDraft} setWritingDraft={setWritingDraft} getVerified={getVerified} setVerified={setVerified} setVerifiedBatch={setVerifiedBatch} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
+      {tab==="staged"&&<StageD allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getNarrowDef={getNarrowDef} getCompareNote={getCompareNote} getVerified={getVerified} getUnitSummary={getUnitSummary} setUnitSummary={setUnitSummary} raw={raw} getConceptSummary={getConceptSummary} setConceptSummary={setConceptSummary}/>}
       {tab==="rmatrix"&&<ResearchMatrix allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getUnitSummary={getUnitSummary}/>}
       {tab==="indmatrix"&&<IndicatorMatrixReport allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams}/>}
       {tab==="reports"&&<ReportGenerator allUnits={allUnits} allConcepts={allConcepts} getE={getE} getParams={getParams} getCompareNote={getCompareNote} getFactual={getFactual} getUnitSummary={getUnitSummary}/>}
