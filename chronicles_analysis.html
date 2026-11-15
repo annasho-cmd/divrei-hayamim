@@ -7013,7 +7013,7 @@ ${detailedHtml}
             </button>
             <button onClick={downloadDetailedReportAsWord} disabled={selectedUnitIds.length===0}
               style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:selectedUnitIds.length===0?"not-allowed":"pointer",background:selectedUnitIds.length===0?"#475569":"#06b6d4",color:"white",fontSize:"13px",fontWeight:"700",opacity:selectedUnitIds.length===0?0.6:1}}
-              title="דו\"ח מפורט ליחידות הנבחרות במעגל × ממד זה. כולל: מבט-על, דיון מפורט לכל יחידה, ריכוז ממצאים, שדה פתוח לשאלה פרשנית ומסקנות.">
+              title={`דו"ח מפורט ליחידות הנבחרות במעגל x ממד זה. כולל: מבט-על, דיון מפורט לכל יחידה, ריכוז ממצאים, שדה פתוח לשאלה פרשנית ומסקנות.`}>
               📄 הורד דו"ח מפורט לפרק ג׳ ({selectedUnitIds.length} יחידות)
             </button>
             <button onClick={downloadMethodologicalSummaryAsWord}
@@ -7023,7 +7023,7 @@ ${detailedHtml}
             </button>
             <button onClick={downloadCycleAsWord}
               style={{padding:"8px 14px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px",fontWeight:"600"}}
-              title="דו\"ח ישן של המעגל — מהגרסה עם טבלת ההכרעות של AI">
+              title={`דו"ח ישן של המעגל — מהגרסה עם טבלת ההכרעות של AI`}>
               📥 דו"ח מעגל (ישן)
             </button>
             <button onClick={()=>saveCycleState({})}
