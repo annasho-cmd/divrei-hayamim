@@ -5828,6 +5828,10 @@ function conceptToDimensionId(conceptName){
 // StageD — ריכוז הממצאים המאושרים לפי מעגלים
 // ─────────────────────────────────────────────────────────────────────────
 function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompareNote,getVerified,getUnitSummary,setUnitSummary,raw,getConceptSummary,setConceptSummary}){
+  // 🆕 דגל שהופך ל-true פעם אחת ברגע שהנתונים הראשוניים נטענו מ-Firebase/localStorage.
+  // משמש כתלות ל-useEffect הטעינה, כדי לוודא שהוא רץ שוב אחרי שהנתונים מגיעים
+  // (ולא רק כשהמעגל/הממד/הדמות מתחלפים). זה פותר את באג "בחרתי מעגל לפני שה-Firebase סיים לטעון".
+  const dataReady = !!(raw&&raw.conceptSummaries);
   const [character,setCharacter]=useState("david");
   const [selectedCycle,setSelectedCycle]=useState(null);
   const [selectedDimension,setSelectedDimension]=useState("d1"); // בורר ממד — מכפיף את ההכרעות
@@ -5969,7 +5973,7 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
     setPerUnitConcepts((s&&s.perUnitConcepts)||{});
     setGenLFMsg({});
     setShowRawData(false); // ברירת מחדל: מוסתר
-  },[selectedCycle,character,selectedDimension]);
+  },[selectedCycle,character,selectedDimension,dataReady]);
 
   function saveCycleState(partial,opts){
     if(!selectedCycle||!setConceptSummary) return;
