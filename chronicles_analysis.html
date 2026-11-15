@@ -5844,6 +5844,8 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
   const [perUnitConcepts,setPerUnitConcepts]=useState({}); // {uid: {leading: [names], secondary: [names]}}
   const [generatingLFForUnit,setGeneratingLFForUnit]=useState(null); // uid של יחידה בייצור מרכז כובד
   const [genLFMsg,setGenLFMsg]=useState({});    // {uid: message}
+  const [saveMsg,setSaveMsg]=useState(""); // 🆕 הודעת שמירה למשתמשת
+  function flashSave(m){setSaveMsg(m);setTimeout(()=>setSaveMsg(""),2500);}
 
   const cycles=character==="david"?DAVID_CYCLES:SOLOMON_CYCLES;
   // ⚠ allConcepts הם אובייקטים — חייבים .name
@@ -5966,7 +5968,7 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
     setShowRawData(false); // ברירת מחדל: מוסתר
   },[selectedCycle,character,selectedDimension]);
 
-  function saveCycleState(partial){
+  function saveCycleState(partial,opts){
     if(!selectedCycle||!setConceptSummary) return;
     const full={
       decisionTable,interpretiveQuestion,paragraphOrder,proposedConclusion,
@@ -5975,6 +5977,7 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
       dimension:selectedDimension,savedAt:Date.now()
     };
     setConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension),full);
+    if(opts&&opts.showMsg) flashSave("✓ נשמר ("+new Date().toLocaleTimeString("he-IL")+")");
   }
 
   // 🆕 עזרים לעבודה הידנית
@@ -7106,7 +7109,7 @@ ${detailedHtml}
                 </table>
               </div>
               <div style={{marginTop:"10px",display:"flex",gap:"8px",justifyContent:"flex-end",flexWrap:"wrap"}}>
-                <button onClick={()=>saveCycleState({decisionTable})}
+                <button onClick={()=>saveCycleState({decisionTable},{showMsg:true})}
                   style={{padding:"8px 16px",borderRadius:"6px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"12px",fontWeight:"700"}}>
                   💾 שמור את טבלת ההכרעות
                 </button>
@@ -7161,10 +7164,15 @@ ${detailedHtml}
               title={`דו"ח ישן של המעגל — מהגרסה עם טבלת ההכרעות של AI`}>
               📥 דו"ח מעגל (ישן)
             </button>
-            <button onClick={()=>saveCycleState({})}
+            <button onClick={()=>saveCycleState({},{showMsg:true})}
               style={{padding:"10px 24px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"13px",fontWeight:"700"}}>
               💾 שמור הכל
             </button>
+            {saveMsg&&(
+              <div style={{alignSelf:"center",padding:"8px 14px",borderRadius:"6px",background:"#064e3b",color:"#6ee7b7",fontSize:"12px",fontWeight:"700",border:"1px solid #10b98166"}}>
+                {saveMsg}
+              </div>
+            )}
           </div>
         </>
       )}
@@ -7211,13 +7219,35 @@ function App(){
     const localDrafts=WDRAFTS.load();
     const localVerifs=VERIFS.load();
     const localCSums=CSUMS.load();
+    // 🆕 מיזוג מפתח-אחר-מפתח: מעדיף את העדכני ביותר לפי savedAt
+    // זה מונע מצב שבו ריענון מהיר אחרי שמירה גורם ל-Firebase (שדיבאונס של 2 שניות)
+    // לדרוס נתונים טריים מ-localStorage.
+    const mergeByTimestamp=(localObj,fbObj)=>{
+      const local=localObj||{}; const fb=fbObj||{};
+      const out={};
+      const allKeys=new Set([...Object.keys(local),...Object.keys(fb)]);
+      allKeys.forEach(k=>{
+        const l=local[k]; const f=fb[k];
+        if(l==null) out[k]=f;
+        else if(f==null) out[k]=l;
+        else {
+          const la=(l&&typeof l==="object"&&typeof l.savedAt==="number")?l.savedAt:0;
+          const fa=(f&&typeof f==="object"&&typeof f.savedAt==="number")?f.savedAt:0;
+          // אם לאף אחד אין savedAt (למשל narrowDefs שהם מחרוזות) — נעדיף את המקומי
+          // כי המקומי נשמר מידית בעוד Firebase מדובאנס
+          if(la===0&&fa===0) out[k]=l;
+          else out[k]=la>=fa?l:f;
+        }
+      });
+      return out;
+    };
     fbLoad(fbData=>{
       if(fbData&&fbData.units&&fbData.units.length>0){
         const merged={...base,...fbData,concepts:{...base.concepts,...(fbData.concepts||{})},
-          narrowDefs:{...localNarrow,...(fbData.narrowDefs||{})},
-          writingDrafts:{...localDrafts,...(fbData.writingDrafts||{})},
-          verifs:{...localVerifs,...(fbData.verifs||{})},
-          conceptSummaries:{...localCSums,...(fbData.conceptSummaries||{})}};
+          narrowDefs:mergeByTimestamp(localNarrow,fbData.narrowDefs),
+          writingDrafts:mergeByTimestamp(localDrafts,fbData.writingDrafts),
+          verifs:mergeByTimestamp(localVerifs,fbData.verifs),
+          conceptSummaries:mergeByTimestamp(localCSums,fbData.conceptSummaries)};
         if(fbData.analysis&&Object.keys(fbData.analysis).length>0&&(!fbData.analysis_chronicles||Object.keys(fbData.analysis_chronicles).length===0)){
           merged.analysis_chronicles=fbData.analysis;
         }
@@ -7228,10 +7258,10 @@ function App(){
         const d=LS.load();
         if(d&&d.units&&d.units.length>0){
           setRaw({...base,...d,concepts:{...base.concepts,...(d.concepts||{})},
-            narrowDefs:{...localNarrow,...(d.narrowDefs||{})},
-            writingDrafts:{...localDrafts,...(d.writingDrafts||{})},
-            verifs:{...localVerifs,...(d.verifs||{})},
-            conceptSummaries:{...localCSums,...(d.conceptSummaries||{})}});
+            narrowDefs:mergeByTimestamp(localNarrow,d.narrowDefs),
+            writingDrafts:mergeByTimestamp(localDrafts,d.writingDrafts),
+            verifs:mergeByTimestamp(localVerifs,d.verifs),
+            conceptSummaries:mergeByTimestamp(localCSums,d.conceptSummaries)});
         } else {
           setRaw({...base,narrowDefs:localNarrow||{},writingDrafts:localDrafts||{},verifs:localVerifs||{},conceptSummaries:localCSums||{}});
         }
