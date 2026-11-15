@@ -5987,7 +5987,7 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
   }
   function toggleConceptForUnit(uid,conceptName,role){ // role: 'leading' | 'secondary'
     setPerUnitConcepts(prev=>{
-      const unitData=prev[uid]||{leading:[],secondary:[]};
+      const unitData=prev[uid]||{leading:[],secondary:[],approvedIndicators:{}};
       const list=unitData[role]||[];
       const otherRole=role==="leading"?"secondary":"leading";
       const otherList=unitData[otherRole]||[];
@@ -6002,6 +6002,79 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
       const next={
         ...prev,
         [uid]:{...unitData,[role]:newList,[otherRole]:newOtherList}
+      };
+      setTimeout(()=>saveCycleState({perUnitConcepts:next}),0);
+      return next;
+    });
+  }
+
+  // 🆕 סימון אינדיקטור כמאושר/לא מאושר ידנית ליחידה × מושג × אינדיקטור
+  function toggleIndicatorApproval(uid,conceptName,idx){
+    setPerUnitConcepts(prev=>{
+      const unitData=prev[uid]||{leading:[],secondary:[],approvedIndicators:{}};
+      const approved=unitData.approvedIndicators||{};
+      const conceptApproved=approved[conceptName]||[];
+      let newList;
+      if(conceptApproved.includes(idx)){
+        newList=conceptApproved.filter(i=>i!==idx);
+      } else {
+        newList=[...conceptApproved,idx].sort((a,b)=>a-b);
+      }
+      const next={
+        ...prev,
+        [uid]:{
+          ...unitData,
+          approvedIndicators:{...approved,[conceptName]:newList}
+        }
+      };
+      setTimeout(()=>saveCycleState({perUnitConcepts:next}),0);
+      return next;
+    });
+  }
+
+  // 🆕 אוסף אינדיקטורים שעברו את הקריטריון הצר ליחידה × מושג
+  // כולל: אוטומטית-מאושרים + גבוליים שהמשתמשת אישרה בשלב ג'
+  // שלב ד': הרשימה הזו היא "סופית" — אין יותר גבולי, רק אישור/לא-אישור
+  function getNarrowApprovedIndicators(unit,conceptName){
+    if(!unit||!conceptName) return [];
+    const ec=getE?getE(unit.id,conceptName,"chronicles"):null;
+    if(!ec||!Array.isArray(ec.params)) return [];
+    const params=getParams?getParams(conceptName):[];
+    const positives=ec.params.map((p,i)=>{
+      if(!p||p.found!==true) return null;
+      return {
+        _idx:i,
+        _narrow:narrowStatus(conceptName,i), // "approved" | "borderline" | "rejected"
+        _def:params[i]||null,
+        verse:p.verse||"",
+        note:p.note||""
+      };
+    }).filter(Boolean);
+    // אוטומטית-מאושרים
+    const approvedAuto=positives.filter(x=>x._narrow==="approved");
+    // גבוליים שאושרו ידנית בשלב ג'
+    const v=getVerified?getVerified(character,conceptName,unit.id):null;
+    const bdec=(v&&v.borderlineDecisions)||{};
+    const borderlineAccepted=positives.filter(x=>x._narrow==="borderline"&&bdec[x._idx]==="accepted");
+    // רק אלה עברו את הסינון הצר
+    return [...approvedAuto,...borderlineAccepted].sort((a,b)=>a._idx-b._idx);
+  }
+
+  // 🆕 פעולות אצווה: אשרי הכל / נקי הכל ליחידה × מושג
+  function setAllIndicatorsForConcept(uid,conceptName,checked){
+    const u=(allUnits||[]).find(x=>x.id===uid);
+    if(!u) return;
+    const narrowList=getNarrowApprovedIndicators(u,conceptName);
+    const allIdxs=narrowList.map(x=>x._idx);
+    setPerUnitConcepts(prev=>{
+      const unitData=prev[uid]||{leading:[],secondary:[],approvedIndicators:{}};
+      const approved=unitData.approvedIndicators||{};
+      const next={
+        ...prev,
+        [uid]:{
+          ...unitData,
+          approvedIndicators:{...approved,[conceptName]:checked?allIdxs:[]}
+        }
       };
       setTimeout(()=>saveCycleState({perUnitConcepts:next}),0);
       return next;
@@ -6515,20 +6588,17 @@ ${cyclesHtml}
       detailedHtml+=`<div class='lf'><strong>📍 מרכז כובד ספרותי:</strong><br/>${literaryFocus.replace(/</g,'&lt;')}</div>`;
 
       // פונקציה לבניית פסקה למושג
+      // 🆕 מציג רק את האינדיקטורים שאושרו ידנית בשלב ד' (לא את כל האפקטיבית-מאושרים!)
       const buildConceptBlock=(cname,role)=>{
         const narrowDef=getNarrowDef?getNarrowDef(cname):"";
-        const ec=getE?getE(u.id,cname,"chronicles"):{};
-        const params=getParams?getParams(cname):[];
-        const validParams=validParamDefs(params);
-        const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(cname,i),_def:params[i]||validParams[i]}:null).filter(Boolean);
-        const approvedAuto=positives.filter(x=>x._narrow==="approved");
-        const borderline=positives.filter(x=>x._narrow==="borderline");
-        const v=getVerified?getVerified(character,cname,u.id):null;
-        const bdec=(v&&v.borderlineDecisions)||{};
-        const borderlineAccepted=borderline.filter(x=>bdec[x._idx]==="accepted");
-        const effectiveApproved=[...approvedAuto,...borderlineAccepted];
+        // רשימת האינדיקטורים שעברו את ההגדרה הצרה (זמינים לאישור)
+        const narrowList=getNarrowApprovedIndicators(u,cname);
+        // רשימת האינדקסים שהמשתמשת אישרה ידנית בשלב ד'
+        const userApprovedIdxs=(pc.approvedIndicators||{})[cname]||[];
+        // סנן: רק מה שגם עבר קריטריון וגם אושר ידנית
+        const userApprovedInds=narrowList.filter(ind=>userApprovedIdxs.includes(ind._idx));
 
-        const indRows=effectiveApproved.map(x=>{
+        const indRows=userApprovedInds.map(x=>{
           const vP=x.verse?`<strong style='color:#1e40af;'>פסוק ${x.verse.replace(/</g,'&lt;')}:</strong> `:"";
           const q=((x._def&&x._def.q)||(x._def&&x._def.paramLabel)||"").replace(/</g,'&lt;');
           const note=x.note?` — <em>${x.note.replace(/</g,'&lt;')}</em>`:"";
@@ -6543,7 +6613,7 @@ ${cyclesHtml}
         return `<div class='concept'>
           <h3>▶ ${cname.replace(/</g,'&lt;')} ${roleLabel}</h3>
           <div class='ndef'><strong>ההגדרה הצרה (מפרק ב׳):</strong><br/>${(narrowDef||"<em>אין הגדרה</em>").replace(/</g,'&lt;')}</div>
-          ${indRows?`<div><strong>אינדיקטורים מאושרים (לפי הגדרה צרה):</strong><ul style='margin:6px 0;padding-right:20px;'>${indRows}</ul></div>`:"<div style='color:#999;font-style:italic;'>אין אינדיקטורים מאושרים בכלי לפי ההגדרה הצרה (ראוי לבדוק ידנית).</div>"}
+          ${indRows?`<div><strong>אינדיקטורים מאושרים (${userApprovedInds.length} מתוך ${narrowList.length} שעברו את ההגדרה הצרה):</strong><ul style='margin:6px 0;padding-right:20px;'>${indRows}</ul></div>`:`<div style='color:#999;font-style:italic;'>לא אושרו אינדיקטורים ידנית למושג זה ביחידה זו. ${narrowList.length>0?`(יש ${narrowList.length} אינדיקטורים זמינים לאישור בשלב ד'.)`:"(אין אינדיקטורים שעברו את ההגדרה הצרה.)"}</div>`}
           ${compareBlock}
         </div>`;
       };
@@ -6885,6 +6955,71 @@ ${detailedHtml}
                         })}
                       </div>
                     </div>
+
+                    {/* 🆕 אישור אינדיקטורים למושגים שנבחרו */}
+                    {([...leadingList,...secondaryList].length>0)&&(
+                      <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0b1e3c",borderRadius:"6px",border:"1px dashed #60a5fa44"}}>
+                        <div style={{fontSize:"11px",color:"#93c5fd",fontWeight:"700",marginBottom:"8px"}}>✅ אישור אינדיקטורים (רק האינדיקטורים שעברו את ההגדרה הצרה בשלב ג')</div>
+                        {[...leadingList.map(c=>({name:c,role:"leading"})),...secondaryList.map(c=>({name:c,role:"secondary"}))].map(({name:cname,role})=>{
+                          const narrowList=getNarrowApprovedIndicators(u,cname);
+                          const unitData=perUnitConcepts[uid]||{};
+                          const approvedForConcept=(unitData.approvedIndicators||{})[cname]||[];
+                          const roleColor=role==="leading"?"#86efac":"#fcd34d";
+                          const roleLabel=role==="leading"?"מוביל":"משני";
+                          return(
+                            <div key={cname} style={{marginBottom:"10px",padding:"8px 10px",background:"#0f172a",borderRadius:"5px",border:"1px solid #1e293b"}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px",flexWrap:"wrap",gap:"6px"}}>
+                                <div style={{fontSize:"12px",color:roleColor,fontWeight:"700"}}>
+                                  {cname} <span style={{fontSize:"9px",color:"#64748b",fontWeight:"500"}}>({roleLabel})</span>
+                                  <span style={{fontSize:"10px",color:"#64748b",fontWeight:"400",marginRight:"6px"}}>
+                                    — {approvedForConcept.length}/{narrowList.length} מאושרים
+                                  </span>
+                                </div>
+                                {narrowList.length>0&&(
+                                  <div style={{display:"flex",gap:"4px"}}>
+                                    <button onClick={()=>setAllIndicatorsForConcept(uid,cname,true)}
+                                      style={{padding:"2px 8px",borderRadius:"3px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"10px"}}>אשר הכל</button>
+                                    <button onClick={()=>setAllIndicatorsForConcept(uid,cname,false)}
+                                      style={{padding:"2px 8px",borderRadius:"3px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"10px"}}>נקי</button>
+                                  </div>
+                                )}
+                              </div>
+                              {narrowList.length===0?(
+                                <div style={{fontSize:"10px",color:"#f87171",fontStyle:"italic",padding:"4px 0"}}>⚠ אין אינדיקטורים שעברו את ההגדרה הצרה למושג זה ביחידה זו. (שקלי: ייתכן שהמושג אינו רלוונטי כאן, או שיש לבדוק את ההחלטות על הגבוליים בשלב ג'.)</div>
+                              ):(
+                                <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
+                                  {narrowList.map(ind=>{
+                                    const isApproved=approvedForConcept.includes(ind._idx);
+                                    const narrowBadge=ind._narrow==="approved"?"🟢":"🟡";
+                                    const narrowTitle=ind._narrow==="approved"?"אוטומטית-מאושר ע\"י ההגדרה הצרה":"גבולי שאושר ידנית בשלב ג'";
+                                    const q=((ind._def&&ind._def.q)||(ind._def&&ind._def.paramLabel)||"").substring(0,120);
+                                    const verseText=ind.verse?`פסוק ${ind.verse}: `:"";
+                                    const noteText=ind.note?ind.note.substring(0,200):"";
+                                    return(
+                                      <label key={ind._idx} style={{display:"flex",alignItems:"flex-start",gap:"6px",padding:"5px 7px",background:isApproved?"#06402822":"#1e293b",border:isApproved?"1px solid #34d399":"1px solid #1e293b",borderRadius:"4px",cursor:"pointer"}}>
+                                        <input type="checkbox" checked={isApproved} onChange={()=>toggleIndicatorApproval(uid,cname,ind._idx)} style={{marginTop:"3px",cursor:"pointer"}}/>
+                                        <div style={{flex:1,fontSize:"10px",color:"#cbd5e1",lineHeight:"1.5"}}>
+                                          <div style={{marginBottom:"2px"}}>
+                                            <span title={narrowTitle} style={{marginLeft:"3px"}}>{narrowBadge}</span>
+                                            <strong style={{color:"#f1f5f9"}}>#{ind._idx+1}</strong>: <span style={{color:"#94a3b8"}}>{q}</span>
+                                          </div>
+                                          {(verseText||noteText)&&(
+                                            <div style={{fontSize:"10px",color:"#94a3b8",paddingRight:"10px",lineHeight:"1.5"}}>
+                                              {verseText&&<span style={{color:"#60a5fa",fontWeight:"600"}}>{verseText}</span>}
+                                              {noteText}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     {/* מרכז כובד ספרותי */}
                     <div style={{marginTop:"10px",padding:"8px 10px",background:"#0f172a",borderRadius:"6px",border:"1px dashed #a78bfa44"}}>
