@@ -6994,6 +6994,31 @@ ${detailedHtml}
             </div>
           </div>
 
+          {/* 🆕 שלב 4 + תחילת שלב 5 — שאלה פרשנית ותשובה ראשונית.
+              הועבר מעל היחידות כדי שתנסחי אותם לפני שתכתבי את "תרומת היחידה". */}
+          {selectedUnitIds.length>0&&(
+            <div style={{marginBottom:"14px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #a78bfa66"}}>
+              <div style={{fontSize:"14px",color:"#c4b5fd",fontWeight:"700",marginBottom:"3px"}}>🎯 שלב 4 — שאלה פרשנית למעגל × ממד</div>
+              <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"12px",fontStyle:"italic"}}>
+                נסחי שאלה אחת שמחברת בין היחידות שבחרת. מיד אחריה כתבי תשובה ראשונית לפי התרשמותך ממרכזי הכובד של היחידות, לפני שתפרקי כל יחידה לפי המושגים. התשובה הזאת היא הציר שאליו תתייחסי כשתמלאי "תרומת היחידה למסקנה" מתחת לכל יחידה.
+              </div>
+
+              <div style={{marginBottom:"12px"}}>
+                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"5px"}}>שאלה פרשנית</div>
+                <textarea value={interpretiveQuestion} onChange={e=>setInterpretiveQuestion(e.target.value)} onBlur={()=>saveCycleState({interpretiveQuestion},{showMsg:true})}
+                  placeholder={`מה השאלה הפרשנית שמחברת בין היחידות שבחרת? למשל: 'כיצד עיצוב דוד כקשוב לנביא מעצב את החזון הנבואי של המלכות הראויה?'`}
+                  style={{width:"100%",minHeight:"55px",padding:"8px 10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+              </div>
+
+              <div>
+                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>תשובה ראשונית <span style={{fontSize:"9px",color:"#64748b",fontWeight:"500"}}>(לפני בדיקת תרומת היחידות)</span></div>
+                <textarea value={initialAnswer} onChange={e=>setInitialAnswer(e.target.value)} onBlur={()=>saveCycleState({initialAnswer},{showMsg:true})}
+                  placeholder="התשובה כפי שעולה ממרכזי הכובד של היחידות ומההיגיון הפרשני של המעגל, לפני בדיקה שיטתית של תרומת כל יחידה."
+                  style={{width:"100%",minHeight:"80px",padding:"8px 10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+              </div>
+            </div>
+          )}
+
           {/* חלק 2: לכל יחידה נבחרת — מושגים מובילים/משניים + מרכז כובד */}
           {selectedUnitIds.length>0&&(
             <div style={{marginBottom:"14px"}}>
@@ -7209,6 +7234,27 @@ ${detailedHtml}
                           <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"6px",fontStyle:"italic"}}>
                             אחרי שבדקת את כל המושגים לעיל, נסחי משפט אחד או שניים שמסבירים מה היחידה כולה מוסיפה לתשובה על השאלה הפרשנית של המעגל. מושג משני שסומן „שולב בטענת היחידה” נכנס לכאן; האחרים אפשר להשאיר מחוץ.
                           </div>
+                          {/* תזכורת לשאלה ולתשובה הראשונית — תצוגה בלבד */}
+                          {(interpretiveQuestion||initialAnswer)?(
+                            <div style={{marginBottom:"8px",padding:"7px 9px",background:"#1e293b",borderRadius:"4px",border:"1px dashed #a78bfa44",fontSize:"10px",color:"#94a3b8",lineHeight:"1.6"}}>
+                              {interpretiveQuestion&&(
+                                <div style={{marginBottom:initialAnswer?"4px":"0"}}>
+                                  <span style={{color:"#a78bfa",fontWeight:"700"}}>השאלה הפרשנית: </span>
+                                  <span style={{color:"#e2e8f0"}}>{interpretiveQuestion}</span>
+                                </div>
+                              )}
+                              {initialAnswer&&(
+                                <div>
+                                  <span style={{color:"#a78bfa",fontWeight:"700"}}>התשובה הראשונית: </span>
+                                  <span style={{color:"#e2e8f0"}}>{initialAnswer}</span>
+                                </div>
+                              )}
+                            </div>
+                          ):(
+                            <div style={{marginBottom:"8px",padding:"7px 9px",background:"#1e293b",borderRadius:"4px",border:"1px dashed #f8717144",fontSize:"10px",color:"#fca5a5",lineHeight:"1.6",fontStyle:"italic"}}>
+                              ⚠ עדיין לא ניסחת שאלה פרשנית או תשובה ראשונית. גללי למעלה והתחילי משם לפני שתמלאי כאן את תרומת היחידה.
+                            </div>
+                          )}
                           <textarea value={((perUnitConcepts[uid]||{}).unitContribution)||""} onChange={e=>setUnitContribution(uid,e.target.value)}
                             placeholder={`מה היחידה '${u.name}' מוסיפה לתשובה על השאלה הפרשנית? משפט אחד או שניים.`}
                             style={{width:"100%",minHeight:"70px",padding:"8px 10px",background:"#1e293b",border:"1px solid #334155",borderRadius:"4px",color:"#e2e8f0",fontSize:"11px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
@@ -7221,30 +7267,36 @@ ${detailedHtml}
             </div>
           )}
 
-          {/* 🆕 שלב 5 — שאלה פרשנית ברמת המעגל × ממד */}
+          {/* 🆕 שלב 5 — מסקנה מזוקקת של המעגל × ממד.
+              השאלה הפרשנית והתשובה הראשונית הועברו למעלה (לפני היחידות).
+              כאן נשאר רק הזיקוק, שנכתב אחרי שמילאת "תרומת היחידה" לכל יחידה. */}
           {selectedUnitIds.length>0&&(
-            <div style={{marginBottom:"14px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #a78bfa66"}}>
-              <div style={{fontSize:"14px",color:"#c4b5fd",fontWeight:"700",marginBottom:"3px"}}>🎯 שלב 4–5 — שאלה פרשנית ומסקנה של המעגל</div>
+            <div style={{marginBottom:"14px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #6366f166"}}>
+              <div style={{fontSize:"14px",color:"#c7d2fe",fontWeight:"700",marginBottom:"3px"}}>🎯 שלב 5 (סיום) — מסקנה מזוקקת של המעגל</div>
               <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"12px",fontStyle:"italic"}}>
-                שאלה אחת שמחברת בין היחידות שבחרת במעגל ובממד. מיד אחרי ניסוחה כתבי תשובה ראשונית, ולאחר בדיקת תרומתן של כל היחידות עדני את המסקנה המזוקקת.
+                אחרי שבדקת את מה שתורמת כל יחידה (בשדות למעלה), חזרי לתשובה הראשונית. אם היא עומדת בבדיקה, דייקי את הראיות ואת היקף הטענה. אם לא, נסחי מחדש לפי מה שעלה מהיחידות.
               </div>
 
-              <div style={{marginBottom:"12px"}}>
-                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"5px"}}>שאלה פרשנית</div>
-                <textarea value={interpretiveQuestion} onChange={e=>setInterpretiveQuestion(e.target.value)} onBlur={()=>saveCycleState({interpretiveQuestion},{showMsg:true})}
-                  placeholder={`מה השאלה הפרשנית שמחברת בין היחידות שבחרת? למשל: 'כיצד עיצוב דוד כקשוב לנביא מעצב את החזון הנבואי של המלכות הראויה?'`}
-                  style={{width:"100%",minHeight:"55px",padding:"8px 10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
-              </div>
-
-              <div style={{marginBottom:"12px"}}>
-                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>תשובה ראשונית <span style={{fontSize:"9px",color:"#64748b",fontWeight:"500"}}>(כותבים מיד אחרי השאלה, לפני בדיקת היחידות)</span></div>
-                <textarea value={initialAnswer} onChange={e=>setInitialAnswer(e.target.value)} onBlur={()=>saveCycleState({initialAnswer},{showMsg:true})}
-                  placeholder="התשובה כפי שעולה ממרכזי הכובד של היחידות ומההיגיון הפרשני של המעגל, לפני בדיקה שיטתית של תרומת כל יחידה."
-                  style={{width:"100%",minHeight:"80px",padding:"8px 10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
-              </div>
+              {/* תזכורת לשאלה ולתשובה הראשונית — תצוגה בלבד, לא עורכים כאן */}
+              {(interpretiveQuestion||initialAnswer)&&(
+                <div style={{marginBottom:"12px",padding:"8px 10px",background:"#0f172a",borderRadius:"5px",border:"1px dashed #a78bfa44",fontSize:"10px",color:"#94a3b8",lineHeight:"1.6"}}>
+                  {interpretiveQuestion&&(
+                    <div style={{marginBottom:initialAnswer?"6px":"0"}}>
+                      <span style={{color:"#a78bfa",fontWeight:"700"}}>השאלה הפרשנית שניסחת למעלה: </span>
+                      <span style={{color:"#e2e8f0"}}>{interpretiveQuestion}</span>
+                    </div>
+                  )}
+                  {initialAnswer&&(
+                    <div>
+                      <span style={{color:"#a78bfa",fontWeight:"700"}}>התשובה הראשונית שכתבת: </span>
+                      <span style={{color:"#e2e8f0"}}>{initialAnswer}</span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
-                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>מסקנה מזוקקת <span style={{fontSize:"9px",color:"#64748b",fontWeight:"500"}}>(אחרי שמילאת את תרומת כל יחידה)</span></div>
+                <div style={{fontSize:"11px",color:"#818cf8",fontWeight:"700",marginBottom:"3px"}}>מסקנה מזוקקת</div>
                 <textarea value={proposedConclusion} onChange={e=>setProposedConclusion(e.target.value)} onBlur={()=>saveCycleState({proposedConclusion},{showMsg:true})}
                   placeholder="המסקנה שבה אתגבשה אחרי שבדקת את תרומת כל היחידות. אם התשובה הראשונית עמדה בבדיקה, שמרי אותה ודייקי את הראיות ואת היקף הטענה."
                   style={{width:"100%",minHeight:"100px",padding:"8px 10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
