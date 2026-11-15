@@ -5827,7 +5827,7 @@ function conceptToDimensionId(conceptName){
 // ─────────────────────────────────────────────────────────────────────────
 // StageD — ריכוז הממצאים המאושרים לפי מעגלים
 // ─────────────────────────────────────────────────────────────────────────
-function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote,getVerified,getUnitSummary,raw,getConceptSummary,setConceptSummary}){
+function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompareNote,getVerified,getUnitSummary,setUnitSummary,raw,getConceptSummary,setConceptSummary}){
   const [character,setCharacter]=useState("david");
   const [selectedCycle,setSelectedCycle]=useState(null);
   const [selectedDimension,setSelectedDimension]=useState("d1"); // בורר ממד — מכפיף את ההכרעות
@@ -5837,6 +5837,13 @@ function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote
   const [paragraphOrder,setParagraphOrder]=useState("");
   const [proposedConclusion,setProposedConclusion]=useState("");
   const [showRawData,setShowRawData]=useState(false); // כברירת מחדל מוסתר — אחרי ניתוח
+  // ═══════════════════════════════════════════════════════
+  // 🆕 מנגנון ידני לשלב ד' (מחליף את טבלת ההכרעה של ה-AI)
+  // ═══════════════════════════════════════════════════════
+  const [selectedUnitIds,setSelectedUnitIds]=useState([]); // יחידות שנבחרו להיכלל בפרק
+  const [perUnitConcepts,setPerUnitConcepts]=useState({}); // {uid: {leading: [names], secondary: [names]}}
+  const [generatingLFForUnit,setGeneratingLFForUnit]=useState(null); // uid של יחידה בייצור מרכז כובד
+  const [genLFMsg,setGenLFMsg]=useState({});    // {uid: message}
 
   const cycles=character==="david"?DAVID_CYCLES:SOLOMON_CYCLES;
   // ⚠ allConcepts הם אובייקטים — חייבים .name
@@ -5942,19 +5949,145 @@ function StageD({allUnits,allConcepts,getE,getParams,getNarrowDef,getCompareNote
 
   // טעינת מצב השמור של (מעגל × ממד)
   useEffect(()=>{
-    if(!selectedCycle){setDecisionTable([]);setInterpretiveQuestion("");setParagraphOrder("");setProposedConclusion("");return;}
+    if(!selectedCycle){
+      setDecisionTable([]);setInterpretiveQuestion("");setParagraphOrder("");setProposedConclusion("");
+      setSelectedUnitIds([]);setPerUnitConcepts({});setGenLFMsg({});
+      return;
+    }
     const s=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension)):null;
     setDecisionTable((s&&s.decisionTable)||[]);
     setInterpretiveQuestion((s&&s.interpretiveQuestion)||"");
     setParagraphOrder((s&&s.paragraphOrder)||"");
     setProposedConclusion((s&&s.proposedConclusion)||"");
-    setShowRawData(!(s&&s.decisionTable&&s.decisionTable.length>0));
+    // 🆕 מצב ידני
+    setSelectedUnitIds((s&&Array.isArray(s.selectedUnitIds))?s.selectedUnitIds:[]);
+    setPerUnitConcepts((s&&s.perUnitConcepts)||{});
+    setGenLFMsg({});
+    setShowRawData(false); // ברירת מחדל: מוסתר
   },[selectedCycle,character,selectedDimension]);
 
   function saveCycleState(partial){
     if(!selectedCycle||!setConceptSummary) return;
-    const full={decisionTable,interpretiveQuestion,paragraphOrder,proposedConclusion,...partial,dimension:selectedDimension,savedAt:Date.now()};
+    const full={
+      decisionTable,interpretiveQuestion,paragraphOrder,proposedConclusion,
+      selectedUnitIds,perUnitConcepts,
+      ...partial,
+      dimension:selectedDimension,savedAt:Date.now()
+    };
     setConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension),full);
+  }
+
+  // 🆕 עזרים לעבודה הידנית
+  function toggleUnitSelection(uid){
+    setSelectedUnitIds(prev=>{
+      const next=prev.includes(uid)?prev.filter(x=>x!==uid):[...prev,uid];
+      setTimeout(()=>saveCycleState({selectedUnitIds:next}),0);
+      return next;
+    });
+  }
+  function toggleConceptForUnit(uid,conceptName,role){ // role: 'leading' | 'secondary'
+    setPerUnitConcepts(prev=>{
+      const unitData=prev[uid]||{leading:[],secondary:[]};
+      const list=unitData[role]||[];
+      const otherRole=role==="leading"?"secondary":"leading";
+      const otherList=unitData[otherRole]||[];
+      let newList, newOtherList=otherList;
+      if(list.includes(conceptName)){
+        newList=list.filter(c=>c!==conceptName);
+      } else {
+        newList=[...list,conceptName];
+        // מושג לא יכול להיות גם מוביל וגם משני בו-זמנית
+        newOtherList=otherList.filter(c=>c!==conceptName);
+      }
+      const next={
+        ...prev,
+        [uid]:{...unitData,[role]:newList,[otherRole]:newOtherList}
+      };
+      setTimeout(()=>saveCycleState({perUnitConcepts:next}),0);
+      return next;
+    });
+  }
+
+  // 🆕 ייצור מרכז כובד ספרותי מהפרשנים ליחידה ספציפית
+  async function generateLiteraryFocusForUnit(unit){
+    if(!unit) return;
+    setGeneratingLFForUnit(unit.id);
+    setGenLFMsg(prev=>({...prev,[unit.id]:"אוסף ציטוטי פרשנים מכל המושגים ביחידה..."}));
+    try{
+      const scholarByConcept={};
+      const compareNoteByConcept={};
+      conceptNameList.forEach(cn=>{
+        const ec=getE?getE(unit.id,cn,"chronicles"):null;
+        const scholars=(ec&&ec.scholarship)||(ec&&ec.scholars)||"";
+        if(scholars&&typeof scholars==="string"&&scholars.trim().length>0){
+          scholarByConcept[cn]=scholars.substring(0,1500);
+        }
+        const cn2=getCompareNote?getCompareNote(unit.id,cn):"";
+        if(cn2&&cn2.trim().length>0){
+          compareNoteByConcept[cn]=cn2.substring(0,800);
+        }
+      });
+      const scholarsBlock=Object.entries(scholarByConcept).map(([c,s])=>`[${c}]: ${s}`).join("\n\n");
+      const compareBlock=Object.entries(compareNoteByConcept).map(([c,s])=>`[${c}]: ${s}`).join("\n\n");
+      const prompt=`על בסיס דיוני הפרשנים על יחידה זו בדברי הימים + השוואה לשמואל-מלכים, נסח ב-1-2 משפטים את מרכז הכובד הספרותי של היחידה לפי הקונצנזוס המחקרי.
+
+כללים:
+- אל תמנה מושגים (אל תזכיר רוח/חכמה/משפט וכו')
+- כתוב רק מה היחידה בעיקרה אומרת לפי הפרשנים
+- התייחס לשינויים שהכרוניסט הכניס ביחס לשמואל-מלכים
+- עברית אקדמית, קצרה, ללא מילים כמו "הזיקה למושג" או "תרומת הכרוניסט מתבררת"
+
+יחידה: ${unit.name}
+פסוקים: ${unit.verses||""}
+
+ציטוטי פרשנים לפי מושגים:
+${scholarsBlock}
+
+הערות השוואה לשמואל-מלכים:
+${compareBlock}
+
+החזר רק את הטקסט בעברית, ללא כותרת וללא הסברים.`;
+
+      setGenLFMsg(prev=>({...prev,[unit.id]:"שולח ל-AI..."}));
+      const res=await fetch(AI_URL,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-6",
+          max_tokens:500,
+          messages:[{role:"user",content:prompt}]
+        })
+      });
+      if(!res.ok){
+        setGenLFMsg(prev=>({...prev,[unit.id]:"⚠ שגיאה מה-API"}));
+        setGeneratingLFForUnit(null);
+        return;
+      }
+      const data=await res.json();
+      const text=((data?.content||[]).map(b=>b.text||"").join("")||"").trim();
+      if(!text){
+        setGenLFMsg(prev=>({...prev,[unit.id]:"⚠ תשובה ריקה"}));
+        setGeneratingLFForUnit(null);
+        return;
+      }
+      // שומר ב-unitSummary (משותף עם שלב ג')
+      if(setUnitSummary){
+        const cur=getUnitSummary(unit.id)||{};
+        setUnitSummary(unit.id,{...cur,literaryFocus:text});
+      }
+      setGenLFMsg(prev=>({...prev,[unit.id]:"✓ נוצר — ערכי בעצמך!"}));
+    }catch(e){
+      setGenLFMsg(prev=>({...prev,[unit.id]:"⚠ "+e.message}));
+    }
+    setGeneratingLFForUnit(null);
+  }
+
+  function saveLiteraryFocusForUnit(unit,text){
+    if(!unit||!setUnitSummary) return;
+    const cur=getUnitSummary(unit.id)||{};
+    setUnitSummary(unit.id,{...cur,literaryFocus:text});
+    setGenLFMsg(prev=>({...prev,[unit.id]:"✓ נשמר"}));
+    setTimeout(()=>setGenLFMsg(prev=>{const n={...prev};delete n[unit.id];return n;}),2000);
   }
 
   function updateDecisionRow(idx,field,value){
@@ -6337,6 +6470,193 @@ ${cyclesHtml}
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🆕 יצוא דו"ח מפורט לפרק ג' — מעגל נבחר × ממד נבחר × יחידות נבחרות
+  // זהו הדו"ח הבסיסי לפני ניסוח שאלה פרשנית ומסקנות
+  // ═══════════════════════════════════════════════════════════════
+  function downloadDetailedReportAsWord(){
+    if(!selectedCycle){ alert("בחרי מעגל"); return; }
+    if(!selectedDimension){ alert("בחרי ממד נבואי"); return; }
+    if(selectedUnitIds.length===0){ alert("בחרי לפחות יחידה אחת לדיון"); return; }
+    const charName=character==="david"?"דוד":"שלמה";
+    const hebDate=new Date().toLocaleDateString("he-IL");
+    const dimObj=DIMS.find(d=>d.id===selectedDimension)||{};
+    const dimColor=dimObj.color||"#2c5282";
+
+    // טבלת מבט-על של היחידות הנבחרות
+    let overviewRows="";
+    selectedUnitIds.forEach(uid=>{
+      const u=(allUnits||[]).find(x=>x.id===uid);
+      if(!u) return;
+      const pc=perUnitConcepts[uid]||{leading:[],secondary:[]};
+      const leading=(pc.leading||[]).join(", ")||"<em style='color:#999;'>—</em>";
+      const secondary=(pc.secondary||[]).join(", ")||"<em style='color:#999;'>—</em>";
+      const used=[...(pc.leading||[]),...(pc.secondary||[])];
+      const absent=dimensionConcepts.filter(c=>!used.includes(c));
+      const absentText=absent.length>0?absent.join(", "):"—";
+      overviewRows+=`<tr>
+        <td><strong>${u.name.replace(/</g,'&lt;')}</strong><br/><em style='color:#555;font-size:9pt;'>${(u.chapter||"").replace(/_/g," ")}</em></td>
+        <td style='color:#059669;font-weight:700;'>${leading.replace(/</g,'&lt;')}</td>
+        <td style='color:#d97706;'>${secondary.replace(/</g,'&lt;')}</td>
+        <td style='color:#999;font-size:9pt;'>${absentText.replace(/</g,'&lt;')}</td>
+      </tr>`;
+    });
+
+    // דיון מפורט לכל יחידה
+    let detailedHtml="";
+    selectedUnitIds.forEach(uid=>{
+      const u=(allUnits||[]).find(x=>x.id===uid);
+      if(!u) return;
+      const pc=perUnitConcepts[uid]||{leading:[],secondary:[]};
+      const us=getUnitSummary?getUnitSummary(uid):null;
+      const literaryFocus=(us&&us.literaryFocus)||"<em style='color:#999;'>— טרם מולא —</em>";
+
+      detailedHtml+=`<h2>${u.name.replace(/</g,'&lt;')} <span style='font-weight:400;font-size:11pt;color:#555;'>(${(u.chapter||"").replace(/_/g," ")})</span></h2>`;
+      detailedHtml+=`<div class='lf'><strong>📍 מרכז כובד ספרותי:</strong><br/>${literaryFocus.replace(/</g,'&lt;')}</div>`;
+
+      // פונקציה לבניית פסקה למושג
+      const buildConceptBlock=(cname,role)=>{
+        const narrowDef=getNarrowDef?getNarrowDef(cname):"";
+        const ec=getE?getE(u.id,cname,"chronicles"):{};
+        const params=getParams?getParams(cname):[];
+        const validParams=validParamDefs(params);
+        const positives=(ec.params||[]).map((p,i)=>p&&p.found===true?{...p,_idx:i,_narrow:narrowStatus(cname,i),_def:params[i]||validParams[i]}:null).filter(Boolean);
+        const approvedAuto=positives.filter(x=>x._narrow==="approved");
+        const borderline=positives.filter(x=>x._narrow==="borderline");
+        const v=getVerified?getVerified(character,cname,u.id):null;
+        const bdec=(v&&v.borderlineDecisions)||{};
+        const borderlineAccepted=borderline.filter(x=>bdec[x._idx]==="accepted");
+        const effectiveApproved=[...approvedAuto,...borderlineAccepted];
+
+        const indRows=effectiveApproved.map(x=>{
+          const vP=x.verse?`<strong style='color:#1e40af;'>פסוק ${x.verse.replace(/</g,'&lt;')}:</strong> `:"";
+          const q=((x._def&&x._def.q)||(x._def&&x._def.paramLabel)||"").replace(/</g,'&lt;');
+          const note=x.note?` — <em>${x.note.replace(/</g,'&lt;')}</em>`:"";
+          return `<li style='margin-bottom:5px;'><strong>אינדיקטור #${x._idx+1}:</strong> ${q}<br/>${vP}${note}</li>`;
+        }).join("");
+
+        const compareNote=getCompareNote?getCompareNote(u.id,cname):"";
+        const compareBlock=compareNote?`<div class='cmp'><strong>📜 compareNote (השוואה לשמואל-מלכים):</strong><br/>${compareNote.replace(/</g,'&lt;')}</div>`:"";
+
+        const roleLabel=role==="leading"?"<span style='background:#06402822;color:#059669;padding:2px 8px;border-radius:3px;font-size:9pt;'>מוביל</span>":"<span style='background:#78350f22;color:#d97706;padding:2px 8px;border-radius:3px;font-size:9pt;'>משני</span>";
+
+        return `<div class='concept'>
+          <h3>▶ ${cname.replace(/</g,'&lt;')} ${roleLabel}</h3>
+          <div class='ndef'><strong>ההגדרה הצרה (מפרק ב׳):</strong><br/>${(narrowDef||"<em>אין הגדרה</em>").replace(/</g,'&lt;')}</div>
+          ${indRows?`<div><strong>אינדיקטורים מאושרים (לפי הגדרה צרה):</strong><ul style='margin:6px 0;padding-right:20px;'>${indRows}</ul></div>`:"<div style='color:#999;font-style:italic;'>אין אינדיקטורים מאושרים בכלי לפי ההגדרה הצרה (ראוי לבדוק ידנית).</div>"}
+          ${compareBlock}
+        </div>`;
+      };
+
+      // מושגים מובילים
+      if((pc.leading||[]).length>0){
+        detailedHtml+="<h3 class='role'>מושגים מובילים</h3>";
+        pc.leading.forEach(cname=>{ detailedHtml+=buildConceptBlock(cname,"leading"); });
+      }
+      // מושגים משניים
+      if((pc.secondary||[]).length>0){
+        detailedHtml+="<h3 class='role'>מושגים משניים</h3>";
+        pc.secondary.forEach(cname=>{ detailedHtml+=buildConceptBlock(cname,"secondary"); });
+      }
+      if((pc.leading||[]).length===0&&(pc.secondary||[]).length===0){
+        detailedHtml+="<div style='color:#b91c1c;font-style:italic;padding:8px 10px;background:#fef2f2;border-right:3px solid #b91c1c;'>לא נקבעו מושגים מובילים או משניים ליחידה זו.</div>";
+      }
+    });
+
+    // ריכוז ממצאים
+    const allLeading={}; const allSecondary={};
+    selectedUnitIds.forEach(uid=>{
+      const pc=perUnitConcepts[uid]||{leading:[],secondary:[]};
+      (pc.leading||[]).forEach(c=>{allLeading[c]=(allLeading[c]||0)+1;});
+      (pc.secondary||[]).forEach(c=>{allSecondary[c]=(allSecondary[c]||0)+1;});
+    });
+    const usedConcepts=new Set([...Object.keys(allLeading),...Object.keys(allSecondary)]);
+    const absentConcepts=dimensionConcepts.filter(c=>!usedConcepts.has(c));
+    const sortByCount=(obj)=>Object.entries(obj).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`${c} (${n})`).join(", ")||"—";
+
+    // הערכת הממד
+    const savedForDim=getConceptSummary?getConceptSummary(character,cycleStorageKey(selectedCycle,selectedDimension)):null;
+    const dimAssess=(savedForDim&&savedForDim.dimAssessment)||"";
+    const assessLabel=dimAssess==="full"?"✓ התאמה מלאה למודל הנבואי":dimAssess==="partial"?"~ התאמה חלקית":dimAssess==="gap"?"✗ פער (הכרוניסט מעצב דגם שונה)":"— עדיין לא הוכרעה";
+    const existingQ=(savedForDim&&savedForDim.interpretiveQuestion)||"";
+    const existingConcl=(savedForDim&&savedForDim.proposedConclusion)||"";
+
+    const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'/><title>דו"ח מפורט: ${charName}, מעגל ${selectedCycle.num}, ${dimObj.label}</title>
+<style>
+body{font-family:'David','Times New Roman',serif;direction:rtl;text-align:right;font-size:12pt;line-height:1.6;color:#1a202c;}
+h1{font-size:18pt;color:#1a365d;border-bottom:3px solid ${dimColor};padding-bottom:6px;}
+h2{font-size:14pt;color:white;background:${dimColor};padding:8px 12px;border-radius:4px;margin-top:22px;}
+h3{font-size:12pt;color:${dimColor};margin-top:16px;margin-bottom:6px;border-right:4px solid ${dimColor};padding-right:8px;}
+h3.role{font-size:13pt;color:#2c5282;background:#edf2f7;padding:5px 10px;border-right:4px solid #2c5282;}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:10pt;}
+th,td{border:1px solid #334155;padding:8px;vertical-align:top;text-align:right;}
+th{background:${dimColor};color:white;font-weight:700;}
+.meta{background:#f1f5f9;padding:10px;border:1px solid #cbd5e1;margin-bottom:14px;font-size:10pt;}
+.lf{background:#faf5ff;padding:10px 12px;border-right:4px solid #a78bfa;margin:10px 0;font-size:11pt;}
+.cmp{background:#f0fdf4;padding:10px 12px;border-right:4px solid #059669;margin:8px 0;font-size:10pt;}
+.ndef{background:#f8fafc;padding:8px 10px;border:1px dashed #cbd5e1;margin:8px 0;font-size:10pt;color:#555;}
+.concept{background:#fefce8;padding:10px 14px;border:1px solid #fde68a;margin:10px 0;border-radius:4px;}
+.summary{background:#eff6ff;padding:12px 14px;border:1px solid #93c5fd;margin:10px 0;border-radius:4px;}
+.fillme{background:#fefce8;padding:14px;border:2px dashed #eab308;margin:14px 0;border-radius:6px;min-height:60px;}
+</style></head>
+<body>
+<h1>דו"ח מתודולוגי לפרק ג׳</h1>
+<div class='meta'>
+<strong>הדמות:</strong> ${charName} ·
+<strong>המעגל:</strong> ${selectedCycle.num} — ${selectedCycle.title.replace(/</g,'&lt;')} ·
+<strong>הממד:</strong> ${dimObj.label} ·
+<strong>יחידות נבחרות:</strong> ${selectedUnitIds.length} מתוך ${(selectedCycle.units||[]).length} ·
+<strong>הופק:</strong> ${hebDate}
+</div>
+
+<h2>📊 חלק 1: מבט-על של היחידות הנבחרות</h2>
+<table>
+<thead><tr>
+<th>היחידה</th>
+<th>מושגים מובילים</th>
+<th>מושגים משניים</th>
+<th>מושגים נעדרים (לא נבחרו)</th>
+</tr></thead>
+<tbody>${overviewRows}</tbody>
+</table>
+
+<h2>📚 חלק 2: דיון מפורט לכל יחידה</h2>
+${detailedHtml}
+
+<h2>📈 חלק 3: ריכוז הממצאים למעגל × ממד</h2>
+<div class='summary'>
+<strong>סך יחידות נבחרות:</strong> ${selectedUnitIds.length}<br/>
+<strong>מושגים שהופיעו כמובילים:</strong> ${sortByCount(allLeading)}<br/>
+<strong>מושגים שהופיעו כמשניים:</strong> ${sortByCount(allSecondary)}<br/>
+<strong>מושגים שאינם מופיעים באף יחידה נבחרת:</strong> ${absentConcepts.join(", ")||"—"}<br/>
+<strong>הערכת ההתאמה למודל הנבואי:</strong> ${assessLabel}
+</div>
+
+<h2>💭 חלק 4 (למילוי): שאלה פרשנית ומסקנות</h2>
+<h3 class='role'>שאלה פרשנית למעגל (בהתאם לממד ${dimObj.label})</h3>
+<div class='fillme'>${existingQ?existingQ.replace(/</g,'&lt;'):"<em style='color:#999;'>_______________________________________________<br/>_______________________________________________<br/>_______________________________________________</em>"}</div>
+
+<h3 class='role'>מסקנות ראשוניות על דגם ההנהגה שעולה</h3>
+<div class='fillme'>${existingConcl?existingConcl.replace(/</g,'&lt;'):"<em style='color:#999;'>_______________________________________________<br/>_______________________________________________<br/>_______________________________________________</em>"}</div>
+
+<h3 class='role'>הערכת ההתאמה למודל הנבואי</h3>
+<div class='fillme'>
+☐ התאמה מלאה למודל הנבואי<br/>
+☐ התאמה חלקית (יש מרכיבים, חסרים אחרים)<br/>
+☐ פער (הכרוניסט מעצב דגם שונה)<br/><br/>
+<strong>הערכה נוכחית בכלי:</strong> ${assessLabel}
+</div>
+</body></html>`;
+    const blob=new Blob(['﻿'+html],{type:"application/msword"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`דוח_מפורט_${charName}_מעגל${selectedCycle.num}_${selectedDimension}_${hebDate.replace(/\//g,"_")}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
   return(
     <div style={{maxWidth:"1400px",margin:"0 auto",padding:"20px 16px"}} dir="rtl">
       {/* כותרת ובחירת דמות */}
@@ -6487,22 +6807,109 @@ ${cyclesHtml}
           </div>
           )}
 
-          {/* הצעד הראשון: ניתוח AI → טבלת הכרעות */}
-          <div style={{marginBottom:"18px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #8b5cf644"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px",flexWrap:"wrap",gap:"8px"}}>
-              <div>
-                <div style={{fontSize:"14px",color:"#f1f5f9",fontWeight:"700"}}>🧠 ניתוח AI של המעגל → טבלת הכרעות</div>
-                <div style={{fontSize:"11px",color:"#94a3b8",marginTop:"3px"}}>מבוסס על הממצאים המאושרים משלב ג׳, הגדרה צרה, והערות השוואה</div>
-              </div>
-              <button onClick={generateDecisionTable} disabled={!!generating}
-                style={{padding:"9px 18px",borderRadius:"6px",border:"none",cursor:generating?"wait":"pointer",background:generating==='decision'?"#475569":"#8b5cf6",color:"white",fontSize:"12px",fontWeight:"700"}}>
-                {generating==='decision'?"⏳ מנתח...":decisionTable.length?"🔄 נתח מחדש":"🧠 הפעל ניתוח AI"}
-              </button>
+          {/* ═════════════════════════════════════════════════════════
+              🆕 מנגנון ידני: בחירת יחידות + קביעת מושגים מובילים ומשניים
+              מחליף את טבלת ההכרעה של ה-AI שהזתה.
+              ═════════════════════════════════════════════════════════ */}
+
+          {/* חלק 1: בחירת יחידות */}
+          <div style={{marginBottom:"14px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #06b6d444"}}>
+            <div style={{fontSize:"14px",color:"#67e8f9",fontWeight:"700",marginBottom:"6px"}}>📋 בחירת יחידות לדיון בפרק ג׳</div>
+            <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"12px",lineHeight:"1.5"}}>סמני רק את היחידות שתידונה בפרק ג׳ בממד <strong>{dimensionLabel}</strong>. יחידות לא-נבחרות לא יופיעו בדו"ח.</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(280px, 1fr))",gap:"8px"}}>
+              {(selectedCycle.units||[]).map(uname=>{
+                const u=findUnitByName(uname);
+                if(!u) return <div key={uname} style={{padding:"8px",fontSize:"11px",color:"#f87171",fontStyle:"italic",background:"#0f172a",borderRadius:"4px"}}>⚠ {uname} — לא נמצאה</div>;
+                const isSelected=selectedUnitIds.includes(u.id);
+                return(
+                  <label key={u.id} style={{display:"flex",alignItems:"center",gap:"8px",padding:"8px 10px",background:isSelected?"#06b6d422":"#0f172a",border:isSelected?"1px solid #06b6d4":"1px solid #334155",borderRadius:"6px",cursor:"pointer"}}>
+                    <input type="checkbox" checked={isSelected} onChange={()=>toggleUnitSelection(u.id)} style={{cursor:"pointer"}}/>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:"12px",color:isSelected?"#67e8f9":"#e2e8f0",fontWeight:isSelected?"700":"500"}}>{u.name}</div>
+                      <div style={{fontSize:"10px",color:"#64748b"}}>{(u.chapter||"").replace(/_/g," ")}</div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{marginTop:"10px",fontSize:"11px",color:"#94a3b8"}}>
+              <strong>נבחרו:</strong> {selectedUnitIds.length} מתוך {(selectedCycle.units||[]).length} יחידות
             </div>
           </div>
 
-          {/* טבלת ההכרעות — עריכה */}
-          {decisionTable.length>0&&(
+          {/* חלק 2: לכל יחידה נבחרת — מושגים מובילים/משניים + מרכז כובד */}
+          {selectedUnitIds.length>0&&(
+            <div style={{marginBottom:"14px"}}>
+              <div style={{fontSize:"14px",color:"#f1f5f9",fontWeight:"700",marginBottom:"10px"}}>✍ ליחידות הנבחרות: מושגים מובילים ומשניים + מרכז כובד ספרותי</div>
+              {selectedUnitIds.map(uid=>{
+                const u=(allUnits||[]).find(x=>x.id===uid);
+                if(!u) return null;
+                const unitData=perUnitConcepts[uid]||{leading:[],secondary:[]};
+                const leadingList=unitData.leading||[];
+                const secondaryList=unitData.secondary||[];
+                const us=getUnitSummary?getUnitSummary(uid):null;
+                const lfText=(us&&us.literaryFocus)||"";
+                const lfMessage=genLFMsg[uid]||"";
+                return(
+                  <div key={uid} style={{marginBottom:"12px",padding:"12px 14px",background:"#1e293b",borderRadius:"8px",border:"1px solid #06b6d444"}}>
+                    <div style={{fontSize:"13px",color:"#67e8f9",fontWeight:"700",marginBottom:"8px"}}>📜 {u.name} <span style={{fontSize:"10px",color:"#64748b",fontWeight:"400"}}>({(u.chapter||"").replace(/_/g," ")})</span></div>
+
+                    {/* מושגים מובילים */}
+                    <div style={{marginBottom:"8px"}}>
+                      <div style={{fontSize:"11px",color:"#86efac",fontWeight:"700",marginBottom:"4px"}}>מושגים מובילים ({leadingList.length})</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
+                        {dimensionConcepts.map(cname=>{
+                          const sel=leadingList.includes(cname);
+                          return(
+                            <button key={cname} onClick={()=>toggleConceptForUnit(uid,cname,"leading")}
+                              style={{padding:"4px 10px",borderRadius:"4px",border:sel?"1px solid #34d399":"1px solid #334155",cursor:"pointer",background:sel?"#06402844":"#0f172a",color:sel?"#86efac":"#cbd5e1",fontSize:"11px",fontWeight:sel?"700":"500"}}>
+                              {sel?"✓ ":""}{cname}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* מושגים משניים */}
+                    <div style={{marginBottom:"10px"}}>
+                      <div style={{fontSize:"11px",color:"#fcd34d",fontWeight:"700",marginBottom:"4px"}}>מושגים משניים ({secondaryList.length})</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:"4px"}}>
+                        {dimensionConcepts.map(cname=>{
+                          const sel=secondaryList.includes(cname);
+                          return(
+                            <button key={cname} onClick={()=>toggleConceptForUnit(uid,cname,"secondary")}
+                              style={{padding:"4px 10px",borderRadius:"4px",border:sel?"1px solid #fbbf24":"1px solid #334155",cursor:"pointer",background:sel?"#78350f44":"#0f172a",color:sel?"#fde68a":"#cbd5e1",fontSize:"11px",fontWeight:sel?"700":"500"}}>
+                              {sel?"✓ ":""}{cname}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* מרכז כובד ספרותי */}
+                    <div style={{marginTop:"10px",padding:"8px 10px",background:"#0f172a",borderRadius:"6px",border:"1px dashed #a78bfa44"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"5px",flexWrap:"wrap",gap:"6px"}}>
+                        <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700"}}>📚 מרכז כובד ספרותי</div>
+                        <div style={{display:"flex",gap:"5px",alignItems:"center"}}>
+                          {lfMessage&&<span style={{fontSize:"10px",color:lfMessage.startsWith("⚠")?"#f87171":"#34d399"}}>{lfMessage}</span>}
+                          <button onClick={()=>generateLiteraryFocusForUnit(u)} disabled={generatingLFForUnit===u.id}
+                            style={{padding:"3px 8px",borderRadius:"4px",border:"none",cursor:generatingLFForUnit===u.id?"wait":"pointer",background:generatingLFForUnit===u.id?"#475569":"#8b5cf6",color:"white",fontSize:"10px",fontWeight:"700"}}>
+                            {generatingLFForUnit===u.id?"⏳":"🤖 הפק"}
+                          </button>
+                        </div>
+                      </div>
+                      <textarea value={lfText} onChange={e=>saveLiteraryFocusForUnit(u,e.target.value)}
+                        placeholder={`על מה הסיפור בעיקרו לפי הקונצנזוס המחקרי. למשל: 'היחידה מתמקדת בכפיפות המלוכה להוראות התורה...'. לפי בקשת ד"ר עמר: אל תמני מושגים, תארי את הסיפור עצמו.`}
+                        style={{width:"100%",minHeight:"50px",padding:"6px 8px",background:"#1e293b",border:"1px solid #334155",borderRadius:"4px",color:"#e2e8f0",fontSize:"11px",lineHeight:"1.6",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* טבלת ההכרעות — עריכה (מוסתרת: לפי החלטת המשתמשת הכלי עובד ידנית במקום AI) */}
+          {false&&decisionTable.length>0&&(
             <div style={{marginBottom:"18px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"1px solid #818cf844"}}>
               <div style={{fontSize:"14px",color:"#c7d2fe",fontWeight:"700",marginBottom:"10px"}}>📋 טבלת הכרעות למעגל ({decisionTable.length} שורות)</div>
               <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"10px",lineHeight:"1.5"}}>הטבלה נוצרה ע"י AI. עברי עליה, ערכי תאים כרצונך ולחצי "💾 שמור" לפני המעבר לנגזרות.</div>
@@ -6604,14 +7011,20 @@ ${cyclesHtml}
               style={{padding:"9px 14px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"11px",fontWeight:"600"}}>
               {showRawData?"◀ הסתר ריכוז ממצאים גולמי":"▼ הצג ריכוז ממצאים גולמי"}
             </button>
-            <button onClick={downloadCycleAsWord}
-              style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#2563eb",color:"white",fontSize:"13px",fontWeight:"700"}}>
-              📥 הורד דו"ח המעגל כ-Word
+            <button onClick={downloadDetailedReportAsWord} disabled={selectedUnitIds.length===0}
+              style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:selectedUnitIds.length===0?"not-allowed":"pointer",background:selectedUnitIds.length===0?"#475569":"#06b6d4",color:"white",fontSize:"13px",fontWeight:"700",opacity:selectedUnitIds.length===0?0.6:1}}
+              title="דו\"ח מפורט ליחידות הנבחרות במעגל × ממד זה. כולל: מבט-על, דיון מפורט לכל יחידה, ריכוז ממצאים, שדה פתוח לשאלה פרשנית ומסקנות.">
+              📄 הורד דו"ח מפורט לפרק ג׳ ({selectedUnitIds.length} יחידות)
             </button>
             <button onClick={downloadMethodologicalSummaryAsWord}
               style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#8b5cf6",color:"white",fontSize:"13px",fontWeight:"700"}}
-              title="טבלת סיכום מתודולוגית לכל המעגלים: מרכז כובד, שינויי הכרוניסט, מושגים לפי ממד, והערכה (התאמה/חלקית/פער)">
-              📄 יצוא טבלת סיכום מתודולוגית לפרק ג'
+              title="טבלת סיכום מתודולוגית לכל המעגלים × כל הממדים × כל היחידות — מבט-על כולל של הפרק">
+              📊 יצוא טבלת סיכום מתודולוגית (כל המעגלים)
+            </button>
+            <button onClick={downloadCycleAsWord}
+              style={{padding:"8px 14px",borderRadius:"6px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"11px",fontWeight:"600"}}
+              title="דו\"ח ישן של המעגל — מהגרסה עם טבלת ההכרעות של AI">
+              📥 דו"ח מעגל (ישן)
             </button>
             <button onClick={()=>saveCycleState({})}
               style={{padding:"10px 24px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"13px",fontWeight:"700"}}>
