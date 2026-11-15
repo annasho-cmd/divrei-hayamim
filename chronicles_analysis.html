@@ -5851,6 +5851,10 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
   const [genLFMsg,setGenLFMsg]=useState({});    // {uid: message}
   const [saveMsg,setSaveMsg]=useState(""); // 🆕 הודעת שמירה למשתמשת
   function flashSave(m){setSaveMsg(m);setTimeout(()=>setSaveMsg(""),2500);}
+  // 🆕 שלב 4 — הצעות AI לשאלה הפרשנית
+  const [proposedQuestions,setProposedQuestions]=useState([]); // רשימת 3+ שאלות שה-AI הציע
+  const [generatingQuestions,setGeneratingQuestions]=useState(false);
+  const [questionsMsg,setQuestionsMsg]=useState("");
 
   const cycles=character==="david"?DAVID_CYCLES:SOLOMON_CYCLES;
   // ⚠ allConcepts הם אובייקטים — חייבים .name
@@ -6068,6 +6072,103 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
     const borderlineAccepted=positives.filter(x=>x._narrow==="borderline"&&bdec[x._idx]==="accepted");
     // רק אלה עברו את הסינון הצר
     return [...approvedAuto,...borderlineAccepted].sort((a,b)=>a._idx-b._idx);
+  }
+
+  // 🆕 שלב 4 — AI מציע 3+ שאלות פרשניות על בסיס כל המידע שמולא בכל יחידה (שלבים 1-3)
+  async function generateInterpretiveQuestions(){
+    if(selectedUnitIds.length===0){ setQuestionsMsg("⚠ אין יחידות נבחרות"); return; }
+    setGeneratingQuestions(true);
+    setQuestionsMsg("אוסף מידע מהיחידות...");
+    try{
+      const charName=character==="david"?"דוד":"שלמה";
+      const dimObj=DIMS.find(d=>d.id===selectedDimension)||{};
+      // בונים בלוק מידע מכל יחידה נבחרת: מרכז כובד, מושגים מובילים/משניים, אינדיקטורים מאושרים + פסוקים
+      const unitBlocks=selectedUnitIds.map(uid=>{
+        const u=(allUnits||[]).find(x=>x.id===uid);
+        if(!u) return "";
+        const pc=perUnitConcepts[uid]||{};
+        const us=getUnitSummary?getUnitSummary(uid):null;
+        const lf=(us&&us.literaryFocus)||"— טרם מולא —";
+        const leadingList=(pc.leading||[]);
+        const secondaryList=(pc.secondary||[]);
+        const conceptLines=[];
+        [...leadingList.map(c=>({name:c,role:"מוביל"})),...secondaryList.map(c=>({name:c,role:"משני"}))].forEach(({name:cname,role})=>{
+          const narrowList=getNarrowApprovedIndicators(u,cname);
+          const approvedIdxs=((pc.approvedIndicators||{})[cname])||[];
+          const approvedInds=narrowList.filter(ind=>approvedIdxs.includes(ind._idx));
+          const indTxt=approvedInds.map(ind=>{
+            const q=((ind._def&&ind._def.q)||(ind._def&&ind._def.paramLabel)||"").substring(0,100);
+            const v=ind.verse?`(${ind.verse})`:"";
+            const n=ind.note?` — ${ind.note.substring(0,100)}`:"";
+            return `  • ${q} ${v}${n}`;
+          }).join("\n");
+          conceptLines.push(`- ${cname} (${role}): ${approvedInds.length} אינדיקטורים מאושרים\n${indTxt||"  (אין אינדיקטורים מאושרים)"}`);
+        });
+        return `=== יחידה: ${u.name} (${(u.chapter||"").replace(/_/g," ")}) ===
+מרכז כובד ספרותי: ${lf}
+מושגים ואינדיקטורים מאושרים:
+${conceptLines.join("\n")||"(לא נבחרו מושגים)"}`;
+      }).filter(Boolean).join("\n\n");
+
+      const prompt=`את עוזרת מחקר לסטודנטית דוקטורט שעובדת על עיצוב ${charName} בדברי הימים לעומת ספרי שמואל-מלכים, במסגרת הממד הנבואי "${dimObj.label}".
+
+לפניך המידע שהסטודנטית אספה בשלבים 1-3 מתוך היחידות שבחרה במעגל הנוכחי. תפקידך: להציע לפחות 3 שאלות פרשניות אפשריות שמחברות בין היחידות הנבחרות ומכוונות לממד הנבואי של המלכות הראויה.
+
+דרישות לכל שאלה:
+- שאלה אחת מרכזית וממוקדת (לא כללית מדי, לא פרטנית מדי)
+- עליה לאפשר תשובה שמתבססת על ראיות מהיחידות
+- עליה להיות רלוונטית לממד הנבואי "${dimObj.label}" של המלכות
+- אין להזכיר שמות של חוקרים
+- אסור להשתמש בקו מפריד (—) בטקסט
+
+המידע מהיחידות:
+${unitBlocks}
+
+השב בפורמט JSON בלבד, ללא טקסט מסביב:
+{"questions":["שאלה 1","שאלה 2","שאלה 3"]}
+
+אפשר להציע יותר משלוש שאלות אם רלוונטי. החזר JSON תקין בלבד.`;
+
+      setQuestionsMsg("שולח ל-AI...");
+      const res=await fetch(AI_URL,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-6",
+          max_tokens:1500,
+          messages:[{role:"user",content:prompt}]
+        })
+      });
+      if(!res.ok){
+        setQuestionsMsg("⚠ שגיאה מה-API");
+        setGeneratingQuestions(false);
+        return;
+      }
+      const data=await res.json();
+      const text=((data?.content||[]).map(b=>b.text||"").join("")||"").trim();
+      // ניסיון לחלץ JSON
+      let parsed=null;
+      try{
+        const jsonMatch=text.match(/\{[\s\S]*\}/);
+        parsed=jsonMatch?JSON.parse(jsonMatch[0]):JSON.parse(text);
+      }catch(e){
+        // fallback: לחלק לפי שורות שמתחילות ב-מספר או תו מיוחד
+        const lines=text.split(/\n+/).map(l=>l.replace(/^[\d.\-•*)\s]+/,"").trim()).filter(l=>l.length>15);
+        parsed={questions:lines.slice(0,6)};
+      }
+      const qs=Array.isArray(parsed&&parsed.questions)?parsed.questions.filter(q=>typeof q==="string"&&q.trim()):[];
+      if(qs.length===0){
+        setQuestionsMsg("⚠ לא הצלחתי לפרסר תשובה מה-AI. נסי שוב.");
+        setGeneratingQuestions(false);
+        return;
+      }
+      setProposedQuestions(qs);
+      setQuestionsMsg(`✓ הוצעו ${qs.length} שאלות — בחרי אחת או ערכי בעצמך`);
+      setGeneratingQuestions(false);
+    }catch(e){
+      setQuestionsMsg("⚠ "+e.message);
+      setGeneratingQuestions(false);
+    }
   }
 
   // 🆕 שלב 5 — שמירת טקסט הניתוח לכל מושג × יחידה
@@ -6994,31 +7095,6 @@ ${detailedHtml}
             </div>
           </div>
 
-          {/* 🆕 שלב 4 + תחילת שלב 5 — שאלה פרשנית ותשובה ראשונית.
-              הועבר מעל היחידות כדי שתנסחי אותם לפני שתכתבי את "תרומת היחידה". */}
-          {selectedUnitIds.length>0&&(
-            <div style={{marginBottom:"14px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #a78bfa66"}}>
-              <div style={{fontSize:"14px",color:"#c4b5fd",fontWeight:"700",marginBottom:"3px"}}>🎯 שלב 4 — שאלה פרשנית למעגל × ממד</div>
-              <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"12px",fontStyle:"italic"}}>
-                נסחי שאלה אחת שמחברת בין היחידות שבחרת. מיד אחריה כתבי תשובה ראשונית לפי התרשמותך ממרכזי הכובד של היחידות, לפני שתפרקי כל יחידה לפי המושגים. התשובה הזאת היא הציר שאליו תתייחסי כשתמלאי "תרומת היחידה למסקנה" מתחת לכל יחידה.
-              </div>
-
-              <div style={{marginBottom:"12px"}}>
-                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"5px"}}>שאלה פרשנית</div>
-                <textarea value={interpretiveQuestion} onChange={e=>setInterpretiveQuestion(e.target.value)} onBlur={()=>saveCycleState({interpretiveQuestion},{showMsg:true})}
-                  placeholder={`מה השאלה הפרשנית שמחברת בין היחידות שבחרת? למשל: 'כיצד עיצוב דוד כקשוב לנביא מעצב את החזון הנבואי של המלכות הראויה?'`}
-                  style={{width:"100%",minHeight:"55px",padding:"8px 10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
-              </div>
-
-              <div>
-                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>תשובה ראשונית <span style={{fontSize:"9px",color:"#64748b",fontWeight:"500"}}>(לפני בדיקת תרומת היחידות)</span></div>
-                <textarea value={initialAnswer} onChange={e=>setInitialAnswer(e.target.value)} onBlur={()=>saveCycleState({initialAnswer},{showMsg:true})}
-                  placeholder="התשובה כפי שעולה ממרכזי הכובד של היחידות ומההיגיון הפרשני של המעגל, לפני בדיקה שיטתית של תרומת כל יחידה."
-                  style={{width:"100%",minHeight:"80px",padding:"8px 10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
-              </div>
-            </div>
-          )}
-
           {/* חלק 2: לכל יחידה נבחרת — מושגים מובילים/משניים + מרכז כובד */}
           {selectedUnitIds.length>0&&(
             <div style={{marginBottom:"14px"}}>
@@ -7150,8 +7226,9 @@ ${detailedHtml}
                         style={{width:"100%",minHeight:"50px",padding:"6px 8px",background:"#1e293b",border:"1px solid #334155",borderRadius:"4px",color:"#e2e8f0",fontSize:"11px",lineHeight:"1.6",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
                     </div>
 
-                    {/* 🆕 שלב 5 — ניתוח לכל מושג שנבחר (שדה אחד למושג, שתי שאלות מעל) */}
-                    {([...leadingList,...secondaryList].length>0)&&(
+                    {/* שלב 5 (ניתוח לכל מושג + תרומת היחידה) הועבר למטה, אחרי שלב 4.
+                        הוא מופיע כבלוק נפרד שמוצג רק אחרי שהשאלה הפרשנית מולאה. */}
+                    {false&&([...leadingList,...secondaryList].length>0)&&(
                       <div style={{marginTop:"12px",padding:"12px 14px",background:"#0b1e3c",borderRadius:"8px",border:"1px solid #f59e0b55"}}>
                         <div style={{fontSize:"12px",color:"#fbbf24",fontWeight:"700",marginBottom:"3px"}}>✍ שלב 5 — ניתוח לכל מושג ביחידה</div>
                         <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px",fontStyle:"italic"}}>
@@ -7261,6 +7338,182 @@ ${detailedHtml}
                         </div>
                       </div>
                     )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* 🆕 שלב 4 — שאלה פרשנית ותשובה ראשונית (עם עזרת AI) — אחרי שכל היחידות מולאו */}
+          {selectedUnitIds.length>0&&(
+            <div style={{marginBottom:"14px",padding:"14px 16px",background:"#1e293b",borderRadius:"10px",border:"2px solid #a78bfa66"}}>
+              <div style={{fontSize:"14px",color:"#c4b5fd",fontWeight:"700",marginBottom:"3px"}}>🎯 שלב 4 — ניסוח שאלה פרשנית</div>
+              <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"12px",fontStyle:"italic"}}>
+                אחרי שמילאת לכל היחידות הנבחרות את מרכז הכובד הספרותי, את המושגים המובילים והמשניים ואת האינדיקטורים המאושרים, את יכולה לבקש מה-AI להציע לפחות 3 שאלות פרשניות אפשריות. בחרי את זו שמובילה את דיונך, או ערכי בשדה.
+              </div>
+
+              <div style={{marginBottom:"12px",display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
+                <button onClick={generateInterpretiveQuestions} disabled={generatingQuestions||selectedUnitIds.length===0}
+                  style={{padding:"9px 18px",borderRadius:"6px",border:"none",cursor:generatingQuestions?"wait":"pointer",background:generatingQuestions?"#475569":"#8b5cf6",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                  {generatingQuestions?"⏳ מייצר שאלות...":"🤖 הצע לי 3+ שאלות פרשניות"}
+                </button>
+                {questionsMsg&&<span style={{fontSize:"11px",color:questionsMsg.startsWith("⚠")?"#f87171":"#86efac"}}>{questionsMsg}</span>}
+              </div>
+
+              {proposedQuestions.length>0&&(
+                <div style={{marginBottom:"14px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px dashed #a78bfa66"}}>
+                  <div style={{fontSize:"11px",color:"#c4b5fd",fontWeight:"700",marginBottom:"8px"}}>🔖 הצעות ה-AI — לחצי על אחת להעתיק לשדה, או השתמשי כהשראה:</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+                    {proposedQuestions.map((q,i)=>(
+                      <button key={i} onClick={()=>{setInterpretiveQuestion(q);setTimeout(()=>saveCycleState({interpretiveQuestion:q},{showMsg:true}),0);}}
+                        style={{textAlign:"right",padding:"9px 12px",borderRadius:"5px",border:"1px solid #334155",cursor:"pointer",background:"#1e293b",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.6",direction:"rtl"}}>
+                        <strong style={{color:"#c4b5fd"}}>{i+1}.</strong> {q}
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={()=>setProposedQuestions([])}
+                    style={{marginTop:"8px",padding:"4px 10px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"10px"}}>
+                    נקה הצעות
+                  </button>
+                </div>
+              )}
+
+              <div style={{marginBottom:"12px"}}>
+                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"5px"}}>שאלה פרשנית <span style={{fontSize:"9px",color:"#64748b",fontWeight:"500"}}>(ערכי אחרי שבחרת מההצעות, או כתבי משלך)</span></div>
+                <textarea value={interpretiveQuestion} onChange={e=>setInterpretiveQuestion(e.target.value)} onBlur={()=>saveCycleState({interpretiveQuestion},{showMsg:true})}
+                  placeholder={`מה השאלה הפרשנית שמחברת בין היחידות שבחרת?`}
+                  style={{width:"100%",minHeight:"60px",padding:"9px 11px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+              </div>
+
+              <div>
+                <div style={{fontSize:"11px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>תשובה ראשונית <span style={{fontSize:"9px",color:"#64748b",fontWeight:"500"}}>(לפני בדיקת תרומת היחידות המפורטת למטה)</span></div>
+                <textarea value={initialAnswer} onChange={e=>setInitialAnswer(e.target.value)} onBlur={()=>saveCycleState({initialAnswer},{showMsg:true})}
+                  placeholder="התשובה כפי שעולה ממרכזי הכובד של היחידות ומההיגיון הפרשני של המעגל, לפני בדיקה שיטתית של תרומת כל יחידה."
+                  style={{width:"100%",minHeight:"80px",padding:"9px 11px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+              </div>
+            </div>
+          )}
+
+          {/* 🆕 שלב 5 (מרכזי) — ניתוח מכוון לשאלה הפרשנית לכל יחידה.
+              מופיע רק אחרי ששאלה פרשנית מולאה בשלב 4. */}
+          {selectedUnitIds.length>0&&interpretiveQuestion&&interpretiveQuestion.trim()&&(
+            <div style={{marginBottom:"14px"}}>
+              <div style={{padding:"12px 14px",background:"#1e293b",borderRadius:"10px",border:"2px solid #f59e0b66",marginBottom:"12px"}}>
+                <div style={{fontSize:"14px",color:"#fcd34d",fontWeight:"700",marginBottom:"3px"}}>✍ שלב 5 — ניתוח מכוון לשאלה הפרשנית</div>
+                <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",fontStyle:"italic"}}>
+                  לכל יחידה, נתחי כל מושג שבחרת לאור השאלה שניסחת. התוצר הסופי של כל יחידה הוא משפט אחד או שניים בשדה "תרומת היחידה למסקנה".
+                </div>
+                <div style={{marginTop:"10px",padding:"8px 10px",background:"#0f172a",borderRadius:"5px",border:"1px dashed #a78bfa66",fontSize:"10px",color:"#94a3b8",lineHeight:"1.6"}}>
+                  <div style={{marginBottom:initialAnswer?"4px":"0"}}>
+                    <span style={{color:"#a78bfa",fontWeight:"700"}}>השאלה הפרשנית שניסחת: </span>
+                    <span style={{color:"#e2e8f0"}}>{interpretiveQuestion}</span>
+                  </div>
+                  {initialAnswer&&(
+                    <div>
+                      <span style={{color:"#a78bfa",fontWeight:"700"}}>התשובה הראשונית שלך: </span>
+                      <span style={{color:"#e2e8f0"}}>{initialAnswer}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {selectedUnitIds.map(uid=>{
+                const u=(allUnits||[]).find(x=>x.id===uid);
+                if(!u) return null;
+                const unitData=perUnitConcepts[uid]||{leading:[],secondary:[],approvedIndicators:{},conceptAnalysis:{},conceptUsedInUnit:{}};
+                const leadingList=unitData.leading||[];
+                const secondaryList=unitData.secondary||[];
+                const us=getUnitSummary?getUnitSummary(uid):null;
+                const lfText=(us&&us.literaryFocus)||"";
+                if([...leadingList,...secondaryList].length===0) return null;
+                return(
+                  <div key={"s5-"+uid} style={{marginBottom:"14px",padding:"12px 14px",background:"#1e293b",borderRadius:"8px",border:"1px solid #f59e0b44"}}>
+                    <div style={{fontSize:"13px",color:"#fcd34d",fontWeight:"700",marginBottom:"3px"}}>✍ {u.name} <span style={{fontSize:"10px",color:"#64748b",fontWeight:"400"}}>({(u.chapter||"").replace(/_/g," ")})</span></div>
+                    {lfText&&(
+                      <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px",padding:"6px 8px",background:"#0f172a",borderRadius:"4px",border:"1px dashed #a78bfa44"}}>
+                        <span style={{color:"#a78bfa",fontWeight:"700"}}>מרכז הכובד הספרותי: </span>{lfText}
+                      </div>
+                    )}
+                    {/* שתי השאלות המנחות — תזכורת לכל יחידה */}
+                    <div style={{fontSize:"10px",color:"#fde68a",lineHeight:"1.6",marginBottom:"10px",padding:"6px 8px",background:"#0f172a",borderRadius:"4px",border:"1px dashed #fbbf2444"}}>
+                      <div style={{fontWeight:"700",color:"#fcd34d",marginBottom:"3px"}}>שאלות מנחות לכל מושג:</div>
+                      <div>1. מה הפסוקים והאינדיקטורים שסומנו מאפשרים לטעון על {character==="david"?"דוד":"שלמה"} לפי ההגדרה הצרה של המושג?</div>
+                      <div>2. כיצד הטענה הזאת מסייעת לפרש את מרכז הכובד הספרותי של היחידה, לאור השאלה הפרשנית?</div>
+                    </div>
+
+                    {[...leadingList.map(c=>({name:c,role:"leading"})),...secondaryList.map(c=>({name:c,role:"secondary"}))].map(({name:cname,role})=>{
+                      const analysisText=((unitData.conceptAnalysis||{})[cname])||"";
+                      const usedInUnit=((unitData.conceptUsedInUnit||{})[cname])||false;
+                      const approvedIdxs=((unitData.approvedIndicators||{})[cname])||[];
+                      const narrowList=getNarrowApprovedIndicators(u,cname);
+                      const approvedInds=narrowList.filter(ind=>approvedIdxs.includes(ind._idx));
+                      const narrowDef=getNarrowDef?getNarrowDef(cname):"";
+                      const roleColor=role==="leading"?"#86efac":"#fcd34d";
+                      const roleLabel=role==="leading"?"מוביל":"משני";
+                      const placeholder=role==="leading"
+                        ? `למושג '${cname}': משפטים המחברים בין הפסוקים המאושרים לבין הטענה על עיצוב ${character==="david"?"דוד":"שלמה"}, ותפקידם בפירוש מרכז הכובד של היחידה לאור השאלה הפרשנית.`
+                        : `למושג '${cname}' (משני): משפט קצר. אם הוא נשען על אותה ראיה כמו מוביל ומחדד, פרטי מה הוא מוסיף. אם תרומתו חופפת, די לציין את החפיפה ולהשאיר את הסימון ריק.`;
+                      return(
+                        <div key={cname} style={{marginBottom:"10px",padding:"9px 11px",background:"#0f172a",borderRadius:"6px",border:"1px solid "+(role==="leading"?"#34d39944":"#fbbf2444")}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px",flexWrap:"wrap",gap:"6px"}}>
+                            <div style={{fontSize:"12px",color:roleColor,fontWeight:"700"}}>
+                              {cname} <span style={{fontSize:"9px",color:"#64748b",fontWeight:"500"}}>({roleLabel})</span>
+                            </div>
+                            {role==="secondary"&&(
+                              <label style={{display:"flex",alignItems:"center",gap:"5px",fontSize:"10px",color:usedInUnit?"#86efac":"#94a3b8",cursor:"pointer",fontWeight:usedInUnit?"700":"500"}}>
+                                <input type="checkbox" checked={usedInUnit} onChange={()=>toggleConceptUsedInUnit(uid,cname)} style={{cursor:"pointer"}}/>
+                                שולב בטענת היחידה
+                              </label>
+                            )}
+                          </div>
+                          {(narrowDef||approvedInds.length>0)&&(
+                            <div style={{marginBottom:"7px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6"}}>
+                              {narrowDef&&(
+                                <div style={{marginBottom:approvedInds.length>0?"5px":"0"}}>
+                                  <span style={{color:"#60a5fa",fontWeight:"700"}}>הגדרה צרה: </span>
+                                  <span style={{color:"#e2e8f0"}}>{narrowDef.length>240?narrowDef.substring(0,240)+"…":narrowDef}</span>
+                                </div>
+                              )}
+                              {approvedInds.length>0&&(
+                                <div>
+                                  <div style={{color:"#60a5fa",fontWeight:"700",marginBottom:"3px"}}>אינדיקטורים שאישרת ({approvedInds.length}):</div>
+                                  {approvedInds.map(ind=>{
+                                    const qTxt=((ind._def&&ind._def.q)||(ind._def&&ind._def.paramLabel)||"").substring(0,100);
+                                    const verseTxt=ind.verse?`פסוק ${ind.verse}: `:"";
+                                    const noteTxt=ind.note?ind.note.substring(0,180):"";
+                                    return(
+                                      <div key={ind._idx} style={{marginBottom:"3px",paddingRight:"8px"}}>
+                                        <div><strong style={{color:"#f1f5f9"}}>#{ind._idx+1}</strong>: <span style={{color:"#94a3b8"}}>{qTxt}</span></div>
+                                        {(verseTxt||noteTxt)&&(
+                                          <div style={{fontSize:"9px",color:"#94a3b8",paddingRight:"8px"}}>
+                                            {verseTxt&&<span style={{color:"#60a5fa",fontWeight:"600"}}>{verseTxt}</span>}
+                                            {noteTxt}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <textarea value={analysisText} onChange={e=>setConceptAnalysisText(uid,cname,e.target.value)}
+                            placeholder={placeholder}
+                            style={{width:"100%",minHeight:role==="leading"?"80px":"55px",padding:"8px 10px",background:"#1e293b",border:"1px solid #334155",borderRadius:"4px",color:"#e2e8f0",fontSize:"11px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+                        </div>
+                      );
+                    })}
+
+                    {/* תרומת היחידה למסקנה */}
+                    <div style={{marginTop:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"2px solid #06b6d466"}}>
+                      <div style={{fontSize:"11px",color:"#67e8f9",fontWeight:"700",marginBottom:"3px"}}>📝 תרומת היחידה למסקנה</div>
+                      <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"6px",fontStyle:"italic"}}>
+                        אחרי שבדקת את כל המושגים, נסחי משפט אחד או שניים שמסבירים מה היחידה כולה מוסיפה לתשובה על השאלה הפרשנית.
+                      </div>
+                      <textarea value={(unitData.unitContribution)||""} onChange={e=>setUnitContribution(uid,e.target.value)}
+                        placeholder={`מה היחידה '${u.name}' מוסיפה לתשובה על השאלה הפרשנית?`}
+                        style={{width:"100%",minHeight:"70px",padding:"8px 10px",background:"#1e293b",border:"1px solid #334155",borderRadius:"4px",color:"#e2e8f0",fontSize:"11px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+                    </div>
                   </div>
                 );
               })}
