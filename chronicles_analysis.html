@@ -5856,6 +5856,90 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
   const [generatingQuestions,setGeneratingQuestions]=useState(false);
   const [questionsMsg,setQuestionsMsg]=useState("");
 
+  // ═══════════════════════════════════════════════════════
+  // 🆕🆕 מצב v2 — עבודה לפי מעגל → יחידה בודדת
+  // לפי החלטת השיחה: בוחרים מעגל, אז יחידה בודדת, אז מושגים (בלי מוביל/משני),
+  // ואז אינדיקטורים, שאלה פרשנית (AI מציע 3), ופסקה (AI מציע שלד).
+  // ═══════════════════════════════════════════════════════
+  const [useV2Mode,setUseV2Mode]=useState(true); // ברירת מחדל: מצב חדש
+  const [v2UnitId,setV2UnitId]=useState(null); // יחידה בודדת שנבחרה
+  const [v2Concepts,setV2Concepts]=useState([]); // מושגים נבחרים (רשימה פשוטה)
+  const [v2ApprovedInd,setV2ApprovedInd]=useState({}); // {conceptName: [idxs מאושרים]}
+  const [v2Question,setV2Question]=useState(""); // השאלה הפרשנית הנבחרת/שנכתבה
+  const [v2Paragraph,setV2Paragraph]=useState(""); // טקסט הפסקה שהמשתמשת כותבת
+  const [v2ProposedQs,setV2ProposedQs]=useState([]); // 3 שאלות שה-AI הציע
+  const [v2GenQs,setV2GenQs]=useState(false);
+  const [v2QsMsg,setV2QsMsg]=useState("");
+  const [v2Scaffold,setV2Scaffold]=useState(""); // שלד הפסקה שה-AI הציע
+  const [v2GenScaffold,setV2GenScaffold]=useState(false);
+  const [v2ScaffoldMsg,setV2ScaffoldMsg]=useState("");
+
+  // מפתח אחסון לעבודה על יחידה בודדת
+  const v2UnitStorageKey=(uid)=>`__unit_v2__${character}__${uid}`;
+
+  // טעינת מצב השמור של יחידה נבחרת (v2)
+  useEffect(()=>{
+    if(!v2UnitId||!dataReady){
+      setV2Concepts([]);setV2ApprovedInd({});
+      setV2Question("");setV2Paragraph("");
+      setV2ProposedQs([]);setV2Scaffold("");
+      setV2QsMsg("");setV2ScaffoldMsg("");
+      return;
+    }
+    const s=getConceptSummary?getConceptSummary(character,v2UnitStorageKey(v2UnitId)):null;
+    setV2Concepts((s&&Array.isArray(s.concepts))?s.concepts:[]);
+    setV2ApprovedInd((s&&s.approvedIndicators)||{});
+    setV2Question((s&&s.question)||"");
+    setV2Paragraph((s&&s.paragraph)||"");
+    setV2ProposedQs((s&&Array.isArray(s.proposedQs))?s.proposedQs:[]);
+    setV2Scaffold((s&&s.scaffold)||"");
+    setV2QsMsg("");setV2ScaffoldMsg("");
+  },[v2UnitId,character,dataReady]);
+
+  // שמירה של עבודת v2
+  function v2Save(partial,opts){
+    if(!v2UnitId||!setConceptSummary) return;
+    const full={
+      concepts:v2Concepts,
+      approvedIndicators:v2ApprovedInd,
+      question:v2Question,
+      paragraph:v2Paragraph,
+      proposedQs:v2ProposedQs,
+      scaffold:v2Scaffold,
+      ...partial,
+      savedAt:Date.now()
+    };
+    setConceptSummary(character,v2UnitStorageKey(v2UnitId),full);
+    if(opts&&opts.showMsg) flashSave("✓ נשמר ("+new Date().toLocaleTimeString("he-IL")+")");
+  }
+
+  function v2ToggleConcept(cname){
+    setV2Concepts(prev=>{
+      const next=prev.includes(cname)?prev.filter(c=>c!==cname):[...prev,cname];
+      setTimeout(()=>v2Save({concepts:next}),0);
+      return next;
+    });
+  }
+
+  function v2ToggleIndicator(cname,idx){
+    setV2ApprovedInd(prev=>{
+      const list=prev[cname]||[];
+      const next={...prev,[cname]:list.includes(idx)?list.filter(i=>i!==idx):[...list,idx].sort((a,b)=>a-b)};
+      setTimeout(()=>v2Save({approvedIndicators:next}),0);
+      return next;
+    });
+  }
+
+  function v2SetAllIndicators(cname,unit,checked){
+    const narrowList=getNarrowApprovedIndicators(unit,cname);
+    const allIdxs=narrowList.map(x=>x._idx);
+    setV2ApprovedInd(prev=>{
+      const next={...prev,[cname]:checked?allIdxs:[]};
+      setTimeout(()=>v2Save({approvedIndicators:next}),0);
+      return next;
+    });
+  }
+
   const cycles=character==="david"?DAVID_CYCLES:SOLOMON_CYCLES;
   // ⚠ allConcepts הם אובייקטים — חייבים .name
   const conceptNameList=(allConcepts||[]).map(c=>c.name||c).filter(Boolean);
@@ -6072,6 +6156,262 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
     const borderlineAccepted=positives.filter(x=>x._narrow==="borderline"&&bdec[x._idx]==="accepted");
     // רק אלה עברו את הסינון הצר
     return [...approvedAuto,...borderlineAccepted].sort((a,b)=>a._idx-b._idx);
+  }
+
+  // 🆕🆕 v2 — AI מציע 3 שאלות פרשניות ליחידה בודדת, לפי מרכז הכובד והמושגים הנבחרים
+  async function v2GenerateQuestions(){
+    if(!v2UnitId||v2Concepts.length===0){ setV2QsMsg("⚠ בחרי מושגים קודם"); return; }
+    const unit=(allUnits||[]).find(x=>x.id===v2UnitId);
+    if(!unit){ setV2QsMsg("⚠ היחידה לא נמצאה"); return; }
+    setV2GenQs(true);
+    setV2QsMsg("אוסף מידע מהיחידה...");
+    try{
+      const charName=character==="david"?"דוד":"שלמה";
+      const us=getUnitSummary?getUnitSummary(v2UnitId):null;
+      const lf=(us&&us.literaryFocus)||"";
+      const conceptBlocks=v2Concepts.map(cname=>{
+        const narrowDef=getNarrowDef?getNarrowDef(cname):"";
+        const narrowList=getNarrowApprovedIndicators(unit,cname);
+        const approvedIdxs=v2ApprovedInd[cname]||[];
+        const approved=narrowList.filter(ind=>approvedIdxs.includes(ind._idx));
+        const indTxt=approved.map(ind=>{
+          const q=((ind._def&&ind._def.q)||(ind._def&&ind._def.paramLabel)||"").substring(0,100);
+          const v=ind.verse?` (פסוק ${ind.verse})`:"";
+          const n=ind.note?` — ${ind.note.substring(0,120)}`:"";
+          return `   • ${q}${v}${n}`;
+        }).join("\n");
+        return `=== המושג: ${cname} ===
+הגדרה צרה: ${narrowDef||"(אין הגדרה)"}
+אינדיקטורים מאושרים (${approved.length}):
+${indTxt||"(אין אינדיקטורים מאושרים)"}`;
+      }).join("\n\n");
+
+      const prompt=`את עוזרת מחקר לסטודנטית דוקטורט שעובדת על עיצוב ${charName} בדברי הימים לעומת ספרי שמואל-מלכים, ביחידה הספרותית "${unit.name}" (${(unit.chapter||"").replace(/_/g," ")}).
+
+לפניך מרכז הכובד הספרותי של היחידה והמושגים הנוכחים בה (עם הגדרות צרות ואינדיקטורים מאושרים).
+
+מרכז כובד ספרותי של היחידה:
+${lf||"(טרם מולא)"}
+
+${conceptBlocks}
+
+תפקידך: להציע 3 שאלות פרשניות אפשריות לפתיחת הפסקה על יחידה זו. השאלות צריכות לעמוד בדרישות הבאות:
+
+1. **פתיחה בפשט הסיפור** (כפי שביקש המנחה ד"ר עמר): השאלה צריכה להיפתח בלשון טקסטואלית קונקרטית מהיחידה (מילה, ביטוי, שם, הבדל ממקבילה), לא בהגדרת מושג מופשטת.
+
+2. **עיגון במרכז הכובד**: השאלה צריכה להתכתב עם מרכז הכובד הספרותי שהמשתמשת זיהתה (לא לסטות ממנו).
+
+3. **רלוונטיות למושגים הנבחרים**: השאלה צריכה להוביל טבעית לדיון במושגים שנבחרו, בלי לפרטם במפורש בשאלה.
+
+4. **אין שמות חוקרים בשאלה** (לפי בקשת ד"ר עמר).
+
+5. **אין קווים מפרידים (—) בשאלה**. השתמשי בפסיקים או במילות קישור.
+
+השב בפורמט JSON בלבד, ללא טקסט מסביב:
+{"questions":["שאלה 1","שאלה 2","שאלה 3"]}
+
+החזר JSON תקין בלבד.`;
+
+      setV2QsMsg("שולח ל-AI...");
+      const res=await fetch(AI_URL,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-6",
+          max_tokens:1200,
+          messages:[{role:"user",content:prompt}]
+        })
+      });
+      if(!res.ok){ setV2QsMsg("⚠ שגיאה מה-API"); setV2GenQs(false); return; }
+      const data=await res.json();
+      const text=((data?.content||[]).map(b=>b.text||"").join("")||"").trim();
+      let parsed=null;
+      try{
+        const m=text.match(/\{[\s\S]*\}/);
+        parsed=m?JSON.parse(m[0]):JSON.parse(text);
+      }catch(e){
+        const lines=text.split(/\n+/).map(l=>l.replace(/^[\d.\-•*)\s]+/,"").trim()).filter(l=>l.length>20);
+        parsed={questions:lines.slice(0,5)};
+      }
+      const qs=Array.isArray(parsed&&parsed.questions)?parsed.questions.filter(q=>typeof q==="string"&&q.trim()):[];
+      if(qs.length===0){ setV2QsMsg("⚠ לא הצלחתי לפרסר תשובה. נסי שוב."); setV2GenQs(false); return; }
+      setV2ProposedQs(qs);
+      setV2QsMsg(`✓ הוצעו ${qs.length} שאלות. בחרי אחת או ערכי בעצמך.`);
+      setTimeout(()=>v2Save({proposedQs:qs}),0);
+      setV2GenQs(false);
+    }catch(e){
+      setV2QsMsg("⚠ "+e.message);
+      setV2GenQs(false);
+    }
+  }
+
+  // 🆕🆕 v2 — AI מפיק שלד לפסקה (נקודות, לא פרוזה). לפי ההחלטה: רק שלד, לא ניסוח
+  async function v2GenerateScaffold(){
+    if(!v2UnitId||!v2Question.trim()||v2Concepts.length===0){
+      setV2ScaffoldMsg("⚠ בחרי מושגים ושאלה פרשנית קודם");
+      return;
+    }
+    const unit=(allUnits||[]).find(x=>x.id===v2UnitId);
+    if(!unit) return;
+    setV2GenScaffold(true);
+    setV2ScaffoldMsg("בונה שלד לפסקה...");
+    try{
+      const charName=character==="david"?"דוד":"שלמה";
+      const us=getUnitSummary?getUnitSummary(v2UnitId):null;
+      const lf=(us&&us.literaryFocus)||"";
+      const conceptBlocks=v2Concepts.map(cname=>{
+        const narrowDef=getNarrowDef?getNarrowDef(cname):"";
+        const narrowList=getNarrowApprovedIndicators(unit,cname);
+        const approvedIdxs=v2ApprovedInd[cname]||[];
+        const approved=narrowList.filter(ind=>approvedIdxs.includes(ind._idx));
+        const indTxt=approved.map(ind=>{
+          const q=((ind._def&&ind._def.q)||(ind._def&&ind._def.paramLabel)||"").substring(0,100);
+          const v=ind.verse?` (פסוק ${ind.verse})`:"";
+          return `   • ${q}${v}`;
+        }).join("\n");
+        const cn=getCompareNote?getCompareNote(v2UnitId,cname):"";
+        return `המושג: ${cname}
+הגדרה צרה: ${narrowDef||"(אין)"}
+אינדיקטורים מאושרים:
+${indTxt||"(אין)"}${cn?`\nהערת השוואה: ${cn.substring(0,200)}`:""}`;
+      }).join("\n\n");
+
+      const prompt=`את עוזרת מחקר לסטודנטית דוקטורט. לפניך יחידה ספרותית מדברי הימים של ${charName}, מרכז הכובד שלה, המושגים שהמשתמשת זיהתה, ושאלה פרשנית שהיא בחרה לפתיחת הפסקה.
+
+היחידה: ${unit.name} (${(unit.chapter||"").replace(/_/g," ")})
+מרכז כובד ספרותי: ${lf||"(טרם מולא)"}
+השאלה הפרשנית הנבחרת: ${v2Question}
+
+${conceptBlocks}
+
+תפקידך: לבנות שלד (scaffolding) לפסקה שתענה על השאלה. **חשוב מאוד: שלד בלבד, לא פרוזה.** את לא מנסחת משפטים שהמשתמשת תעתיק. את מציבה לה נקודות של מה לכלול, באיזה סדר, בלשון רשימה ולא בלשון טקסט.
+
+המטרה: לתת לסטודנטית מפת-דרכים ברורה לפסקה, בלי להחליף אותה בכתיבה. היא תכתוב בעצמה את המילים, הפסקה שלה תהיה קולה. השלד הוא רק ההיגיון הפנימי של הפסקה.
+
+פורמט השלד:
+
+1. פתיחה: [מה להציב כפתיחה, דוגמה: "הצבת ההבדל הטקסטואלי המרכזי מול המקבילה — X הוחלף ב-Y"]
+2. [המשך הניתוח הטקסטואלי המרכזי]
+3. [פיתוח המושג הראשון — על בסיס אילו אינדיקטורים ופסוקים]
+4. [פיתוח המושג הבא]
+...
+N. משפט סוגר: [טענה אחת מצטברת]
+N+1. ציון ממדי: [אילו ממדים נבואיים היחידה תורמת אליהם, בכיוון]
+
+הנחיות נוספות:
+- אין להזכיר שמות חוקרים בשלד (הם ייכנסו להערות שוליים שהמשתמשת תוסיף).
+- כל שלב בשלד הוא נקודה קצרה, לא משפט מלא.
+- בסוף, להוסיף הערה למשתמשת: "פסקה זו צריכה להסתיים בציון ממדי של משפט או שניים: תרומת היחידה למודל הנבואי".
+
+החזר את השלד בפורמט טקסט רגיל (לא JSON), בעברית, בלי כותרת וללא הסברים מסביב.`;
+
+      setV2ScaffoldMsg("שולח ל-AI...");
+      const res=await fetch(AI_URL,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-6",
+          max_tokens:1500,
+          messages:[{role:"user",content:prompt}]
+        })
+      });
+      if(!res.ok){ setV2ScaffoldMsg("⚠ שגיאה מה-API"); setV2GenScaffold(false); return; }
+      const data=await res.json();
+      const text=((data?.content||[]).map(b=>b.text||"").join("")||"").trim();
+      if(!text){ setV2ScaffoldMsg("⚠ תשובה ריקה"); setV2GenScaffold(false); return; }
+      setV2Scaffold(text);
+      setV2ScaffoldMsg("✓ שלד מוכן. הוא רק מפת-דרכים — כתבי את הפסקה במילים שלך למטה.");
+      setTimeout(()=>v2Save({scaffold:text}),0);
+      setV2GenScaffold(false);
+    }catch(e){
+      setV2ScaffoldMsg("⚠ "+e.message);
+      setV2GenScaffold(false);
+    }
+  }
+
+  // 🆕🆕 v2 — הורדת דיווח מפורט ליחידה בודדת כ-Word
+  function v2DownloadUnitReport(){
+    if(!v2UnitId) return;
+    const unit=(allUnits||[]).find(x=>x.id===v2UnitId);
+    if(!unit) return;
+    const charName=character==="david"?"דוד":"שלמה";
+    const hebDate=new Date().toLocaleDateString("he-IL");
+    const us=getUnitSummary?getUnitSummary(v2UnitId):null;
+    const lf=(us&&us.literaryFocus)||"<em style='color:#999;'>— טרם מולא —</em>";
+
+    let conceptsHtml="";
+    v2Concepts.forEach(cname=>{
+      const narrowDef=getNarrowDef?getNarrowDef(cname):"";
+      const narrowList=getNarrowApprovedIndicators(unit,cname);
+      const approvedIdxs=v2ApprovedInd[cname]||[];
+      const approved=narrowList.filter(ind=>approvedIdxs.includes(ind._idx));
+      const compareNote=getCompareNote?getCompareNote(v2UnitId,cname):"";
+      const indHtml=approved.map(ind=>{
+        const q=((ind._def&&ind._def.q)||(ind._def&&ind._def.paramLabel)||"").replace(/</g,'&lt;');
+        const vP=ind.verse?`<strong style='color:#1e40af;'>פסוק ${ind.verse.replace(/</g,'&lt;')}:</strong> `:"";
+        const note=ind.note?` <em>${ind.note.replace(/</g,'&lt;')}</em>`:"";
+        return `<li style='margin-bottom:5px;'><strong>אינדיקטור #${ind._idx+1}:</strong> ${q}<br/>${vP}${note}</li>`;
+      }).join("");
+      conceptsHtml+=`<div class='concept'>
+        <h3>▶ ${cname.replace(/</g,'&lt;')}</h3>
+        <div class='ndef'><strong>הגדרה צרה (מפרק ב׳):</strong><br/>${(narrowDef||"<em>אין הגדרה</em>").replace(/</g,'&lt;')}</div>
+        ${indHtml?`<div><strong>אינדיקטורים מאושרים (${approved.length} מתוך ${narrowList.length}):</strong><ul style='margin:6px 0;padding-right:20px;'>${indHtml}</ul></div>`:`<div style='color:#999;font-style:italic;'>לא אושרו אינדיקטורים למושג זה.</div>`}
+        ${compareNote?`<div class='cmp'><strong>📜 פרשנות והשוואה לשמ"ב/מל"כ:</strong><br/>${compareNote.replace(/</g,'&lt;').replace(/\n/g,"<br/>")}</div>`:""}
+      </div>`;
+    });
+
+    const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'/><title>דיווח יחידה: ${unit.name}</title>
+<style>
+body{font-family:'David','Times New Roman',serif;direction:rtl;text-align:right;font-size:12pt;line-height:1.6;color:#1a202c;}
+h1{font-size:18pt;color:#1a365d;border-bottom:3px solid #2c5282;padding-bottom:6px;}
+h2{font-size:14pt;color:white;background:#2c5282;padding:8px 12px;border-radius:4px;margin-top:22px;}
+h3{font-size:12pt;color:#2c5282;margin-top:16px;margin-bottom:6px;border-right:4px solid #2c5282;padding-right:8px;}
+.meta{background:#f1f5f9;padding:10px;border:1px solid #cbd5e1;margin-bottom:14px;font-size:10pt;}
+.lf{background:#faf5ff;padding:10px 12px;border-right:4px solid #a78bfa;margin:10px 0;font-size:11pt;}
+.cmp{background:#f0fdf4;padding:10px 12px;border-right:4px solid #059669;margin:8px 0;font-size:10pt;}
+.ndef{background:#f8fafc;padding:8px 10px;border:1px dashed #cbd5e1;margin:8px 0;font-size:10pt;color:#555;}
+.concept{background:#fefce8;padding:10px 14px;border:1px solid #fde68a;margin:10px 0;border-radius:4px;}
+.question{background:#eef2ff;padding:12px 14px;border:2px solid #6366f1;margin:12px 0;border-radius:6px;font-size:11.5pt;}
+.paragraph{background:#ecfeff;padding:14px 16px;border:2px solid #06b6d4;margin:12px 0;border-radius:6px;font-size:12pt;line-height:1.8;}
+.scaffold{background:#fff7ed;padding:10px 12px;border-right:4px solid #f59e0b;margin:8px 0;font-size:10pt;color:#78350f;white-space:pre-wrap;}
+</style></head>
+<body>
+<h1>דיווח יחידה: ${unit.name.replace(/</g,'&lt;')}</h1>
+<div class='meta'>
+<strong>הדמות:</strong> ${charName} ·
+<strong>הפרק:</strong> ${(unit.chapter||"").replace(/_/g," ")} ·
+${unit.sourceRef?`<strong>המקבילה:</strong> ${unit.sourceRef.replace(/</g,'&lt;')} ·`:""}
+<strong>הופק:</strong> ${hebDate}
+</div>
+
+<h2>📖 טקסט היחידה (דה"י) ${unit.sourceRef?`והמקבילה (${unit.sourceRef.replace(/</g,'&lt;')})`:""}</h2>
+${unit.chroniclesText?`<div style='background:#fefce8;padding:10px;border:1px solid #fde68a;'>${unit.chroniclesText.replace(/</g,'&lt;').replace(/\n/g,"<br/>")}</div>`:""}
+${unit.sourceText?`<div style='background:#f0fdf4;padding:10px;border:1px solid #bbf7d0;margin-top:10px;'><strong>מקבילה:</strong><br/>${unit.sourceText.replace(/</g,'&lt;').replace(/\n/g,"<br/>")}</div>`:""}
+
+<h2>📍 מרכז הכובד הספרותי</h2>
+<div class='lf'>${lf.replace(/</g,'&lt;').replace(/\n/g,"<br/>")}</div>
+
+<h2>🏷 מושגים נוכחים ביחידה (${v2Concepts.length}) — הגדרה צרה, אינדיקטורים מאושרים, פרשנות</h2>
+${v2Concepts.length>0?conceptsHtml:"<div style='color:#b91c1c;font-style:italic;'>לא נבחרו מושגים.</div>"}
+
+<h2>🎯 השאלה הפרשנית</h2>
+<div class='question'>${v2Question?v2Question.replace(/</g,'&lt;').replace(/\n/g,"<br/>"):"<em style='color:#999;'>— טרם ניסחת שאלה פרשנית —</em>"}</div>
+
+${v2Scaffold?`<h2>🔧 שלד הפסקה (חומר-גלם, לא פרוזה לעתק)</h2>
+<div class='scaffold'>${v2Scaffold.replace(/</g,'&lt;')}</div>`:""}
+
+<h2>📝 הפסקה (כתיבתך)</h2>
+<div class='paragraph'>${v2Paragraph?v2Paragraph.replace(/</g,'&lt;').replace(/\n\n/g,"</p><p>").replace(/\n/g,"<br/>"):"<em style='color:#999;'>— טרם כתבת את הפסקה —</em>"}</div>
+</body></html>`;
+
+    const blob=new Blob(['﻿'+html],{type:"application/msword"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`דיווח_${charName}_${unit.name.replace(/[/\\?%*:|"<>]/g,"_")}_${hebDate.replace(/\//g,"_")}.doc`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
 
   // 🆕 שלב 4 — AI מציע 3+ שאלות פרשניות על בסיס כל המידע שמולא בכל יחידה (שלבים 1-3)
@@ -6918,18 +7258,286 @@ ${detailedHtml}
   return(
     <div style={{maxWidth:"1400px",margin:"0 auto",padding:"20px 16px"}} dir="rtl">
       {/* כותרת ובחירת דמות */}
-      <div style={{marginBottom:"18px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"1px solid #818cf844"}}>
-        <div style={{fontSize:"18px",fontWeight:"bold",color:"#f1f5f9",marginBottom:"4px"}}>🎯 שלב ד׳ — כתיבת הפרקים לפי מעגלים</div>
-        <div style={{fontSize:"12px",color:"#94a3b8",marginBottom:"10px"}}>ריכוז הממצאים המאושרים משלב ג׳ עבור כל מעגל + סיכום מחקרי של המעגל</div>
-        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+      <div style={{marginBottom:"14px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"1px solid #818cf844"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"10px",marginBottom:"6px"}}>
+          <div>
+            <div style={{fontSize:"18px",fontWeight:"bold",color:"#f1f5f9"}}>🎯 שלב ד׳ — כתיבת הפרקים לפי מעגלים ויחידות</div>
+            <div style={{fontSize:"12px",color:"#94a3b8"}}>{useV2Mode?"מצב חדש: מעגל → יחידה אחת → מושגים → אינדיקטורים → שאלה פרשנית → פסקה":"מצב ישן: עבודה לפי מעגל × ממד"}</div>
+          </div>
+          <div style={{display:"flex",gap:"6px"}}>
+            <button onClick={()=>setUseV2Mode(true)}
+              style={{padding:"6px 12px",borderRadius:"5px",border:useV2Mode?"2px solid #34d399":"1px solid #334155",cursor:"pointer",background:useV2Mode?"#06402844":"#0f172a",color:useV2Mode?"#86efac":"#94a3b8",fontSize:"11px",fontWeight:"700"}}>
+              ✨ חדש
+            </button>
+            <button onClick={()=>setUseV2Mode(false)}
+              style={{padding:"6px 12px",borderRadius:"5px",border:!useV2Mode?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:!useV2Mode?"#818cf822":"#0f172a",color:!useV2Mode?"#c7d2fe":"#94a3b8",fontSize:"11px",fontWeight:"700"}}>
+              🗂 ישן
+            </button>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginTop:"10px"}}>
           {[["david","👑 דוד",DAVID_CYCLES.length],["solomon","👑 שלמה",SOLOMON_CYCLES.length]].map(([id,lbl,cnt])=>(
-            <button key={id} onClick={()=>{setCharacter(id);setSelectedCycle(null);}}
+            <button key={id} onClick={()=>{setCharacter(id);setSelectedCycle(null);setV2UnitId(null);}}
               style={{padding:"8px 14px",borderRadius:"8px",border:character===id?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:character===id?"#818cf822":"#0f172a",color:character===id?"#c7d2fe":"#cbd5e1",fontSize:"13px",fontWeight:"700"}}>
               {lbl} <span style={{fontSize:"10px",color:"#64748b",marginRight:"6px"}}>({cnt} מעגלים)</span>
             </button>
           ))}
         </div>
       </div>
+
+      {/* ═══════════════════════════════════════════════════════
+          מצב v2 — עבודה לפי מעגל → יחידה בודדת
+          ═══════════════════════════════════════════════════════ */}
+      {useV2Mode&&(
+        <>
+          {/* בחירת מעגל */}
+          <div style={{marginBottom:"14px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"1px solid #334155"}}>
+            <div style={{fontSize:"13px",color:"#94a3b8",fontWeight:"700",marginBottom:"10px"}}>בחרי מעגל</div>
+            <div style={{display:"flex",flexDirection:"column",gap:"6px"}}>
+              {cycles.map(c=>{
+                const sel=selectedCycle&&selectedCycle.num===c.num;
+                return(
+                  <button key={c.num} onClick={()=>{setSelectedCycle(c);setV2UnitId(null);}}
+                    style={{padding:"10px 14px",borderRadius:"7px",border:sel?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:sel?"#818cf822":"#0f172a",color:sel?"#c7d2fe":"#cbd5e1",fontSize:"13px",fontWeight:"600",textAlign:"right",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span>{sel?"● ":""}<strong>מעגל {c.num}:</strong> {c.title}</span>
+                    <span style={{fontSize:"10px",color:"#64748b"}}>{c.units.length} יחידות</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* בחירת יחידה בודדת */}
+          {selectedCycle&&(
+            <div style={{marginBottom:"14px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"2px solid #06b6d444"}}>
+              <div style={{fontSize:"13px",color:"#67e8f9",fontWeight:"700",marginBottom:"10px"}}>בחרי יחידה ספרותית אחת מהמעגל</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(280px, 1fr))",gap:"6px"}}>
+                {(selectedCycle.units||[]).map(uname=>{
+                  const u=findUnitByName(uname);
+                  if(!u) return <div key={uname} style={{padding:"8px",fontSize:"11px",color:"#f87171",fontStyle:"italic",background:"#0f172a",borderRadius:"4px"}}>⚠ {uname} — לא נמצאה</div>;
+                  const sel=v2UnitId===u.id;
+                  return(
+                    <button key={u.id} onClick={()=>setV2UnitId(u.id)}
+                      style={{padding:"8px 12px",borderRadius:"6px",border:sel?"2px solid #06b6d4":"1px solid #334155",cursor:"pointer",background:sel?"#06b6d422":"#0f172a",color:sel?"#67e8f9":"#e2e8f0",fontSize:"12px",fontWeight:sel?"700":"500",textAlign:"right"}}>
+                      {sel?"● ":""}{u.name}
+                      <div style={{fontSize:"10px",color:"#64748b",fontWeight:"400",marginTop:"2px"}}>{(u.chapter||"").replace(/_/g," ")}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* עבודה על היחידה הנבחרת */}
+          {v2UnitId&&(()=>{
+            const u=(allUnits||[]).find(x=>x.id===v2UnitId);
+            if(!u) return <div>⚠ היחידה לא נמצאה</div>;
+            const us=getUnitSummary?getUnitSummary(u.id):null;
+            const lfText=(us&&us.literaryFocus)||"";
+            const lfMessage=genLFMsg[u.id]||"";
+            return(
+              <>
+                {/* כותרת היחידה + מידע */}
+                <div style={{marginBottom:"14px",padding:"14px 18px",background:"#0b1e3c",borderRadius:"10px",border:"2px solid #67e8f966"}}>
+                  <div style={{fontSize:"16px",color:"#67e8f9",fontWeight:"700",marginBottom:"4px"}}>📍 {u.name}</div>
+                  <div style={{fontSize:"11px",color:"#94a3b8"}}>
+                    <strong>פסוקים:</strong> {(u.chapter||"").replace(/_/g," ")}
+                    {u.sourceRef&&<span> · <strong>מקבילה:</strong> {u.sourceRef}</span>}
+                  </div>
+                </div>
+
+                {/* מרכז כובד ספרותי */}
+                <div style={{marginBottom:"14px",padding:"12px 14px",background:"#1e293b",borderRadius:"8px",border:"2px solid #a78bfa66"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px",flexWrap:"wrap",gap:"6px"}}>
+                    <div style={{fontSize:"13px",color:"#c4b5fd",fontWeight:"700"}}>📚 מרכז כובד ספרותי</div>
+                    <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+                      {lfMessage&&<span style={{fontSize:"10px",color:lfMessage.startsWith("⚠")?"#f87171":"#34d399"}}>{lfMessage}</span>}
+                      <button onClick={()=>generateLiteraryFocusForUnit(u)} disabled={generatingLFForUnit===u.id}
+                        style={{padding:"4px 10px",borderRadius:"4px",border:"none",cursor:generatingLFForUnit===u.id?"wait":"pointer",background:generatingLFForUnit===u.id?"#475569":"#8b5cf6",color:"white",fontSize:"11px",fontWeight:"700"}}>
+                        {generatingLFForUnit===u.id?"⏳":"🤖 הפק"}
+                      </button>
+                    </div>
+                  </div>
+                  <textarea value={lfText} onChange={e=>saveLiteraryFocusForUnit(u,e.target.value)}
+                    placeholder={`על מה הסיפור בעיקרו לפי הקונצנזוס המחקרי. למשל: 'הכרוניסט עיצב את X כהתגשמות של Y באמצעות החלפת Z ב-W'.`}
+                    style={{width:"100%",minHeight:"80px",padding:"8px 10px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+                </div>
+
+                {/* בחירת מושגים נוכחים ביחידה (בלי מוביל/משני) */}
+                <div style={{marginBottom:"14px",padding:"12px 14px",background:"#1e293b",borderRadius:"8px",border:"2px solid #fbbf2466"}}>
+                  <div style={{fontSize:"13px",color:"#fcd34d",fontWeight:"700",marginBottom:"3px"}}>🏷 בחרי את המושגים הנוכחים ביחידה</div>
+                  <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px",fontStyle:"italic"}}>סמני כל מושג שהטקסט מראה בו עדות. אין יותר הבחנה של מוביל ומשני. ({v2Concepts.length} נבחרו)</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:"5px"}}>
+                    {conceptNameList.map(cname=>{
+                      const sel=v2Concepts.includes(cname);
+                      return(
+                        <button key={cname} onClick={()=>v2ToggleConcept(cname)}
+                          style={{padding:"5px 12px",borderRadius:"5px",border:sel?"2px solid #fbbf24":"1px solid #334155",cursor:"pointer",background:sel?"#78350f44":"#0f172a",color:sel?"#fde68a":"#cbd5e1",fontSize:"12px",fontWeight:sel?"700":"500"}}>
+                          {sel?"✓ ":""}{cname}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* אישור קריטריונים לכל מושג נבחר */}
+                {v2Concepts.length>0&&(
+                  <div style={{marginBottom:"14px",padding:"12px 14px",background:"#1e293b",borderRadius:"8px",border:"2px solid #60a5fa66"}}>
+                    <div style={{fontSize:"13px",color:"#93c5fd",fontWeight:"700",marginBottom:"3px"}}>✅ סמני את הקריטריונים שעליהם תתבסס התזה</div>
+                    <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px",fontStyle:"italic"}}>לכל מושג נבחר מוצגים האינדיקטורים שעברו את ההגדרה הצרה בשלב ג'. סמני רק את אלה שאת רוצה להציב בטיעון שלך.</div>
+                    {v2Concepts.map(cname=>{
+                      const narrowList=getNarrowApprovedIndicators(u,cname);
+                      const approvedForConcept=v2ApprovedInd[cname]||[];
+                      const narrowDef=getNarrowDef?getNarrowDef(cname):"";
+                      return(
+                        <div key={cname} style={{marginBottom:"12px",padding:"10px 12px",background:"#0f172a",borderRadius:"6px",border:"1px solid #334155"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px",flexWrap:"wrap",gap:"6px"}}>
+                            <div style={{fontSize:"12px",color:"#fde68a",fontWeight:"700"}}>
+                              {cname}
+                              <span style={{fontSize:"10px",color:"#64748b",fontWeight:"400",marginRight:"6px"}}>
+                                — {approvedForConcept.length}/{narrowList.length} מאושרים
+                              </span>
+                            </div>
+                            {narrowList.length>0&&(
+                              <div style={{display:"flex",gap:"4px"}}>
+                                <button onClick={()=>v2SetAllIndicators(cname,u,true)}
+                                  style={{padding:"2px 8px",borderRadius:"3px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"10px"}}>אשרי הכל</button>
+                                <button onClick={()=>v2SetAllIndicators(cname,u,false)}
+                                  style={{padding:"2px 8px",borderRadius:"3px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#cbd5e1",fontSize:"10px"}}>נקי</button>
+                              </div>
+                            )}
+                          </div>
+                          {narrowDef&&(
+                            <div style={{fontSize:"10px",color:"#cbd5e1",marginBottom:"8px",padding:"6px 8px",background:"#1e293b",borderRadius:"4px",lineHeight:"1.6"}}>
+                              <span style={{color:"#60a5fa",fontWeight:"700"}}>הגדרה צרה: </span>{narrowDef.length>240?narrowDef.substring(0,240)+"…":narrowDef}
+                            </div>
+                          )}
+                          {narrowList.length===0?(
+                            <div style={{fontSize:"10px",color:"#f87171",fontStyle:"italic"}}>⚠ אין אינדיקטורים שעברו את ההגדרה הצרה למושג זה ביחידה זו.</div>
+                          ):(
+                            <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
+                              {narrowList.map(ind=>{
+                                const isApproved=approvedForConcept.includes(ind._idx);
+                                const q=((ind._def&&ind._def.q)||(ind._def&&ind._def.paramLabel)||"").substring(0,140);
+                                const verseText=ind.verse?`פסוק ${ind.verse}: `:"";
+                                const noteText=ind.note?ind.note.substring(0,200):"";
+                                return(
+                                  <label key={ind._idx} style={{display:"flex",alignItems:"flex-start",gap:"6px",padding:"6px 8px",background:isApproved?"#06402822":"#1e293b",border:isApproved?"1px solid #34d399":"1px solid #334155",borderRadius:"4px",cursor:"pointer"}}>
+                                    <input type="checkbox" checked={isApproved} onChange={()=>v2ToggleIndicator(cname,ind._idx)} style={{marginTop:"3px",cursor:"pointer"}}/>
+                                    <div style={{flex:1,fontSize:"10px",color:"#cbd5e1",lineHeight:"1.6"}}>
+                                      <div><strong style={{color:"#f1f5f9"}}>#{ind._idx+1}</strong>: <span style={{color:"#94a3b8"}}>{q}</span></div>
+                                      {(verseText||noteText)&&(
+                                        <div style={{fontSize:"10px",color:"#94a3b8",paddingRight:"10px",lineHeight:"1.5"}}>
+                                          {verseText&&<span style={{color:"#60a5fa",fontWeight:"600"}}>{verseText}</span>}
+                                          {noteText}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* שאלה פרשנית — AI מציע 3 */}
+                {v2Concepts.length>0&&(
+                  <div style={{marginBottom:"14px",padding:"12px 14px",background:"#1e293b",borderRadius:"8px",border:"2px solid #a78bfa66"}}>
+                    <div style={{fontSize:"13px",color:"#c4b5fd",fontWeight:"700",marginBottom:"3px"}}>🎯 שאלה פרשנית ליחידה</div>
+                    <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px",fontStyle:"italic"}}>לפי הנחיית ד"ר עמר: פתיחה בשאלה פרשנית מהטקסט (פשט הסיפור), לא בהגדרת מושג.</div>
+                    <div style={{marginBottom:"10px",display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
+                      <button onClick={v2GenerateQuestions} disabled={v2GenQs}
+                        style={{padding:"8px 16px",borderRadius:"5px",border:"none",cursor:v2GenQs?"wait":"pointer",background:v2GenQs?"#475569":"#8b5cf6",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                        {v2GenQs?"⏳ מייצר שאלות...":"🤖 הצע לי 3 שאלות פרשניות"}
+                      </button>
+                      {v2QsMsg&&<span style={{fontSize:"11px",color:v2QsMsg.startsWith("⚠")?"#f87171":"#86efac"}}>{v2QsMsg}</span>}
+                    </div>
+                    {v2ProposedQs.length>0&&(
+                      <div style={{marginBottom:"10px",padding:"10px 12px",background:"#0f172a",borderRadius:"5px",border:"1px dashed #a78bfa66"}}>
+                        <div style={{fontSize:"10px",color:"#c4b5fd",fontWeight:"700",marginBottom:"6px"}}>🔖 ההצעות — לחצי על אחת להעתיק לשדה למטה:</div>
+                        <div style={{display:"flex",flexDirection:"column",gap:"5px"}}>
+                          {v2ProposedQs.map((q,i)=>(
+                            <button key={i} onClick={()=>{setV2Question(q);setTimeout(()=>v2Save({question:q},{showMsg:true}),0);}}
+                              style={{textAlign:"right",padding:"8px 10px",borderRadius:"4px",border:"1px solid #334155",cursor:"pointer",background:"#1e293b",color:"#e2e8f0",fontSize:"11px",lineHeight:"1.6",direction:"rtl"}}>
+                              <strong style={{color:"#c4b5fd"}}>{i+1}.</strong> {q}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <div style={{fontSize:"10px",color:"#a78bfa",fontWeight:"700",marginBottom:"3px"}}>השאלה שבחרת (או שאת מנסחת):</div>
+                      <textarea value={v2Question} onChange={e=>setV2Question(e.target.value)} onBlur={()=>v2Save({question:v2Question},{showMsg:true})}
+                        placeholder="נסחי שאלה פרשנית הנפתחת בלשון טקסטואלית קונקרטית מהיחידה."
+                        style={{width:"100%",minHeight:"70px",padding:"9px 11px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"12px",lineHeight:"1.7",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+                    </div>
+                  </div>
+                )}
+
+                {/* שלד לפסקה + פסקה */}
+                {v2Question&&v2Question.trim()&&(
+                  <div style={{marginBottom:"14px",padding:"12px 14px",background:"#1e293b",borderRadius:"8px",border:"2px solid #06b6d466"}}>
+                    <div style={{fontSize:"13px",color:"#67e8f9",fontWeight:"700",marginBottom:"3px"}}>📝 פסקת היחידה</div>
+                    <div style={{fontSize:"10px",color:"#94a3b8",lineHeight:"1.6",marginBottom:"10px",fontStyle:"italic"}}>
+                      ניתן לבקש מה-AI שלד (רשימת נקודות של מה לכלול בפסקה, לפי המבנה שסיכמנו). <strong style={{color:"#fbbf24"}}>השלד הוא רק מפת-דרכים, לא פרוזה להעתקה.</strong> כתבי את הפסקה במילים שלך, לפי הסגנון שלך.
+                    </div>
+                    <div style={{marginBottom:"10px",display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap"}}>
+                      <button onClick={v2GenerateScaffold} disabled={v2GenScaffold}
+                        style={{padding:"8px 16px",borderRadius:"5px",border:"none",cursor:v2GenScaffold?"wait":"pointer",background:v2GenScaffold?"#475569":"#f59e0b",color:"white",fontSize:"12px",fontWeight:"700"}}>
+                        {v2GenScaffold?"⏳ בונה שלד...":"🔧 הפק שלד לפסקה"}
+                      </button>
+                      {v2ScaffoldMsg&&<span style={{fontSize:"11px",color:v2ScaffoldMsg.startsWith("⚠")?"#f87171":"#86efac"}}>{v2ScaffoldMsg}</span>}
+                    </div>
+                    {v2Scaffold&&(
+                      <div style={{marginBottom:"12px",padding:"10px 12px",background:"#78350f22",borderRadius:"5px",border:"1px dashed #f59e0b66"}}>
+                        <div style={{fontSize:"10px",color:"#fbbf24",fontWeight:"700",marginBottom:"6px"}}>🔧 שלד הפסקה (חומר-גלם, לא לעתק):</div>
+                        <div style={{fontSize:"11px",color:"#fde68a",lineHeight:"1.7",whiteSpace:"pre-wrap",fontFamily:"inherit"}}>{v2Scaffold}</div>
+                        <button onClick={()=>{setV2Scaffold("");setTimeout(()=>v2Save({scaffold:""}),0);}}
+                          style={{marginTop:"8px",padding:"3px 10px",borderRadius:"4px",border:"1px solid #475569",cursor:"pointer",background:"transparent",color:"#94a3b8",fontSize:"10px"}}>
+                          נקי שלד
+                        </button>
+                      </div>
+                    )}
+                    <div>
+                      <div style={{fontSize:"10px",color:"#67e8f9",fontWeight:"700",marginBottom:"3px"}}>הפסקה שאת כותבת (במילים שלך):</div>
+                      <textarea value={v2Paragraph} onChange={e=>setV2Paragraph(e.target.value)} onBlur={()=>v2Save({paragraph:v2Paragraph},{showMsg:true})}
+                        placeholder="כאן את כותבת את הפסקה בסגנונך האישי, לפי מרכז הכובד, המושגים הנבחרים, האינדיקטורים המאושרים והשאלה שבחרת."
+                        style={{width:"100%",minHeight:"200px",padding:"10px 12px",background:"#0f172a",border:"1px solid #334155",borderRadius:"5px",color:"#e2e8f0",fontSize:"13px",lineHeight:"1.8",fontFamily:"inherit",direction:"rtl",resize:"vertical"}}/>
+                    </div>
+                  </div>
+                )}
+
+                {/* כפתורי פעולה */}
+                <div style={{display:"flex",gap:"10px",justifyContent:"flex-end",flexWrap:"wrap",marginBottom:"20px"}}>
+                  <button onClick={v2DownloadUnitReport}
+                    style={{padding:"10px 20px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#06b6d4",color:"white",fontSize:"13px",fontWeight:"700"}}
+                    title="דיווח מפורט של היחידה כקובץ Word: שם היחידה, פסוקים, מרכז כובד, מושגים עם הגדרה צרה ואינדיקטורים, שאלה פרשנית, שלד ופסקה">
+                    📄 הורד דיווח יחידה (Word)
+                  </button>
+                  <button onClick={()=>v2Save({},{showMsg:true})}
+                    style={{padding:"10px 24px",borderRadius:"7px",border:"none",cursor:"pointer",background:"#34d399",color:"white",fontSize:"13px",fontWeight:"700"}}>
+                    💾 שמור הכל
+                  </button>
+                  {saveMsg&&(
+                    <div style={{alignSelf:"center",padding:"8px 14px",borderRadius:"6px",background:"#064e3b",color:"#6ee7b7",fontSize:"12px",fontWeight:"700",border:"1px solid #10b98166"}}>
+                      {saveMsg}
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════
+          מצב ישן — נשמר לתצוגה עם useV2Mode=false
+          ═══════════════════════════════════════════════════════ */}
+      {!useV2Mode&&(<>
 
       {/* בחירת מעגל */}
       <div style={{marginBottom:"18px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"1px solid #334155"}}>
@@ -7668,6 +8276,8 @@ ${detailedHtml}
           </div>
         </>
       )}
+
+      </>)}
     </div>
   );
 }
