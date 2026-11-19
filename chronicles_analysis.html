@@ -5806,7 +5806,7 @@ const DAVID_CYCLES=[
   {num:1, title:"התלכדות ישראל וביסוס מלכות דוד", units:["הכתרת דוד","כיבוש ירושלים","ואלה ראשי הגיבורים","שדה השעורים","עמק הרפאים, טו-יט","רשימת הגיבורים, כה-מז","הבאים אל ציקלג","אנשי המלחמה עם דוד","חירם מלך צור"]},
   {num:2, title:"העלאת הארון וכינון עבודת ה׳ בירושלים", units:["העלאת ארון ה' - ניסיון ראשון","המשך העלאת ארון ה', ו-יד","העברת ארון ה' לירושלים","ארון ה' מגיע לעיר דוד","ארון ה' בעיר דוד, א-ג","הפולחן והשירות בקודש","ארגון הפולחן ע\"י דוד"]},
   {num:3, title:"הבטחת הבית לדוד ותגובתו", units:["דוד מבקש לבנות בית לה'","הבטחת ה' לדוד","דבריו של דוד לה'","דוד מברך את ה'"]},
-  {num:4, title:"מלחמות דוד וסדרי שלטונו", units:["הפלשתים בעמק הרפאים","מלחמות דוד, א-יב","הפקידים בבית דוד, יג-יז","דוד ובני עמון","המלחמה בבני עמון","המלחמה בארם","המלחמה בבני עמון"]},
+  {num:4, title:"מלחמות דוד וסדרי שלטונו", units:["הפלשתים בעמק הרפאים","מלחמות דוד, א-יב","הפקידים בבית דוד, יג-יז","דוד ובני עמון",{name:"המלחמה בבני עמון",chapterHint:"יט",occurrence:1},"המלחמה בארם",{name:"המלחמה בבני עמון",chapterHint:"כ",occurrence:2}]},
   {num:5, title:"המפקד ובחירת מקום המקדש", units:["מפקד דוד, א-ד","המשך המפקד, ח-יד","המשך המפקד, טו-יט","המשך המפקד, כ-כו","סיום המפקד, כז-ל","המפקד שלא הושלם, כג-כד"]},
   {num:6, title:"ההכנות לבניין המקדש וארגון בעלי התפקידים", units:["תכנון בית המקדש","דוד מברך את שלמה","המשך התכנון","המלכת שלמה, א-ה","חלוקת הלוויים, ו-יא","תפקיד הלוויים","משמרות הכוהנים, א-יט","חלוקת הלוויים","הכנות למקדש, א-כח","הסדריו האזרחיים והצבאיים של דוד, כט-לב"]},
   {num:7, title:"העברת האחריות לשלמה וחתימת מלכות דוד", units:["דברי דוד לעם","המשך דברי דוד","המשך דברי דוד","המשך דברי דוד","מותו של דוד"]},
@@ -5948,16 +5948,34 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
   const dimensionLabel=(DIMS.find(d=>d.id===selectedDimension)?.label)||selectedDimension;
 
   // התאמת שם יחידה מהמעגל ליחידה בנתונים
-  function findUnitByName(targetName){
+  function findUnitByName(target){
     const norm=s=>(s||"").replace(/[\s״'"ʼ.,־–—]/g,"").toLowerCase();
+    // תמיכה הן במחרוזת והן באובייקט דיסאמביגואציה {name, chapterHint?, occurrence?}
+    let targetName, chapterHint=null, occurrence=null;
+    if(typeof target==="string"){ targetName=target; }
+    else if(target&&typeof target==="object"){
+      targetName=target.name||"";
+      chapterHint=target.chapterHint||null;
+      occurrence=target.occurrence||null;
+    } else { return null; }
     const t=norm(targetName);
     const charUnits=(allUnits||[]).filter(u=>(u.character||"david")===character);
     // התאמה מדויקת
-    let u=charUnits.find(x=>norm(x.name)===t);
-    if(u) return u;
-    // התאמה חלקית — אחד מכיל את השני
-    u=charUnits.find(x=>{const n=norm(x.name); return n.includes(t)||t.includes(n);});
-    return u||null;
+    let matches=charUnits.filter(x=>norm(x.name)===t);
+    if(matches.length===0){
+      // התאמה חלקית — אחד מכיל את השני
+      matches=charUnits.filter(x=>{const n=norm(x.name); return n.includes(t)||t.includes(n);});
+    }
+    if(matches.length<=1) return matches[0]||null;
+    // כמה התאמות — מפעילים דיסאמביגואציה
+    if(chapterHint){
+      const h=norm(chapterHint);
+      const byCh=matches.filter(x=>norm(x.chapter||"").includes(h));
+      if(byCh.length===1) return byCh[0];
+      if(byCh.length>0) matches=byCh;
+    }
+    if(occurrence) return matches[Math.min(occurrence-1,matches.length-1)];
+    return matches[0];
   }
 
   // אוסף הממצאים המאושרים (אוטומטיים + גבוליים שקובלו) ליחידה×מושג
@@ -6695,8 +6713,9 @@ ${compareBlock}
     if(!selectedDimension){ alert("בחרי ממד נבואי"); return; }
     setGenerating('decision');
     try{
-      const findings=selectedCycle.units.map(uname=>{
-        const u=findUnitByName(uname);
+      const findings=selectedCycle.units.map(entry=>{
+        const uname=typeof entry==="string"?entry:(entry&&entry.name)||"";
+        const u=findUnitByName(entry);
         if(!u) return {unitName:uname,missing:true};
         return {unitName:uname,unit:u,chapter:(u.chapter||"").replace(/_/g," "),statusList:collectDimensionStatusForUnit(u)};
       });
@@ -6848,8 +6867,9 @@ ${tableText}
   }
 
   // בניית שורות הטבלה למעגל נבחר — ממוקד בממד הנבחר
-  const cycleRows=selectedCycle?selectedCycle.units.map((uname,idx)=>{
-    const u=findUnitByName(uname);
+  const cycleRows=selectedCycle?selectedCycle.units.map((entry,idx)=>{
+    const uname=typeof entry==="string"?entry:(entry&&entry.name)||"";
+    const u=findUnitByName(entry);
     const verses=u?(u.chapter||"").replace(/_/g," "):"";
     const statusList=u?collectDimensionStatusForUnit(u):[];
     return {rowIdx:idx,unitName:uname,unit:u,verses,statusList};
@@ -6967,8 +6987,9 @@ ${proposedConclusion?`<h3>מסקנה מוצעת</h3><div class='compare'>${propo
 
       // טבלת היחידות במעגל — לכל יחידה: מרכז כובד + מושגים שולטים/משניים/נעדרים
       let unitsRows="";
-      (cyc.units||[]).forEach(uname=>{
-        const u=findUnitByName(uname);
+      (cyc.units||[]).forEach(entry=>{
+        const uname=typeof entry==="string"?entry:(entry&&entry.name)||"";
+        const u=findUnitByName(entry);
         if(!u){
           unitsRows+=`<tr><td colspan='5' style='color:#777;font-style:italic;'>${uname.replace(/</g,'&lt;')} — לא נמצאה בנתונים</td></tr>`;
           return;
@@ -7336,14 +7357,17 @@ ${detailedHtml}
             <div style={{marginBottom:"14px",padding:"14px 18px",background:"#1e293b",borderRadius:"10px",border:"2px solid #06b6d444"}}>
               <div style={{fontSize:"13px",color:"#67e8f9",fontWeight:"700",marginBottom:"10px"}}>בחרי יחידה ספרותית אחת מהמעגל</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(280px, 1fr))",gap:"6px"}}>
-                {(selectedCycle.units||[]).map(uname=>{
-                  const u=findUnitByName(uname);
-                  if(!u) return <div key={uname} style={{padding:"8px",fontSize:"11px",color:"#f87171",fontStyle:"italic",background:"#0f172a",borderRadius:"4px"}}>⚠ {uname} — לא נמצאה</div>;
+                {(selectedCycle.units||[]).map((entry,idx)=>{
+                  const uname=typeof entry==="string"?entry:(entry&&entry.name)||"";
+                  const chapterHint=typeof entry==="object"&&entry?entry.chapterHint:null;
+                  const u=findUnitByName(entry);
+                  if(!u) return <div key={uname+"_"+idx} style={{padding:"8px",fontSize:"11px",color:"#f87171",fontStyle:"italic",background:"#0f172a",borderRadius:"4px"}}>⚠ {uname} — לא נמצאה</div>;
                   const sel=v2UnitId===u.id;
+                  const displayName=chapterHint?`${u.name} (${chapterHint})`:u.name;
                   return(
-                    <button key={u.id} onClick={()=>setV2UnitId(u.id)}
+                    <button key={u.id+"_"+idx} onClick={()=>setV2UnitId(u.id)}
                       style={{padding:"8px 12px",borderRadius:"6px",border:sel?"2px solid #06b6d4":"1px solid #334155",cursor:"pointer",background:sel?"#06b6d422":"#0f172a",color:sel?"#67e8f9":"#e2e8f0",fontSize:"12px",fontWeight:sel?"700":"500",textAlign:"right"}}>
-                      {sel?"● ":""}{u.name}
+                      {sel?"● ":""}{displayName}
                       <div style={{fontSize:"10px",color:"#64748b",fontWeight:"400",marginTop:"2px"}}>{(u.chapter||"").replace(/_/g," ")}</div>
                     </button>
                   );
@@ -7707,15 +7731,18 @@ ${detailedHtml}
             <div style={{fontSize:"14px",color:"#67e8f9",fontWeight:"700",marginBottom:"6px"}}>📋 בחירת יחידות לדיון בפרק ג׳</div>
             <div style={{fontSize:"11px",color:"#94a3b8",marginBottom:"12px",lineHeight:"1.5"}}>סמני רק את היחידות שתידונה בפרק ג׳ בממד <strong>{dimensionLabel}</strong>. יחידות לא-נבחרות לא יופיעו בדו"ח.</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(280px, 1fr))",gap:"8px"}}>
-              {(selectedCycle.units||[]).map(uname=>{
-                const u=findUnitByName(uname);
-                if(!u) return <div key={uname} style={{padding:"8px",fontSize:"11px",color:"#f87171",fontStyle:"italic",background:"#0f172a",borderRadius:"4px"}}>⚠ {uname} — לא נמצאה</div>;
+              {(selectedCycle.units||[]).map((entry,idx)=>{
+                const uname=typeof entry==="string"?entry:(entry&&entry.name)||"";
+                const chapterHint=typeof entry==="object"&&entry?entry.chapterHint:null;
+                const u=findUnitByName(entry);
+                if(!u) return <div key={uname+"_"+idx} style={{padding:"8px",fontSize:"11px",color:"#f87171",fontStyle:"italic",background:"#0f172a",borderRadius:"4px"}}>⚠ {uname} — לא נמצאה</div>;
                 const isSelected=selectedUnitIds.includes(u.id);
+                const displayName=chapterHint?`${u.name} (${chapterHint})`:u.name;
                 return(
-                  <label key={u.id} style={{display:"flex",alignItems:"center",gap:"8px",padding:"8px 10px",background:isSelected?"#06b6d422":"#0f172a",border:isSelected?"1px solid #06b6d4":"1px solid #334155",borderRadius:"6px",cursor:"pointer"}}>
+                  <label key={u.id+"_"+idx} style={{display:"flex",alignItems:"center",gap:"8px",padding:"8px 10px",background:isSelected?"#06b6d422":"#0f172a",border:isSelected?"1px solid #06b6d4":"1px solid #334155",borderRadius:"6px",cursor:"pointer"}}>
                     <input type="checkbox" checked={isSelected} onChange={()=>toggleUnitSelection(u.id)} style={{cursor:"pointer"}}/>
                     <div style={{flex:1}}>
-                      <div style={{fontSize:"12px",color:isSelected?"#67e8f9":"#e2e8f0",fontWeight:isSelected?"700":"500"}}>{u.name}</div>
+                      <div style={{fontSize:"12px",color:isSelected?"#67e8f9":"#e2e8f0",fontWeight:isSelected?"700":"500"}}>{displayName}</div>
                       <div style={{fontSize:"10px",color:"#64748b"}}>{(u.chapter||"").replace(/_/g," ")}</div>
                     </div>
                   </label>
