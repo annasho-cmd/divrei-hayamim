@@ -5808,14 +5808,16 @@ const DAVID_CYCLES=[
   {num:3, title:"הבטחת הבית לדוד ותגובתו", units:["דוד מבקש לבנות בית לה'","הבטחת ה' לדוד","דבריו של דוד לה'","דוד מברך את ה'"]},
   {num:4, title:"מלחמות דוד וסדרי שלטונו", units:["הפלשתים בעמק הרפאים","מלחמות דוד, א-יב","הפקידים בבית דוד, יג-יז","דוד ובני עמון","המלחמה בבני עמון, דהי\"א י\"ט, ח-טו","המלחמה בארם","המלחמה בבני עמון, דהי\"א כ, א-ג"]},
   {num:5, title:"המפקד ובחירת מקום המקדש", units:["מפקד דוד, א-ד","המשך המפקד, ח-יד","המשך המפקד, טו-יט","המשך המפקד, כ-כו","סיום המפקד, כז-ל","המפקד שלא הושלם, כג-כד"]},
-  {num:6, title:"ההכנות לבניין המקדש וארגון בעלי התפקידים", units:["תכנון בית המקדש","דוד מברך את שלמה","המשך התכנון","המלכת שלמה, א-ה",{name:"חלוקת הלוויים",occurrence:1},"תפקיד הלוויים","משמרות הכוהנים, א-יט",{name:"חלוקת הלוויים",occurrence:2},"הכנות למקדש, א-כח","הסדריו האזרחיים והצבאיים של דוד, כט-לב"]},
+  {num:6, title:"ההכנות לבניין המקדש וארגון בעלי התפקידים", units:["תכנון בית המקדש","דוד מברך את שלמה","המשך התכנון","המלכת שלמה, א-ה","חלוקת הלוויים, ו-יא","תפקיד הלוויים","משמרות הכוהנים, א-יט","חלוקת הלוויים","הכנות למקדש, א-כח","הסדריו האזרחיים והצבאיים של דוד, כט-לב"]},
   {num:7, title:"העברת האחריות לשלמה וחתימת מלכות דוד", units:["דברי דוד לעם",{name:"המשך דברי דוד",occurrence:1},{name:"המשך דברי דוד",occurrence:2},{name:"המשך דברי דוד",occurrence:3},"מותו של דוד"]},
 ];
 const SOLOMON_CYCLES=[
-  {num:1, title:"כינון המלוכה וחכמת שלמה", units:[]},
-  {num:2, title:"בניין המקדש", units:[]},
-  {num:3, title:"חנוכת המקדש והברית", units:[]},
-  {num:4, title:"מלכות הפאר וסוף ימיו", units:[]},
+  {num:1, title:"ביסוס מלכות שלמה והמעמד בגבעון", units:["הקדמה למלכות שלמה א', א-ו","הבטחת ה' לשלמה א', ז-יג","העושר של שלמה א', יד-יח"]},
+  {num:2, title:"ההכנות לבניית המקדש, בנייתו ועשיית כליו", units:["שלמה בונה את בית המקדש ב, א-ט","המשך תכנון בית המקדש ב, י-טו","המשך תכנון בית המקדש ב, טו-יז","התחלת הבנייה ג, א-ד","בניית בית המקדש ג, ה-ט",{name:"המשך בניית בית המקדש",chapterHint:"ג",occurrence:1},{name:"המשך בניית בית המקדש",chapterHint:"ד",occurrence:2},{name:"המשך בניית בית המקדש",chapterHint:"ד",occurrence:3},"השלמת הבנייה ה, א-ו"]},
+  {num:3, title:"תפילת שלמה", units:[{name:"תפילת שלמה",chapterHint:"ו",occurrence:1},{name:"תפילת שלמה",chapterHint:"ו",occurrence:2},{name:"תפילת שלמה",chapterHint:"ו",occurrence:3},{name:"תפילת שלמה",chapterHint:"ו",occurrence:4},{name:"תפילת שלמה",chapterHint:"ו",occurrence:5},{name:"תפילת שלמה",chapterHint:"ו",occurrence:6},{name:"תפילת שלמה",chapterHint:"ו",occurrence:7},"סיום התפילה ז, א-ז"]},
+  {num:4, title:"חנוכת המקדש", units:["חגיגה ז, ח-י","דברי שלמה ז, יא-טז","דברי ה' לשלמה ז, יז-כב"]},
+  {num:5, title:"מפעלי שלמה והסדרת הממלכה והפולחן", units:["ממלכת שלמה ח, א-ט","אנשי שלמה ח, יא-טז","שלמה מעלה מזבח לה' יב-טו","שלמה וחירם ח, יז-יח"]},
+  {num:6, title:"גדולת שלמה, ההכרה בו וחתימת מלכותו", units:["ביקור מלכת שבא ט, א-ט","שלמה, חירם ומלכת שבא ט, י-יב","אוצרות המלך ט, יג-כא","עושרה של ממלכת שלמה ט, כב-כח","מותו של שלמה ט, כט-לא"]},
 ];
 
 // לוח-עזר שמחזיר ממד של מושג
@@ -5960,27 +5962,35 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
     } else { return null; }
     const t=norm(targetName);
     const charUnits=(allUnits||[]).filter(u=>(u.character||"david")===character);
-    // כל המועמדים: התאמה מדויקת או תחילית לשני הכיוונים — בסדר ההוספה ל-raw.units
-    const candidates=charUnits.filter(x=>{
+    const exact=charUnits.filter(x=>norm(x.name)===t);
+    // מצב דיסאמביגואציה (מערך אובייקטים ב-DAVID_CYCLES עם occurrence/chapterHint)
+    if(occurrence||chapterHint){
+      const all=charUnits.filter(x=>{
+        const n=norm(x.name);
+        return n===t||n.startsWith(t)||t.startsWith(n);
+      });
+      if(all.length===0) return null;
+      let matches=all;
+      if(chapterHint){
+        const h=norm(chapterHint);
+        const byCh=matches.filter(x=>norm(x.chapter||"").includes(h));
+        if(byCh.length===1) return byCh[0];
+        if(byCh.length>0) matches=byCh;
+      }
+      if(occurrence){
+        if(occurrence-1<matches.length) return matches[occurrence-1];
+        return null;
+      }
+      return matches[0];
+    }
+    // מצב פשוט (מחרוזת ב-DAVID_CYCLES) — העדפה להתאמה מדויקת
+    if(exact.length>=1) return exact[0];
+    // אין התאמה מדויקת — נופלים להתאמת תחילית
+    const prefix=charUnits.filter(x=>{
       const n=norm(x.name);
-      return n===t||n.startsWith(t)||t.startsWith(n);
+      return n!==t&&(n.startsWith(t)||t.startsWith(n));
     });
-    if(candidates.length===0) return null;
-    if(candidates.length===1) return candidates[0];
-    // יותר מהתאמה אחת — דיסאמביגואציה
-    let matches=candidates;
-    if(chapterHint){
-      const h=norm(chapterHint);
-      const byCh=matches.filter(x=>norm(x.chapter||"").includes(h));
-      if(byCh.length===1) return byCh[0];
-      if(byCh.length>0) matches=byCh;
-    }
-    if(occurrence){
-      // ייחוס לפי מיקום: אם המיקום המבוקש חורג מהמספר שקיים, מחזירים null (יוצג ⚠ לא נמצאה)
-      if(occurrence-1<matches.length) return matches[occurrence-1];
-      return null;
-    }
-    return matches[0];
+    return prefix[0]||null;
   }
 
   // אוסף הממצאים המאושרים (אוטומטיים + גבוליים שקובלו) ליחידה×מושג
