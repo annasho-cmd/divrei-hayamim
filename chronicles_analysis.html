@@ -5951,7 +5951,7 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
 
   // התאמת שם יחידה מהמעגל ליחידה בנתונים
   function findUnitByName(target){
-    const norm=s=>(s||"").replace(/[\s״'"ʼ.,־–—]/g,"").toLowerCase();
+    const norm=s=>(s||"").replace(/[\s״'"ʼ.,־–—()]/g,"").toLowerCase();
     // תמיכה הן במחרוזת והן באובייקט דיסאמביגואציה {name, chapterHint?, occurrence?}
     let targetName, chapterHint=null, occurrence=null;
     if(typeof target==="string"){ targetName=target; }
@@ -5962,6 +5962,11 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
     } else { return null; }
     const t=norm(targetName);
     const charUnits=(allUnits||[]).filter(u=>(u.character||"david")===character);
+    // לוג אבחון: אם אין יחידות כלל לדמות — או שה-character לא תואם או שהיחידות לא קיימות
+    if(charUnits.length===0){
+      console.warn(`[findUnitByName] אין יחידות לדמות "${character}". בדקי שהיחידות שלך ב-raw.units יש להן character:"${character}".`);
+      console.warn(`[findUnitByName] כל היחידות ב-raw.units:`,(allUnits||[]).map(u=>({name:u.name,character:u.character||"(ללא)"})));
+    }
     const exact=charUnits.filter(x=>norm(x.name)===t);
     // מצב דיסאמביגואציה (מערך אובייקטים ב-DAVID_CYCLES עם occurrence/chapterHint)
     if(occurrence||chapterHint){
@@ -5969,7 +5974,10 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
         const n=norm(x.name);
         return n===t||n.startsWith(t)||t.startsWith(n);
       });
-      if(all.length===0) return null;
+      if(all.length===0){
+        console.warn(`[findUnitByName] "${targetName}" לא נמצאה ב-${character}. יחידות קיימות שמתחילות באותיות הראשונות:`,charUnits.filter(x=>norm(x.name).substring(0,5)===t.substring(0,5)).map(u=>u.name));
+        return null;
+      }
       let matches=all;
       if(chapterHint){
         const h=norm(chapterHint);
@@ -7337,13 +7345,30 @@ ${detailedHtml}
           </div>
         </div>
         <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginTop:"10px"}}>
-          {[["david","👑 דוד",DAVID_CYCLES.length],["solomon","👑 שלמה",SOLOMON_CYCLES.length]].map(([id,lbl,cnt])=>(
-            <button key={id} onClick={()=>{setCharacter(id);setSelectedCycle(null);setV2UnitId(null);}}
-              style={{padding:"8px 14px",borderRadius:"8px",border:character===id?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:character===id?"#818cf822":"#0f172a",color:character===id?"#c7d2fe":"#cbd5e1",fontSize:"13px",fontWeight:"700"}}>
-              {lbl} <span style={{fontSize:"10px",color:"#64748b",marginRight:"6px"}}>({cnt} מעגלים)</span>
-            </button>
-          ))}
+          {[["david","👑 דוד",DAVID_CYCLES.length],["solomon","👑 שלמה",SOLOMON_CYCLES.length]].map(([id,lbl,cnt])=>{
+            const unitsCount=(allUnits||[]).filter(u=>(u.character||"david")===id).length;
+            return(
+              <button key={id} onClick={()=>{setCharacter(id);setSelectedCycle(null);setV2UnitId(null);}}
+                style={{padding:"8px 14px",borderRadius:"8px",border:character===id?"2px solid #818cf8":"1px solid #334155",cursor:"pointer",background:character===id?"#818cf822":"#0f172a",color:character===id?"#c7d2fe":"#cbd5e1",fontSize:"13px",fontWeight:"700"}}>
+                {lbl} <span style={{fontSize:"10px",color:"#64748b",marginRight:"6px"}}>({cnt} מעגלים · {unitsCount} יחידות ב-raw.units)</span>
+              </button>
+            );
+          })}
         </div>
+        {(() => {
+          const davidCnt=(allUnits||[]).filter(u=>(u.character||"david")==="david").length;
+          const solomonCnt=(allUnits||[]).filter(u=>u.character==="solomon").length;
+          const noCharCnt=(allUnits||[]).filter(u=>!u.character).length;
+          const totalCnt=(allUnits||[]).length;
+          if(character==="solomon"&&solomonCnt===0){
+            return(
+              <div style={{marginTop:"10px",padding:"10px",background:"#450a0a",border:"1px solid #b91c1c",borderRadius:"6px",fontSize:"12px",color:"#fca5a5"}}>
+                ⚠ אין אף יחידה המסומנת character:"solomon" ב-raw.units. סך הכול {totalCnt} יחידות קיימות: {davidCnt} לדוד, {noCharCnt} ללא character (יוצגו כברירת מחדל לדוד). הלכי לכלי ההשוואה / שלב א', וודאי שהיחידות של שלמה סימנו character:"solomon".
+              </div>
+            );
+          }
+          return null;
+        })()}
       </div>
 
       {/* ═══════════════════════════════════════════════════════
