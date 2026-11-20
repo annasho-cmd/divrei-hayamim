@@ -5973,7 +5973,8 @@ function StageD({allUnits,allConcepts,getE,setE,getParams,getNarrowDef,getCompar
       let matches=all;
       if(chapterHint){
         const h=norm(chapterHint);
-        const byCh=matches.filter(x=>norm(x.chapter||"").includes(h));
+        // הרמז מחפש גם בשדה הפרק וגם בשם היחידה (למקרה שטווח הפסוקים נכתב בשם)
+        const byCh=matches.filter(x=>norm(x.chapter||"").includes(h)||norm(x.name||"").includes(h));
         if(byCh.length===1) return byCh[0];
         if(byCh.length>0) matches=byCh;
       }
@@ -7378,12 +7379,14 @@ ${detailedHtml}
                   const u=findUnitByName(entry);
                   if(!u) return <div key={uname+"_"+idx} style={{padding:"8px",fontSize:"11px",color:"#f87171",fontStyle:"italic",background:"#0f172a",borderRadius:"4px"}}>⚠ {uname} — לא נמצאה</div>;
                   const sel=v2UnitId===u.id;
-                  const displayName=chapterHint?`${u.name} (${chapterHint})`:u.name;
+                  // התצוגה: אם השם כבר מכיל את הרמז, לא נשכפל אותו בסוגריים
+                  const nameHasHint=chapterHint&&u.name&&u.name.includes(chapterHint);
+                  const displayName=(chapterHint&&!nameHasHint)?`${u.name} (${chapterHint})`:u.name;
                   return(
                     <button key={u.id+"_"+idx} onClick={()=>setV2UnitId(u.id)}
                       style={{padding:"8px 12px",borderRadius:"6px",border:sel?"2px solid #06b6d4":"1px solid #334155",cursor:"pointer",background:sel?"#06b6d422":"#0f172a",color:sel?"#67e8f9":"#e2e8f0",fontSize:"12px",fontWeight:sel?"700":"500",textAlign:"right"}}>
                       {sel?"● ":""}{displayName}
-                      <div style={{fontSize:"10px",color:"#64748b",fontWeight:"400",marginTop:"2px"}}>{(u.chapter||"").replace(/_/g," ")}</div>
+                      <div style={{fontSize:"10px",color:"#64748b",fontWeight:"400",marginTop:"2px"}}>{(u.chapter||"").replace(/_/g," ")} <span style={{opacity:0.5,marginRight:"6px"}}>· id:{String(u.id).slice(0,8)}</span></div>
                     </button>
                   );
                 })}
@@ -7752,13 +7755,14 @@ ${detailedHtml}
                 const u=findUnitByName(entry);
                 if(!u) return <div key={uname+"_"+idx} style={{padding:"8px",fontSize:"11px",color:"#f87171",fontStyle:"italic",background:"#0f172a",borderRadius:"4px"}}>⚠ {uname} — לא נמצאה</div>;
                 const isSelected=selectedUnitIds.includes(u.id);
-                const displayName=chapterHint?`${u.name} (${chapterHint})`:u.name;
+                const nameHasHint=chapterHint&&u.name&&u.name.includes(chapterHint);
+                const displayName=(chapterHint&&!nameHasHint)?`${u.name} (${chapterHint})`:u.name;
                 return(
                   <label key={u.id+"_"+idx} style={{display:"flex",alignItems:"center",gap:"8px",padding:"8px 10px",background:isSelected?"#06b6d422":"#0f172a",border:isSelected?"1px solid #06b6d4":"1px solid #334155",borderRadius:"6px",cursor:"pointer"}}>
                     <input type="checkbox" checked={isSelected} onChange={()=>toggleUnitSelection(u.id)} style={{cursor:"pointer"}}/>
                     <div style={{flex:1}}>
                       <div style={{fontSize:"12px",color:isSelected?"#67e8f9":"#e2e8f0",fontWeight:isSelected?"700":"500"}}>{displayName}</div>
-                      <div style={{fontSize:"10px",color:"#64748b"}}>{(u.chapter||"").replace(/_/g," ")}</div>
+                      <div style={{fontSize:"10px",color:"#64748b"}}>{(u.chapter||"").replace(/_/g," ")} <span style={{opacity:0.5,marginRight:"6px"}}>· id:{String(u.id).slice(0,8)}</span></div>
                     </div>
                   </label>
                 );
