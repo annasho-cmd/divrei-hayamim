@@ -262,14 +262,14 @@ const DIMS=[
 // ─────────────────────────────────────────────────────────────────────────
 const NARROW_CRITERION = {
   "רוח/ריח":  {approved: [5],                 borderline: [2]},
-  "חכמה":     {approved: [0,1,4,5],           borderline: [3]},
+  "חכמה":     {approved: [0,1,4,5,8],         borderline: [3]},
   "בינה":     {approved: [0,2],               borderline: [1,4]},
   "עצה":      {approved: [0,1,6],             borderline: [7]},
   "גבורה":    {approved: [0,1,2,3],           borderline: [4,5]},
   "דעת":      {approved: [4,5],               borderline: [0,1]},
   "יראה":     {approved: [0,1,2,3,4,5],       borderline: []},
-  "צניעות":   {approved: [2,3,6],             borderline: [7]},
-  "ענווה":    {approved: [0,8,9],             borderline: [1,2]},
+  "צניעות":   {approved: [2,3,6,9],           borderline: [7]},
+  "ענווה":    {approved: [0,4,8,9],           borderline: [1,2]},
   "משפט":     {approved: [0,1,2,3,4,5,6,7],   borderline: [8]},
   "צדקה":     {approved: [0,1,2,3,4,6,7],     borderline: [5]},
   "מוסר":     {approved: [1],                 borderline: [2]},
@@ -280,7 +280,7 @@ const NARROW_CRITERION = {
   "רועה":     {approved: [0,1,2,4,5,6],       borderline: [3]},
   "אחד/יחד":  {approved: [0,7,8],             borderline: [1,2]},
   "אמן":      {approved: [1,2,3,8],           borderline: [0,9]},
-  "ברית":     {approved: [3,5,7,8],           borderline: [0,1]},
+  "ברית":     {approved: [3,5,7,8,9],         borderline: [0,1]},
 };
 // "נצח" ו"עולם" הם פרמטרים של "ברית" ואינם עצמאיים — אין להם הגדרה צרה נפרדת
 const BRIT_AUX_CONCEPTS = ["נצח","עולם"];
